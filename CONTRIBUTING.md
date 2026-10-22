@@ -40,7 +40,7 @@ Do not work directly on, commit to, or push directly to `main`. Every change rea
 3. Run risk-appropriate validation and review the complete diff.
 4. Push the branch and open a pull request targeting `main`.
 5. Address review feedback and ensure required checks pass.
-6. Squash merge the pull request, then delete the source branch.
+6. Merge the pull request with a merge commit, then delete the source branch.
 
 Use a Draft pull request when work is incomplete or early feedback is needed. Do not
 maintain a long-lived `develop` branch unless the repository workflow is explicitly
@@ -160,9 +160,9 @@ with a behavior change.
 
 ## Pull requests
 
-Use the same Conventional Commit format for the pull request title. Because squash
-merge is the default, the pull request title becomes the commit subject on `main`.
-Update the title if the scope changes during review.
+Use the same Conventional Commit format for the pull request title. Because merge
+commits are the default, the pull request title is recorded in the merge commit on
+`main`. Update the title if the scope changes during review.
 
 Each pull request should contain one user value, defect fix, or maintenance purpose.
 Its description must include:
@@ -196,12 +196,12 @@ written changes. Do not merge generated output that has not been inspected.
 ## Review and merge
 
 Resolve blocking review comments and required checks before merge. Prefer follow-up
-commits during review so changes remain visible; the final squash removes review-only
-commit noise from `main`.
+commits during review so changes remain visible. Because merge commits keep every
+branch commit on `main`, follow-up commits must also follow the commit message rules.
 
-Use squash merge by default. The final squash message must follow the commit message
-rules and retain any issue-closing or `BREAKING CHANGE:` footer. Delete the source
-branch after merge.
+Use a merge commit by default. Keep the pull request number and title in the merge
+commit message, and keep each `BREAKING CHANGE:` footer on the commit that introduces
+it. Delete the source branch after merge.
 
 Emergency exceptions require explicit repository-owner approval. Document what was
 bypassed, why it was necessary, and the follow-up work required.
