@@ -26,21 +26,52 @@ Before contributing, read
 - Treat untrusted input and model output as untrusted, apply least privilege, and do
   not expose secrets, credentials, or personal data.
 
-For a feature or behavior change, update the relevant Spec Kit artifacts before
-implementation. A Plan must document Constitution compliance, justified complexity,
-verification, and known risks.
+## Spec Kit workflow
+
+Use Spec Kit for every feature or behavior change, and update the relevant artifacts
+before implementation. Run the commands in this order:
+
+1. `speckit-specify` creates the feature branch and `specs/NNN-short-name/spec.md`.
+2. `speckit-clarify` (recommended) resolves open questions in the specification.
+3. `speckit-plan` records the technical approach, project structure, and
+   Constitution check.
+4. `speckit-tasks` breaks the Plan into small, verifiable tasks.
+5. `speckit-analyze` (recommended) checks consistency across the specification,
+   Plan, and tasks.
+6. `speckit-implement` executes the tasks.
+
+Invoke commands as `/speckit-<name>` in Claude Code and `$speckit-<name>` in Codex
+CLI. Start from an up-to-date `main`: the Spec Kit Git extension creates the feature
+branch from the current `HEAD` before `speckit-specify` writes the specification.
+
+A Plan must document Constitution compliance, justified complexity, verification,
+and known risks.
+
+Keep the Git extension's auto-commit hooks disabled. Commit each task or small group
+of related tasks yourself so every commit stays coherent and follows the commit
+message rules. The extension configuration lives in
+`.specify/extensions/git/git-config.yml`; change it only together with this guide.
+
+`specify extension add` registers extension commands only for the default
+integration (`codex`). After adding or updating an extension, run
+`specify integration use claude` and then `specify integration use codex` to register
+the commands for Claude Code. Review `git status` afterward; if the switch dropped
+the executable bit on `.specify/scripts/bash/*.sh`, restore it with
+`git checkout -- .specify/scripts/bash/`.
 
 ## Git workflow
 
 Do not work directly on, commit to, or push directly to `main`. Every change reaches
 `main` through a pull request.
 
-1. Update local `main` and create a short-lived branch.
-2. Make focused commits that serve one coherent purpose.
-3. Run risk-appropriate validation and review the complete diff.
-4. Push the branch and open a pull request targeting `main`.
-5. Address review feedback and ensure required checks pass.
-6. Merge the pull request with a merge commit, then delete the source branch.
+1. Update local `main`.
+2. Create a short-lived branch: run `speckit-specify` for Spec Kit work, or create
+   the branch manually for other changes. See [Branch names](#branch-names).
+3. Make focused commits that serve one coherent purpose.
+4. Run risk-appropriate validation and review the complete diff.
+5. Push the branch and open a pull request targeting `main`.
+6. Address review feedback and ensure required checks pass.
+7. Merge the pull request with a merge commit, then delete the source branch.
 
 Use a Draft pull request when work is incomplete or early feedback is needed. Do not
 maintain a long-lived `develop` branch unless the repository workflow is explicitly
@@ -100,29 +131,40 @@ Use `Closes #123` in the implementing pull request when it should close the issu
 
 ## Branch names
 
-Use this format:
+Every branch name starts with a change type and uses lowercase English words and
+digits separated by hyphens.
+
+Spec Kit branches are created by `speckit-specify` and carry the feature number of
+the matching `specs/` directory:
+
+```text
+type/NNN-kebab-case-summary
+```
+
+The Git extension uses `feat` by default. When the primary effect of the change is
+another type, include an explicit `GIT_BRANCH_NAME` with the next feature number in
+the `speckit-specify` request, for example
+`GIT_BRANCH_NAME=fix/004-redact-auth-headers`. Run `speckit-git-validate` to confirm
+that the branch matches its `specs/` directory.
+
+Other branches, such as documentation or repository maintenance, are created manually
+without a number:
 
 ```text
 type/kebab-case-summary
 ```
 
-When a branch is tied to an issue, include the issue number:
-
-```text
-type/123-kebab-case-summary
-```
-
 Examples:
 
 ```text
-feat/42-capture-browser-session
-fix/57-redact-auth-headers
+feat/001-capture-browser-session
+fix/004-redact-auth-headers
 docs/contribution-guide
 ```
 
-Use lowercase English words and digits separated by hyphens. Do not use spaces,
-underscores, uppercase letters, or vague names such as `fix/bug`, `feat/update`, or
-`chore/misc`.
+Reserve numbers in branch names for Spec Kit feature numbers, and link issues from
+the pull request description instead. Do not use spaces, underscores, uppercase
+letters, or vague names such as `fix/bug`, `feat/update`, or `chore/misc`.
 
 ## Commit messages
 
