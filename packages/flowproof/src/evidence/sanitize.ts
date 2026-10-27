@@ -91,6 +91,14 @@ const TEXT_RULES: readonly TextRule[] = [
   },
   {
     category: 'credential',
+    pattern: new RegExp(
+      String.raw`\b(${SECRET_NAME})(["']?\s*[:=]\s*)(["'])${NOT_REDACTED}(?:\\.|(?!\3)[^\\\r\n])*\3`,
+      'gi',
+    ),
+    replace: (_match, name, separator, quote) => `${name}${separator}${quote}${REDACTED}${quote}`,
+  },
+  {
+    category: 'credential',
     pattern: new RegExp(String.raw`\b(${SECRET_NAME})(["']?\s*[:=]\s*)(["']?)${NOT_REDACTED}([^\s"'\`,;&]+)\3`, 'gi'),
     replace: (_match, name, separator, quote) => `${name}${separator}${quote}${REDACTED}${quote}`,
   },

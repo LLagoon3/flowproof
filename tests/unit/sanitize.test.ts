@@ -42,6 +42,23 @@ describe('sanitizeText', () => {
     }
   })
 
+  it('redacts complete quoted credential assignments with whitespace', () => {
+    const samples = [
+      ['password = "correct horse battery staple"', `password = "${REDACTED}"`],
+      ["api_key: 'alpha beta gamma'", `api_key: '${REDACTED}'`],
+      ['"secret": "value with an escaped \\"quote\\" inside"', `"secret": "${REDACTED}"`],
+    ] as const
+
+    for (const [sample, expected] of samples) {
+      const once = sanitizeText(`before ${sample} after`)
+      const twice = sanitizeText(once.value)
+
+      expect(once.value, sample).toBe(`before ${expected} after`)
+      expect(once.redactions, sample).toEqual([{ category: 'credential', count: 1 }])
+      expect(twice, sample).toEqual({ value: once.value, redactions: [] })
+    }
+  })
+
   it('leaves ordinary evidence text and content digests untouched', () => {
     const digest = 'a'.repeat(64)
     const result = sanitizeText(`dataset digest ${digest} contains 8 rows`)
