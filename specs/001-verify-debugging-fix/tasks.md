@@ -122,7 +122,7 @@ a recorded response. It is an internal implementation checkpoint, not the live M
 
 ### Slice 3B - Production Meta adapter and complete Proof Trail
 
-- [ ] T050 [P] [US1] Write Meta client tests for a sanitized one-file prompt, one stateless `store:false` strict-schema call, SDK `maxRetries:0`, timeout from `scenario.timeouts.model_ms`, exactly one HTTP request on success, 429, 5xx, and timeout, fail-closed outcomes, key only from `MODEL_API_KEY`, and no raw payload or key in logs in `tests/unit/meta-client.test.ts`
+- [X] T050 [P] [US1] Write Meta client tests for a sanitized one-file prompt, one stateless `store:false` strict-schema call, SDK `maxRetries:0`, timeout from `scenario.timeouts.model_ms`, exactly one HTTP request on success, 429, 5xx, and timeout, fail-closed outcomes, key only from `MODEL_API_KEY`, and no raw payload or key in logs in `tests/unit/meta-client.test.ts`
 - [ ] T051 [US1] Implement the `muse-spark-1.3` Responses API adapter with strict schema, `store:false`, `maxRetries:0`, scenario timeout, one attempt, safe metrics, and ordinary Hero registration as the live transport in `packages/flowproof/src/model/metaClient.ts` and `packages/flowproof/src/model/transport.ts`
 - [ ] T052 [US1] Implement the in-workspace Proof Trail with verified diff, failure and replay evidence, screenshots, gate outcomes, fixture provenance when present, and final status in `apps/studio/src/components/ProofTrail.tsx` and `apps/studio/src/App.tsx`
 - [ ] T053 [US1] Complete deterministic Hero assertions for the full Proof Trail, visible replay, nine passing gates, phase budgets, `total_duration_ms < 300000`, no live Meta request, and restored original snapshots in `tests/e2e/hero.spec.ts`
