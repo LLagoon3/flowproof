@@ -6,23 +6,29 @@ import type { Locator } from '@playwright/test'
 import { GATE_IDS, parseDiagnosis, parseEvidenceBundle } from '../../packages/flowproof/src/contracts/index.js'
 import type { EvidenceBundle, GateId, RunResult } from '../../packages/flowproof/src/contracts/index.js'
 import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
-import { REPO_ROOT, listTree } from '../support/repoFixture.js'
+import { callTrustedProbe } from '../../packages/flowproof/src/studio/targetApp.js'
+import { REPO_ROOT, git, listTree } from '../support/repoFixture.js'
 import { DEMO_PORT, openStudioHarness } from '../support/studioHarness.js'
 import type { CleanupReport, StudioHarness } from '../support/studioHarness.js'
 
-// T057: the headed deterministic Failure run. The committed
+// T057/T060: the headed deterministic Failure run. The committed
 // `canvas-filter-failure-invalid-citation` case runs the same app, actions, oracles, and permitted
 // source as Hero with its committed `provider.mode=fixture` provider, MODEL_API_KEY unset, and no
 // test transport. The Studio visibly reproduces the defect and captures the failure evidence, the
 // labeled injected fixture answers instead of Meta Model API, its nonexistent Evidence ID fails
 // `citations_valid`, no candidate or replay artifact exists, the final status is `Unverified`, the
-// Proof Trail never shows the fixture's content, and every original snapshot is restored.
+// Proof Trail never shows the fixture's content, and every original snapshot is restored. The
+// candidate provably never reached application: the run stopped while diagnosing, the visible
+// target still serves the known-bad build it reconnected to once, and the source is unchanged.
 
 const FAILURE = 'canvas-filter-failure-invalid-citation'
+const SOURCE = 'apps/demo-chart/src/filterData.ts'
 const FIXTURE_PATH = 'scenarios/canvas-filter/provider-fixtures/invalid-citation.json'
 const FAULT_LABEL = 'Injected evaluation fixture: nonexistent Evidence ID'
 const NONEXISTENT_ID = 'ev_failure_chart_999'
 const RUN_BUDGET_MS = 300_000
+// plan.md "Performance Goals": 15 seconds for result generation.
+const FINALIZE_BUDGET_MS = 15_000
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 /** Gates after the rejected candidate: never evaluated, so unevaluable rather than invented. */
 const NOT_REACHED: readonly GateId[] = ['patch_applied', 'dataset_matches', 'canvas_matches']
@@ -79,6 +85,7 @@ async function expectFailureTrail(harness: StudioHarness, runId: string, section
 
 test('the injected invalid-citation fixture is rejected before application and stays Unverified', async () => {
   test.setTimeout(RUN_BUDGET_MS + 180_000)
+  const sourceBefore = git(REPO_ROOT, 'show', `HEAD:${SOURCE}`)
   let harness: StudioHarness | undefined
   let cleanup: CleanupReport | undefined
   let finished: { runId: string; result: RunResult } | undefined
@@ -94,6 +101,7 @@ test('the injected invalid-citation fixture is rejected before application and s
     await expect(target).toHaveAttribute('src', new RegExp(`^http://localhost:${DEMO_PORT}/`))
     await expect(page.getByLabel('Prepared case')).toHaveValue(FAILURE)
     await expect(page.getByLabel(/request/i)).toHaveValue(scenario.scenario.default_request)
+    const navigationsBeforeRun = harness.targetNavigations()
 
     // Start through chat with no credential, path, oracle, command, or gate input.
     await page.getByRole('button', { name: /^(start|send|run)\b/i }).click()
@@ -108,6 +116,11 @@ test('the injected invalid-citation fixture is rejected before application and s
     )
     expect(result.gates.find((gate) => gate.gate_id === 'citations_valid')?.reason_code).toBe('CITATION_UNKNOWN_EVIDENCE_ID')
     expect(result.failed_gate_ids).toEqual(['citations_valid', ...NOT_REACHED])
+    const { capture, model, apply, replay: replayMs, finalize } = result.phase_durations_ms
+    expect(capture).toBeLessThan(scenario.scenario.timeouts.capture_ms)
+    expect(model).toBeLessThan(scenario.scenario.timeouts.model_ms)
+    expect([apply, replayMs]).toEqual([0, 0])
+    expect(finalize).toBeLessThan(FINALIZE_BUDGET_MS)
     expect(result.total_duration_ms).toBeLessThan(RUN_BUDGET_MS)
     await expect(page.getByRole('region', { name: 'Run status' }).getByText('Unverified', { exact: true })).toBeVisible()
 
@@ -139,6 +152,45 @@ test('the injected invalid-citation fixture is rejected before application and s
     expect(await gateRows.evaluateAll((rows) => rows.map((row) => [row.getAttribute('data-gate'), row.getAttribute('data-status')]))).toEqual(
       result.gates.map((gate) => [gate.gate_id, gate.status]),
     )
+
+    // Rejected before application: the run stopped while diagnosing, announced no candidate, and
+    // reported the rejection right after the failed citation gate. Missed live events are not
+    // replayed, so the received phases are the in-order tail of those the run reached.
+    const reached = ['reproducing', 'failure_captured', 'diagnosing']
+    const phases = await page
+      .locator('.agent-activity__item[data-type="phase_started"]')
+      .evaluateAll((elements) => elements.map((element) => element.getAttribute('data-phase')))
+    expect(phases.length).toBeGreaterThan(0)
+    expect(phases).toEqual(reached.slice(reached.length - phases.length))
+    await expect(page.locator('.agent-activity__item[data-type="candidate_ready"]')).toHaveCount(0)
+    await expect(page.locator('.agent-activity__item[data-phase="applying"], .agent-activity__item[data-phase="replaying"]')).toHaveCount(0)
+    const activity = await page.locator('.agent-activity__item').evaluateAll((elements) =>
+      elements.map((element) => ({
+        type: element.getAttribute('data-type'),
+        gate: element.querySelector('.agent-activity__gate')?.getAttribute('data-gate') ?? null,
+        message: element.querySelector('.agent-activity__message')?.textContent ?? '',
+      })),
+    )
+    const citationUpdate = activity.findIndex((item) => item.gate === 'citations_valid')
+    const rejectionNotice = activity.findIndex((item) => item.type === 'agent_message' && /rejected before patch application/i.test(item.message))
+    expect(citationUpdate).toBeGreaterThanOrEqual(0)
+    expect(rejectionNotice).toBeGreaterThan(citationUpdate)
+    await expect(page.getByRole('region', { name: 'Candidate', exact: true }).locator('[data-candidate]')).toHaveAttribute('data-candidate', 'absent')
+
+    // The visible target still serves the known-bad build: it reconnected once for the
+    // reproduction and never to a patched rebuild, and it still shows the reproduced defect.
+    expect(harness.targetNavigations() - navigationsBeforeRun).toBe(1)
+    const frame = page.frames().find((candidate) => candidate !== page.mainFrame())
+    if (!frame) throw new Error('The target frame is missing.')
+    expect(frame.url().startsWith(`http://localhost:${DEMO_PORT}/`)).toBe(true)
+    const [action] = scenario.scenario.actions
+    expect(await callTrustedProbe(frame, 'readState')).toMatchObject({ ok: true, value: { ready: true, selected_region: action?.value } })
+    const chart = await harness.readJson(runId, failure.items.find((item) => item.type === 'chart')?.artifact_path ?? '')
+    const knownBadChart = (chart as { observed: unknown }).observed
+    expect(knownBadChart).not.toEqual(scenario.oracle.chart)
+    expect(await callTrustedProbe(frame, 'readChartSeries')).toEqual({ ok: true, value: knownBadChart })
+    // The clone's permitted source still holds the committed known-bad filter.
+    expect(await readFile(path.join(harness.repoRoot, SOURCE), 'utf8')).toBe(sourceBefore)
 
     // The in-workspace Proof Trail: Unverified, rejected at the citation gate, injected provenance.
     const proofTrail = page.getByRole('region', { name: 'Proof Trail', exact: true })

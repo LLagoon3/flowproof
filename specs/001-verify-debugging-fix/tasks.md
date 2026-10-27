@@ -143,12 +143,12 @@ without changing original tracked files or Git state.
 submit the request, and verify visible failure evidence, labeled injection, rejection before apply,
 no replay artifacts, `Unverified`, and restored pre-run snapshots.
 
-- [ ] T055 [P] [US2] Commit and register the Failure scenario with the same actions, oracles, and app, `provider.mode=fixture`, explicit `injected_fault_label`, and the labeled nonexistent-Evidence-ID diagnosis fixture in `scenarios/canvas-filter/failure-invalid-citation.json`, `scenarios/canvas-filter/provider-fixtures/invalid-citation.json`, and `packages/flowproof/src/scenario/registry.ts`
-- [ ] T056 [P] [US2] Write fixture-transport tests for explicit injection labeling, no Meta call, no key requirement, and invalid-citation rejection before patch application in `tests/integration/failure-provider.test.ts`
-- [ ] T057 [US2] Write the deterministic Failure end-to-end skeleton for visible evidence, labeled fixture, failed citation gate, no application or replay artifact, `Unverified`, and restored snapshots in `tests/e2e/failure.spec.ts`
-- [ ] T058 [US2] Implement the fixture transport and injected-fault labeling in events and the result in `packages/flowproof/src/model/transport.ts` and `packages/flowproof/src/run.ts`
-- [ ] T059 [US2] Render injected-fixture provenance, the failed citation gate, absent replay, and `Unverified` without raw fixture content in `apps/studio/src/components/ProofTrail.tsx`
-- [ ] T060 [US2] Make the deterministic Failure end-to-end test pass and prove the candidate is rejected before application in `tests/e2e/failure.spec.ts`
+- [X] T055 [P] [US2] Commit and register the Failure scenario with the same actions, oracles, and app, `provider.mode=fixture`, explicit `injected_fault_label`, and the labeled nonexistent-Evidence-ID diagnosis fixture in `scenarios/canvas-filter/failure-invalid-citation.json`, `scenarios/canvas-filter/provider-fixtures/invalid-citation.json`, and `packages/flowproof/src/scenario/registry.ts`
+- [X] T056 [P] [US2] Write fixture-transport tests for explicit injection labeling, no Meta call, no key requirement, and invalid-citation rejection before patch application in `tests/integration/failure-provider.test.ts`
+- [X] T057 [US2] Write the deterministic Failure end-to-end skeleton for visible evidence, labeled fixture, failed citation gate, no application or replay artifact, `Unverified`, and restored snapshots in `tests/e2e/failure.spec.ts`
+- [X] T058 [US2] Implement the fixture transport and injected-fault labeling in events and the result in `packages/flowproof/src/model/transport.ts` and `packages/flowproof/src/run.ts`
+- [X] T059 [US2] Render injected-fixture provenance, the failed citation gate, absent replay, and `Unverified` without raw fixture content in `apps/studio/src/components/ProofTrail.tsx`
+- [X] T060 [US2] Make the deterministic Failure end-to-end test pass and prove the candidate is rejected before application in `tests/e2e/failure.spec.ts`
 
 **Checkpoint 4**: User Story 2 independently proves fail-closed behavior and never invents
 artifacts for phases not reached.
