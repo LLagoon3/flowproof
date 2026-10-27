@@ -13,7 +13,8 @@ import type { LoadedScenario } from '../scenario/loadScenario.js'
 // `localhost` port once per Studio session and serves only the active canonical document root,
 // which advances from the preview build to the known-bad and patched worktree builds without a
 // rebind. Every response is `no-store`, so a reconnected iframe never shows a stale build, and the
-// iframe counts as ready only when the committed trusted probe says so.
+// iframe counts as ready only when the committed trusted probe says so. A reconnect that cannot
+// show the prepared application is a target load failure the run tells apart from capture failures.
 
 export const TARGET_STAGES = ['preview', 'known-bad', 'patched'] as const
 export type TargetStage = (typeof TARGET_STAGES)[number]
@@ -45,6 +46,17 @@ export class TargetAppError extends Error {
     this.name = 'TargetAppError'
     this.code = code
   }
+}
+
+/** Reconnect outcomes in which the target frame could not show the prepared application. */
+const TARGET_LOAD_FAILURE_CODES: ReadonlySet<TargetAppErrorCode> = new Set(['TARGET_LOAD_FAILED', 'TARGET_PROBE_NOT_READY'])
+
+/**
+ * True when a reconnect failed because the prepared application did not load in the target
+ * frame: the served build's document did not load, or the trusted probe never became ready.
+ */
+export function isTargetLoadFailure(error: unknown): boolean {
+  return error instanceof TargetAppError && TARGET_LOAD_FAILURE_CODES.has(error.code)
 }
 
 /** The committed worktree build, as the detached worktree session exposes it. */

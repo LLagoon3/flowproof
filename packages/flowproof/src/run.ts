@@ -33,6 +33,7 @@ import type { RunArtifactStore } from './evidence/store.js'
 import type { CandidateValidation, ValidatedCandidate } from './patch/validateDiff.js'
 import type { LoadedScenario } from './scenario/loadScenario.js'
 import type { RunEventStream, StudioEventInput } from './studio/events.js'
+import { isTargetLoadFailure } from './studio/targetApp.js'
 import { failGate, passGate, reduceGates, unevaluableGate } from './verify/gates.js'
 import { evaluateOracles } from './verify/oracle.js'
 import type { WorktreeIntegrityReport } from './worktree/session.js'
@@ -45,10 +46,12 @@ import type { WorktreeIntegrityReport } from './worktree/session.js'
 // `result.json`. A stage failure, rejection, timeout, or interrupt finalizes directly as
 // `Unverified` with its gate failed or unevaluable and every later gate unevaluable; an interrupt
 // (the Studio page or browser closing, or the process being interrupted) cancels the running
-// stage at once but never the finalization. Cleanup runs exactly once on every exit, and the
-// run's own gate, event, and error text never echoes stage errors, prompts, model output, or
-// diffs. When a committed evaluation fixture stands in for the model, the run labels that
-// injected fault in its activity as well as in the result's provider.
+// stage at once but never the finalization, and a target frame that cannot load the prepared
+// app during reproduction stops the run before model use with nothing captured to evaluate.
+// Cleanup runs exactly once on every exit, and the run's own gate, event, and error text never
+// echoes stage errors, prompts, model output, or diffs. When a committed evaluation fixture
+// stands in for the model, the run labels that injected fault in its activity as well as in the
+// result's provider.
 
 export interface DiagnosisExchange {
   /** The sanitized prompt actually sent; part of the whole-run secret scan. */
@@ -153,9 +156,14 @@ const STAGE_FAILURE_MESSAGES = {
 
 type StageFailureCode = keyof typeof STAGE_FAILURE_MESSAGES
 type StageFailure = 'error' | 'stage-timeout' | 'run-timeout' | 'interrupted'
-type StageOutcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly failure: StageFailure }
+/** A failed stage; `error` is the stage's rejection, used only to classify it and never echoed. */
+type StageOutcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly failure: StageFailure; readonly error?: unknown }
 
 const EVIDENCE_INCOMPLETE = 'The failure Evidence Bundle is missing, invalid, or not fully persisted.'
+const TARGET_NOT_LOADED = {
+  failure_reproduced: 'The prepared application did not load in the target frame, so the defect could not be reproduced.',
+  evidence_complete: 'The prepared application did not load in the target frame, so no failure evidence could be captured.',
+} as const
 const INTERRUPTED = 'The run was interrupted, so it stops here and finalizes as Unverified.'
 
 const failureCode = (failure: StageFailure, failed: StageFailureCode, timedOut: StageFailureCode = failed): StageFailureCode =>
@@ -218,7 +226,7 @@ function runStage<T>(
     }
     void pending.then(
       (value) => settle({ ok: true, value }),
-      () => settle({ ok: false, failure: 'error' }),
+      (error: unknown) => settle({ ok: false, failure: 'error', error }),
     )
   })
 }
@@ -462,6 +470,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
     const mark = now()
     try {
       const captured = await stage(windowOf(timeouts.capture_ms), (context) => ports.reproduce(context))
+      if (!captured.ok && captured.failure === 'error' && isTargetLoadFailure(captured.error)) {
+        // Nothing was observed, so neither gate can be evaluated; the run stops before the model.
+        for (const gateId of ['failure_reproduced', 'evidence_complete'] as const) {
+          record(unevaluableGate(gateId, 'TARGET_LOAD_FAILED', { message: TARGET_NOT_LOADED[gateId] }))
+        }
+        return null
+      }
       if (!captured.ok) {
         record(stageFailed('failure_reproduced', failureCode(captured.failure, 'FAILURE_CAPTURE_FAILED', 'FAILURE_CAPTURE_TIMEOUT')))
         record(failGate('evidence_complete', 'FAILURE_EVIDENCE_INCOMPLETE', { message: EVIDENCE_INCOMPLETE }))

@@ -32,6 +32,7 @@ import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario
 import type { LoadedScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
 import { createRunEventStream } from '../../packages/flowproof/src/studio/events.js'
 import type { RunEventStream } from '../../packages/flowproof/src/studio/events.js'
+import { TargetAppError } from '../../packages/flowproof/src/studio/targetApp.js'
 import { failGate, passGate } from '../../packages/flowproof/src/verify/gates.js'
 import { loadPendingModule } from '../support/pendingModule.js'
 import { loadRecordedHeroResponse } from '../support/recordedTransport.js'
@@ -44,7 +45,8 @@ import { REPO_ROOT, createTempDirectory, git, listTree } from '../support/repoFi
 // whole-run secret scan, the nine-gate reduction, stage-aware result paths, scenario
 // timeouts, phase and total durations, `result.json`, and exactly one cleanup on every exit.
 // T064 adds the interrupt: closing the Studio or interrupting the process cancels the running
-// stage at once and the run still finalizes.
+// stage at once and the run still finalizes. T065 adds the target load failure: a reproduction
+// whose target frame cannot load the prepared app stops before the model with nothing to evaluate.
 
 export interface CapturedPhase {
   readonly phase: EvidencePhase
@@ -831,5 +833,45 @@ describe('run state machine: interrupts', () => {
 
     expect(outcome.result.status).toBe('Verified Fix')
     expect(outcome.events.some((event) => event.type === 'agent_message' && /interrupted/i.test(event.message))).toBe(false)
+  })
+})
+
+describe('run state machine: target load failure', () => {
+  const failingWith = (code: ConstructorParameters<typeof TargetAppError>[0]) => async (): Promise<never> => {
+    throw new TargetAppError(code, 'The target frame did not show the served build.')
+  }
+
+  it.each(['TARGET_LOAD_FAILED', 'TARGET_PROBE_NOT_READY'] as const)(
+    'stops before the model when the reproduction target frame reports %s',
+    async (code) => {
+      const outcome = await execute({ ports: { reproduce: failingWith(code) } })
+      await expectFinalized(outcome)
+      const { result, harness } = outcome
+
+      expect(harness.calls).toEqual(['reproduce', 'cleanup'])
+      expect(result.status).toBe('Unverified')
+      for (const gateId of ['failure_reproduced', 'evidence_complete'] as const) {
+        expect(gate(result, gateId)).toMatchObject({ status: 'unevaluable', reason_code: 'TARGET_LOAD_FAILED' })
+      }
+      for (const gateId of ['citations_valid', 'patch_scope_valid', 'patch_applied', 'dataset_matches', 'canvas_matches'] as const) {
+        expect(gate(result, gateId)).toMatchObject({ status: 'unevaluable', reason_code: 'GATE_NOT_EVALUATED' })
+      }
+      expect(result).toMatchObject({ diagnosis_path: null, candidate_diff_path: null, failure_screenshot_path: null, replay_screenshot_path: null })
+      expect(await listTree(harness.runRoot)).toEqual(['result.json'])
+    },
+  )
+
+  it('keeps other target failures and a replay load failure as capture failures', async () => {
+    const reproduction = await execute({ ports: { reproduce: failingWith('TARGET_FRAME_INVALID') } })
+    await expectFinalized(reproduction)
+    expect(gate(reproduction.result, 'failure_reproduced').reason_code).toBe('FAILURE_CAPTURE_FAILED')
+    expect(gate(reproduction.result, 'evidence_complete')).toMatchObject({ status: 'fail', reason_code: 'FAILURE_EVIDENCE_INCOMPLETE' })
+
+    // After the model was used, the oracles are what a failed replay load leaves unevaluable.
+    const replay = await execute({ ports: { replay: failingWith('TARGET_LOAD_FAILED') } })
+    await expectFinalized(replay)
+    for (const gateId of ['dataset_matches', 'canvas_matches'] as const) {
+      expect(gate(replay.result, gateId)).toMatchObject({ status: 'unevaluable', reason_code: 'REPLAY_CAPTURE_FAILED' })
+    }
   })
 })

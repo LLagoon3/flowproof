@@ -1,4 +1,4 @@
-import { mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { Agent, createServer, request } from 'node:http'
 import type { IncomingHttpHeaders, Server } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
@@ -12,7 +12,13 @@ import { installTestProbe } from '../../apps/demo-chart/src/testProbe.js'
 import type { ProbeChart } from '../../apps/demo-chart/src/testProbe.js'
 import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
 import type { LoadedScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
-import { TargetAppError, invokeTrustedProbe, startTargetApp, trustedProbeReady } from '../../packages/flowproof/src/studio/targetApp.js'
+import {
+  TargetAppError,
+  invokeTrustedProbe,
+  isTargetLoadFailure,
+  startTargetApp,
+  trustedProbeReady,
+} from '../../packages/flowproof/src/studio/targetApp.js'
 import type { TargetApp } from '../../packages/flowproof/src/studio/targetApp.js'
 import { REPO_ROOT, createTempDirectory } from '../support/repoFixture.js'
 
@@ -20,7 +26,8 @@ import { REPO_ROOT, createTempDirectory } from '../support/repoFixture.js'
 // static server binds the scenario's `localhost` port once, serves only the active canonical
 // document root as it advances from preview to known-bad to patched, never lets a request leave
 // that root, and releases the port exactly once. The Studio iframe is reconnected in place and
-// counts as ready only through the committed trusted-probe contract. These suites bind a free
+// counts as ready only through the committed trusted-probe contract, and a reconnect that cannot
+// show the prepared app is classified as a target load failure (T065). These suites bind a free
 // port through a copy of the Hero scenario so they never contend for the committed demo port.
 
 const HERO = await loadScenario('canvas-filter-hero', { repoRoot: REPO_ROOT })
@@ -442,4 +449,39 @@ describe('iframe reconnection in headless Chromium', () => {
     },
     BROWSER_TIMEOUT,
   )
+
+  it(
+    'reports a served build whose document no longer loads as a target load failure',
+    async () => {
+      const { app } = await startApp()
+      const { frame } = await studioPage()
+      const root = await builtRoot('known-bad')
+      await app.serve('preview', root)
+      await rm(path.join(root, 'index.html'))
+
+      let caught: unknown
+      await app.reconnect(frame, { timeoutMs: 5_000 }).catch((error: unknown) => {
+        caught = error
+      })
+      expect(caught).toBeInstanceOf(TargetAppError)
+      expect((caught as TargetAppError).code).toBe('TARGET_LOAD_FAILED')
+      expect(isTargetLoadFailure(caught)).toBe(true)
+    },
+    BROWSER_TIMEOUT,
+  )
+})
+
+describe('target load failure classification (T065)', () => {
+  it('classifies only a frame that did not load or never became ready', () => {
+    for (const code of ['TARGET_LOAD_FAILED', 'TARGET_PROBE_NOT_READY'] as const) {
+      expect(isTargetLoadFailure(new TargetAppError(code, 'The target frame did not show the served build.'))).toBe(true)
+    }
+    for (const code of ['TARGET_FRAME_INVALID', 'TARGET_NOT_SERVING', 'TARGET_ROOT_CHANGED', 'TARGET_CLOSED', 'TARGET_TIMEOUT_INVALID'] as const) {
+      expect(isTargetLoadFailure(new TargetAppError(code, 'Another target failure.')), code).toBe(false)
+    }
+    // Look-alikes that did not come from the target-app owner never count.
+    expect(isTargetLoadFailure(Object.assign(new Error('TARGET_LOAD_FAILED: lookalike'), { code: 'TARGET_LOAD_FAILED' }))).toBe(false)
+    expect(isTargetLoadFailure({ name: 'TargetAppError', code: 'TARGET_LOAD_FAILED' })).toBe(false)
+    expect(isTargetLoadFailure('TARGET_LOAD_FAILED')).toBe(false)
+  })
 })
