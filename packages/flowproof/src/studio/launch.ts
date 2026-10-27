@@ -34,9 +34,12 @@ import type { TargetApp, TargetAppErrorCode, TargetBuilder } from './targetApp.j
 // temporary output, serves the bundle from the guarded `127.0.0.1` Studio server, and opens one
 // page in the pinned headed Chromium with the launch cookie injected before navigation. Accepted
 // start requests run the engine against that page's target iframe and a detached worktree. Every
-// owned resource is released in reverse order on close or on a failed startup; closing during a
-// run first cancels its stage and lets it finalize. `testTransport` reaches only the server's
-// transport selection in this process and is never serialized or logged.
+// owned resource is released in reverse order on close or on a failed startup. Closing the Studio
+// page or browser, or an interrupt that closes the Studio, interrupts an active run: its running
+// stage is cancelled, and it finalizes as `Unverified` with its worktree removed and pruned before
+// anything is released; the close reports that it interrupted the run. An event-stream
+// disconnect alone never closes the Studio. `testTransport` reaches only the server's transport
+// selection in this process and is never serialized or logged.
 
 export interface StartStudioOptions {
   readonly repoRoot: string
@@ -53,14 +56,24 @@ export interface StudioLaunchJson {
   readonly session_id: string
 }
 
+/** How the Studio closed. */
+export interface StudioClosure {
+  /** True when closing interrupted a run that had not finalized; that run then finalized as `Unverified`. */
+  readonly interruptedRun: boolean
+}
+
 export interface StudioInstance {
   /** Exact Studio origin, `http://127.0.0.1:<ephemeral port>`. */
   readonly origin: string
   readonly sessionId: string
   /** The single Studio page, with the target iframe and the agent pane. */
   readonly page: Page
-  /** Cancels an active run, waits for it to finalize, then releases every owned resource. Idempotent. */
-  close(): Promise<void>
+  /**
+   * Interrupts an active run, waits for it to finalize, then releases every owned resource.
+   * Idempotent: every call shares the first close and its closure. Rejects when a run could not
+   * be finalized safely or a resource could not be released.
+   */
+  close(): Promise<StudioClosure>
   toJSON(): StudioLaunchJson
 }
 
@@ -77,6 +90,7 @@ export type StudioLaunchErrorCode =
   | 'STUDIO_RUN_UNAVAILABLE'
   | 'STUDIO_RUN_INPUT_INVALID'
   | 'STUDIO_CLOSED'
+  | 'STUDIO_RUN_FINALIZE_FAILED'
   | 'STUDIO_CLEANUP_INCOMPLETE'
   | ScenarioLoadErrorCode
   | TargetAppErrorCode
@@ -198,27 +212,6 @@ async function waitForPreview(page: Page, target: TargetApp, deadline: number): 
   if (ready !== true) throw new StudioLaunchError('STUDIO_PAGE_FAILED', 'The prepared preview did not become ready.')
 }
 
-/**
- * Runs one stage with a signal that also aborts when the Studio starts closing. Closing rejects the
- * stage at once, so the run finalizes as `Unverified` without waiting for the stage to notice.
- */
-function untilClosed<T>(closing: AbortSignal, stage: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const closed = (): StudioLaunchError => new StudioLaunchError('STUDIO_CLOSED', 'The Studio closed during the run.')
-  if (closing.aborted) return Promise.reject(closed())
-  const signal = AbortSignal.any([stage, closing])
-  return new Promise<T>((resolve, reject) => {
-    const onClose = (): void => reject(closed())
-    closing.addEventListener('abort', onClose, { once: true })
-    let pending: Promise<T>
-    try {
-      pending = work(signal)
-    } catch (error) {
-      pending = Promise.reject(error)
-    }
-    void pending.then(resolve, reject).finally(() => closing.removeEventListener('abort', onClose))
-  })
-}
-
 /** One persisted failure artifact, read back through the run store, as a JSON object. */
 async function readFailureJson(store: RunArtifactStore, bundle: EvidenceBundle, type: EvidenceType): Promise<Readonly<Record<string, unknown>>> {
   const invalid = (): StudioLaunchError => new StudioLaunchError('STUDIO_RUN_INPUT_INVALID', 'The failure evidence is not readable.')
@@ -258,56 +251,53 @@ interface RunWiring {
   readonly capture: BrowserCapture
   readonly request: ChatRequest
   readonly transport: ModelTransport
-  readonly closing: AbortSignal
 }
 
-/** The run engine's stages, bound to the Studio page's target iframe, the target app, and the worktree. */
-function createRunPorts({ page, target, worktree, capture, request, transport, closing }: RunWiring): RunStagePorts {
+/**
+ * The run engine's stages, bound to the Studio page's target iframe, the target app, and the
+ * worktree. Each stage's signal also aborts when the run is interrupted, which stops a worktree
+ * build, the capture, and the model call.
+ */
+function createRunPorts({ page, target, worktree, capture, request, transport }: RunWiring): RunStagePorts {
   const builder = (signal: AbortSignal): TargetBuilder => ({ build: () => worktree.build({ signal }) })
   return {
-    reproduce: (context) =>
-      untilClosed(closing, context.signal, async (signal) => {
-        await target.serveBuild('known-bad', builder(signal))
-        const frame = await studioTargetFrame(page, READY_TIMEOUT_MS)
-        await target.reconnect(frame)
-        const { scenario, runId, store, allocator } = context
-        return capture.capturePhase({ phase: 'failure', frame, scenario, runId, store, allocator, sourceRoot: worktree.path, signal })
-      }),
-    diagnose: (context, failure) =>
-      untilClosed(closing, context.signal, async (signal) => {
-        const { scenario } = context.scenario
-        const prompt = buildDiagnosisPrompt({
-          runId: context.runId,
-          goal: request.text,
-          failureBundle: failure.bundle,
-          permittedSourcePaths: scenario.permitted_source_paths,
-          ...(await readDiagnosisInputs(context.store, failure.bundle)),
-        })
-        const output = await transport.diagnose(prompt, { signal, timeoutMs: scenario.timeouts.model_ms })
-        return { prompt, output }
-      }),
+    reproduce: async (context) => {
+      await target.serveBuild('known-bad', builder(context.signal))
+      const frame = await studioTargetFrame(page, READY_TIMEOUT_MS)
+      await target.reconnect(frame)
+      const { scenario, runId, store, allocator, signal } = context
+      return capture.capturePhase({ phase: 'failure', frame, scenario, runId, store, allocator, sourceRoot: worktree.path, signal })
+    },
+    diagnose: async (context, failure) => {
+      const { scenario } = context.scenario
+      const prompt = buildDiagnosisPrompt({
+        runId: context.runId,
+        goal: request.text,
+        failureBundle: failure.bundle,
+        permittedSourcePaths: scenario.permitted_source_paths,
+        ...(await readDiagnosisInputs(context.store, failure.bundle)),
+      })
+      const output = await transport.diagnose(prompt, { signal: context.signal, timeoutMs: scenario.timeouts.model_ms })
+      return { prompt, output }
+    },
     validate: (context, { diagnosis, failure }) =>
-      untilClosed(closing, context.signal, () =>
-        validateCandidate({
-          runId: context.runId,
-          diagnosis,
-          failureBundle: failure.bundle,
-          permittedSourcePaths: context.scenario.scenario.permitted_source_paths,
-          checkoutRoot: worktree.path,
-        }),
-      ),
-    apply: (context, candidate) =>
-      untilClosed(closing, context.signal, async (signal) => {
-        await worktree.applyDiff(candidate.unified_diff)
-        await target.serveBuild('patched', builder(signal))
+      validateCandidate({
+        runId: context.runId,
+        diagnosis,
+        failureBundle: failure.bundle,
+        permittedSourcePaths: context.scenario.scenario.permitted_source_paths,
+        checkoutRoot: worktree.path,
       }),
-    replay: (context) =>
-      untilClosed(closing, context.signal, async (signal) => {
-        const frame = await studioTargetFrame(page, READY_TIMEOUT_MS)
-        await target.reconnect(frame)
-        const { scenario, runId, store, allocator } = context
-        return capture.capturePhase({ phase: 'replay', frame, scenario, runId, store, allocator, sourceRoot: worktree.path, signal })
-      }),
+    apply: async (context, candidate) => {
+      await worktree.applyDiff(candidate.unified_diff)
+      await target.serveBuild('patched', builder(context.signal))
+    },
+    replay: async (context) => {
+      const frame = await studioTargetFrame(page, READY_TIMEOUT_MS)
+      await target.reconnect(frame)
+      const { scenario, runId, store, allocator, signal } = context
+      return capture.capturePhase({ phase: 'replay', frame, scenario, runId, store, allocator, sourceRoot: worktree.path, signal })
+    },
     // Never cancelled: the worktree is removed, pruned, and compared on every exit.
     cleanup: async () => {
       capture.dispose()
@@ -355,6 +345,9 @@ export async function startStudio(options: StartStudioOptions): Promise<StudioIn
   let studioPage: Page | null = null
   let target: TargetApp | null = null
   let runLaunched = false
+  /** True from the run's launch until it finalized or failed to. */
+  let runActive = false
+  let runFinalizeFailed = false
   let repoRoot = requestedRoot
 
   // One run per Studio session: the target app advances preview → known-bad → patched only once.
@@ -381,6 +374,7 @@ export async function startStudio(options: StartStudioOptions): Promise<StudioIn
       const session = worktree
       let result: RunResult | null = null
       runLaunched = true
+      runActive = true
       void executeRun({
         request,
         scenario,
@@ -388,17 +382,22 @@ export async function startStudio(options: StartStudioOptions): Promise<StudioIn
         store,
         events,
         allocator: createEvidenceIdAllocator(request.run_id),
-        ports: createRunPorts({ page, target: app, worktree: session, capture, request, transport, closing }),
+        ports: createRunPorts({ page, target: app, worktree: session, capture, request, transport }),
         // A fresh per-run canary: nothing seeds it, so any finding is a credential shape or secret key.
         secretMarkers: [`flowproof-canary-${randomBytes(16).toString('hex')}`],
+        // Closing the Studio interrupts the run; it still finalizes before anything is released.
+        interrupt: closing,
       })
         .then(
           (finalized) => {
             result = finalized
           },
-          () => undefined,
+          () => {
+            runFinalizeFailed = true
+          },
         )
         .finally(async () => {
+          runActive = false
           capture.dispose()
           await session.dispose().catch(() => undefined)
           settle()
@@ -473,16 +472,21 @@ export async function startStudio(options: StartStudioOptions): Promise<StudioIn
     })
     studioPage = page
 
-    let closed: Promise<void> | null = null
-    const close = (): Promise<void> => {
+    let closed: Promise<StudioClosure> | null = null
+    const close = (): Promise<StudioClosure> => {
       closed ??= (async () => {
+        // Only a run that has not finalized yet is interrupted by this close.
+        const interruptedRun = runActive
         closingController.abort()
         await Promise.allSettled([...runs])
-        if (!(await release())) throw new StudioLaunchError('STUDIO_CLEANUP_INCOMPLETE', 'Some Studio resources could not be released.')
+        const released = await release()
+        if (runFinalizeFailed) throw new StudioLaunchError('STUDIO_RUN_FINALIZE_FAILED', 'A run could not be finalized safely.')
+        if (!released) throw new StudioLaunchError('STUDIO_CLEANUP_INCOMPLETE', 'Some Studio resources could not be released.')
+        return Object.freeze({ interruptedRun })
       })()
       return closed
     }
-    // Closing the Studio page or browser closes the Studio.
+    // Closing the Studio page or browser, or a page crash, closes the Studio and interrupts its run.
     const closeQuietly = (): void => {
       close().catch(() => undefined)
     }

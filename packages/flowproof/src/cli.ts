@@ -10,7 +10,7 @@ import { selectTransport } from './model/transport.js'
 import { ScenarioLoadError, loadScenario } from './scenario/loadScenario.js'
 import { SCENARIO_REGISTRY } from './scenario/registry.js'
 import { StudioLaunchError, startStudio } from './studio/launch.js'
-import type { StudioInstance } from './studio/launch.js'
+import type { StudioClosure, StudioInstance } from './studio/launch.js'
 import { WorktreeError } from './worktree/session.js'
 
 // `flowproof studio [--scenario <scenario-id>]`, the only MVP command (contracts/cli.md). Every
@@ -18,16 +18,23 @@ import { WorktreeError } from './worktree/session.js'
 // clean tracked baseline, the registered case and its committed paths, the artifact root, and,
 // for an explicit case, provider readiness. Without `--scenario` no credential is required until
 // a run is requested. The launch object is printed once the browser is ready, and the process
-// stays up until the Studio closes or an interrupt arrives. Diagnostics are one `CODE: message`
-// line on stderr built from fixed messages; argv, paths, and environment values are never echoed.
+// stays up until the Studio closes or an interrupt arrives; either one during a run finalizes
+// that run as `Unverified` and exits `2`. Diagnostics are one `CODE: message` line on stderr built
+// from fixed messages; argv, paths, and environment values are never echoed. The command runs
+// only when this module is the process entry point, so tests can supervise an in-process Studio
+// with the same interrupt lifecycle.
 
-/** `0` normal close, `3` precondition or usage failure, `4` internal startup or shutdown failure. */
-type ExitCode = 0 | 3 | 4
+/**
+ * `0` normal close, `2` the Studio closed or was interrupted during a run that then finalized as
+ * `Unverified`, `3` precondition or usage failure, `4` internal startup, finalization, or shutdown failure.
+ */
+export type ExitCode = 0 | 2 | 3 | 4
 
 const USAGE_INVALID = 'CLI_USAGE_INVALID: Usage: flowproof studio [--scenario <scenario-id>].'
 const PRECONDITION_CHECK_FAILED = 'PRECONDITION_CHECK_FAILED: The launch preconditions could not be checked.'
 const STUDIO_START_FAILED = 'STUDIO_START_FAILED: The Studio could not be started.'
 const STUDIO_CLOSE_FAILED = 'STUDIO_CLEANUP_INCOMPLETE: Some Studio resources could not be released.'
+const RUN_INTERRUPTED = 'RUN_INTERRUPTED: The Studio closed or was interrupted during a run; the run was finalized as Unverified.'
 // The launcher owns shutdown, so Playwright installs no handlers of its own (see launch.ts).
 const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
 
@@ -118,12 +125,12 @@ interface Subscription {
   dispose(): void
 }
 
-interface ShutdownSignals extends Subscription {
+export interface ShutdownSignals extends Subscription {
   received(): boolean
 }
 
 /** Turns the first shutdown signal into an event; later signals change nothing while cleanup runs. */
-function watchShutdownSignals(): ShutdownSignals {
+export function watchShutdownSignals(): ShutdownSignals {
   let received = false
   let notify: () => void = () => undefined
   const event = new Promise<void>((resolve) => {
@@ -177,6 +184,34 @@ async function serveUntilClosed(instance: StudioInstance, signals: ShutdownSigna
   }
 }
 
+/**
+ * Serves a started Studio until an interrupt or its own end, closes it, and maps how it ended to
+ * the exit code: `2` when the close interrupted a run, which then finalized as `Unverified`.
+ */
+export async function superviseStudio(instance: StudioInstance, signals: ShutdownSignals): Promise<ExitCode> {
+  const served = await serveUntilClosed(instance, signals).then(
+    () => true,
+    () => false,
+  )
+  // Idempotent: also settles a close the Studio already began when its page or browser went away.
+  let closure: StudioClosure
+  try {
+    closure = await instance.close()
+  } catch (error) {
+    diagnose(error instanceof StudioLaunchError ? error.message : STUDIO_CLOSE_FAILED)
+    return 4
+  }
+  if (!served) {
+    diagnose(STUDIO_START_FAILED)
+    return 4
+  }
+  if (closure.interruptedRun) {
+    diagnose(RUN_INTERRUPTED)
+    return 2
+  }
+  return 0
+}
+
 async function runStudio(scenarioId: string | null): Promise<ExitCode> {
   let repoRoot: string
   try {
@@ -196,19 +231,7 @@ async function runStudio(scenarioId: string | null): Promise<ExitCode> {
       diagnose(error instanceof StudioLaunchError ? error.message : STUDIO_START_FAILED)
       return 4
     }
-    const served = await serveUntilClosed(instance, signals).then(
-      () => true,
-      () => false,
-    )
-    // Idempotent: also settles a close the Studio already began when its page or browser went away.
-    try {
-      await instance.close()
-    } catch {
-      diagnose(STUDIO_CLOSE_FAILED)
-      return 4
-    }
-    if (!served) diagnose(STUDIO_START_FAILED)
-    return served ? 0 : 4
+    return await superviseStudio(instance, signals)
   } finally {
     signals.dispose()
   }
@@ -252,4 +275,4 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
   return exitCode
 }
 
-process.exitCode = await main(process.argv)
+if (import.meta.main) process.exitCode = await main(process.argv)

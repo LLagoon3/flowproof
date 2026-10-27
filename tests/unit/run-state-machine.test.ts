@@ -43,6 +43,8 @@ import { REPO_ROOT, createTempDirectory, git, listTree } from '../support/repoFi
 // real sanitized artifacts. The run owns the transitions, the dataset/Canvas oracles, the
 // whole-run secret scan, the nine-gate reduction, stage-aware result paths, scenario
 // timeouts, phase and total durations, `result.json`, and exactly one cleanup on every exit.
+// T064 adds the interrupt: closing the Studio or interrupting the process cancels the running
+// stage at once and the run still finalizes.
 
 export interface CapturedPhase {
   readonly phase: EvidencePhase
@@ -111,6 +113,8 @@ export interface ExecuteRunOptions {
   readonly ports: RunStagePorts
   /** Seeded markers that must not appear in any artifact, event, prompt, or the result. */
   readonly secretMarkers: readonly string[]
+  /** Aborted when the Studio page or browser closes or the process is interrupted (T064). */
+  readonly interrupt?: AbortSignal
   readonly now?: () => Date
 }
 
@@ -237,7 +241,12 @@ interface RunOutcome {
 }
 
 async function execute(
-  options: { readonly ports?: PortOverrides; readonly scenario?: LoadedScenario; readonly fakeClock?: boolean } = {},
+  options: {
+    readonly ports?: PortOverrides
+    readonly scenario?: LoadedScenario
+    readonly fakeClock?: boolean
+    readonly interrupt?: AbortSignal
+  } = {},
 ): Promise<RunOutcome> {
   const { executeRun } = await runModule()
   const repo = await createTempDirectory('flowproof-run-')
@@ -321,6 +330,7 @@ async function execute(
     ports,
     secretMarkers: [MARKER],
     ...(options.fakeClock ? { now: () => new Date(harness.clock) } : {}),
+    ...(options.interrupt ? { interrupt: options.interrupt } : {}),
   })
   // A run that ignores its own timeouts fails here with a clear message instead of hanging.
   const result = await Promise.race([
@@ -741,5 +751,85 @@ describe('run state machine: scenario timeouts', () => {
     expect(result.status).toBe('Unverified')
     expect(result.gates.some((entry) => /TIMEOUT/.test(entry.reason_code))).toBe(true)
     expect(outcome.harness.calls).not.toContain('replay')
+  })
+})
+
+describe('run state machine: interrupts', () => {
+  const stopped = (result: RunResult): readonly [GateId, string, string][] =>
+    result.gates.filter((entry) => entry.reason_code === 'RUN_INTERRUPTED').map((entry) => [entry.gate_id, entry.status, entry.reason_code])
+
+  it.each([
+    ['reproduce', [['failure_reproduced', 'unevaluable']], ['citations_valid', 'patch_scope_valid', 'patch_applied', 'dataset_matches', 'canvas_matches']],
+    ['diagnose', [['citations_valid', 'unevaluable']], ['patch_scope_valid', 'patch_applied', 'dataset_matches', 'canvas_matches']],
+    [
+      'validate',
+      [
+        ['citations_valid', 'unevaluable'],
+        ['patch_scope_valid', 'unevaluable'],
+      ],
+      ['patch_applied', 'dataset_matches', 'canvas_matches'],
+    ],
+    ['apply', [['patch_applied', 'fail']], ['dataset_matches', 'canvas_matches']],
+    [
+      'replay',
+      [
+        ['dataset_matches', 'unevaluable'],
+        ['canvas_matches', 'unevaluable'],
+      ],
+      [],
+    ],
+  ] as const)('cancels the %s stage at once when interrupted and finalizes Unverified', async (stage, affected, downstream) => {
+    const interrupt = new AbortController()
+    const outcome = await execute({
+      interrupt: interrupt.signal,
+      // The interrupt arrives while the stage runs; the stage itself never settles.
+      ports: {
+        [stage]: () => {
+          interrupt.abort()
+          return new Promise<never>(() => undefined)
+        },
+      } as PortOverrides,
+    })
+    await expectFinalized(outcome)
+    const { result, harness, events } = outcome
+
+    expect(harness.contexts[stage]?.signal.aborted).toBe(true)
+    expect(harness.calls.slice(harness.calls.indexOf(stage) + 1)).toEqual(['cleanup'])
+    expect(result.status).toBe('Unverified')
+    expect(stopped(result)).toEqual(affected.map(([gateId, status]) => [gateId, status, 'RUN_INTERRUPTED']))
+    for (const gateId of downstream) expect(gate(result, gateId)).toMatchObject({ status: 'unevaluable', reason_code: 'GATE_NOT_EVALUATED' })
+    // Finalization is never interrupted: the integrity and secret gates are still evaluated.
+    expect(gate(result, 'original_worktree_unchanged').status).toBe('pass')
+    expect(gate(result, 'secret_scan_clean').status).toBe('pass')
+    expect(events.filter((event) => event.type === 'agent_message' && /interrupted/i.test(event.message))).toHaveLength(1)
+  })
+
+  it('runs no stage when interrupted before the run starts, and still writes the result', async () => {
+    const interrupt = new AbortController()
+    interrupt.abort()
+    const outcome = await execute({ interrupt: interrupt.signal })
+    await expectFinalized(outcome)
+    const { result, harness } = outcome
+
+    expect(harness.calls).toEqual(['cleanup'])
+    expect(stopped(result)).toEqual([['failure_reproduced', 'unevaluable', 'RUN_INTERRUPTED']])
+    expect(result).toMatchObject({ status: 'Unverified', failure_screenshot_path: null, diagnosis_path: null })
+  })
+
+  it('never interrupts the finalization of a run whose stages all completed', async () => {
+    const interrupt = new AbortController()
+    const outcome = await execute({
+      interrupt: interrupt.signal,
+      ports: {
+        cleanup: async () => {
+          interrupt.abort()
+          return { unchanged: true, mismatches: [] }
+        },
+      },
+    })
+    await expectFinalized(outcome)
+
+    expect(outcome.result.status).toBe('Verified Fix')
+    expect(outcome.events.some((event) => event.type === 'agent_message' && /interrupted/i.test(event.message))).toBe(false)
   })
 })

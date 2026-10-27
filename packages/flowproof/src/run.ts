@@ -42,11 +42,13 @@ import type { WorktreeIntegrityReport } from './worktree/session.js'
 // the model call, the guards, and the worktree stay with their owners, while the run owns the
 // transitions, the failure and replay oracles, the whole-run secret scan, the nine-gate reduction,
 // stage-aware result paths, the scenario stage and total timeouts, phase durations, and
-// `result.json`. A stage failure, rejection, or timeout finalizes directly as `Unverified` with
-// its gate failed or unevaluable and every later gate unevaluable. Cleanup runs exactly once on
-// every exit, and the run's own gate, event, and error text never echoes stage errors, prompts,
-// model output, or diffs. When a committed evaluation fixture stands in for the model, the run
-// labels that injected fault in its activity as well as in the result's provider.
+// `result.json`. A stage failure, rejection, timeout, or interrupt finalizes directly as
+// `Unverified` with its gate failed or unevaluable and every later gate unevaluable; an interrupt
+// (the Studio page or browser closing, or the process being interrupted) cancels the running
+// stage at once but never the finalization. Cleanup runs exactly once on every exit, and the
+// run's own gate, event, and error text never echoes stage errors, prompts, model output, or
+// diffs. When a committed evaluation fixture stands in for the model, the run labels that
+// injected fault in its activity as well as in the result's provider.
 
 export interface DiagnosisExchange {
   /** The sanitized prompt actually sent; part of the whole-run secret scan. */
@@ -60,7 +62,7 @@ export interface RunStageContext {
   readonly scenario: LoadedScenario
   readonly store: RunArtifactStore
   readonly allocator: EvidenceIdAllocator
-  /** Aborted when the stage's scenario timeout or the total run timeout elapses. */
+  /** Aborted when the stage's scenario timeout or the total run timeout elapses, or the run is interrupted. */
   readonly signal: AbortSignal
 }
 
@@ -95,6 +97,8 @@ export interface ExecuteRunOptions {
   readonly ports: RunStagePorts
   /** Seeded markers that must not appear in any artifact, event, prompt, or the result. */
   readonly secretMarkers: readonly string[]
+  /** Aborted when the Studio page or browser closes or the process is interrupted. */
+  readonly interrupt?: AbortSignal
   /** Clock for timestamps and phase durations; stage timeouts always run on real time. */
   readonly now?: () => Date
 }
@@ -144,16 +148,18 @@ const STAGE_FAILURE_MESSAGES = {
   REPLAY_CAPTURE_FAILED: 'The replay capture did not complete, so the oracles could not be evaluated.',
   REPLAY_TIMEOUT: 'The replay exceeded the scenario replay timeout and was cancelled.',
   RUN_TIMEOUT: 'The run exceeded the scenario total timeout and was cancelled.',
+  RUN_INTERRUPTED: 'The Studio closed or the process was interrupted during this stage, so the stage was cancelled.',
 } as const
 
 type StageFailureCode = keyof typeof STAGE_FAILURE_MESSAGES
-type StageFailure = 'error' | 'stage-timeout' | 'run-timeout'
+type StageFailure = 'error' | 'stage-timeout' | 'run-timeout' | 'interrupted'
 type StageOutcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly failure: StageFailure }
 
 const EVIDENCE_INCOMPLETE = 'The failure Evidence Bundle is missing, invalid, or not fully persisted.'
+const INTERRUPTED = 'The run was interrupted, so it stops here and finalizes as Unverified.'
 
 const failureCode = (failure: StageFailure, failed: StageFailureCode, timedOut: StageFailureCode = failed): StageFailureCode =>
-  failure === 'run-timeout' ? 'RUN_TIMEOUT' : failure === 'stage-timeout' ? timedOut : failed
+  failure === 'interrupted' ? 'RUN_INTERRUPTED' : failure === 'run-timeout' ? 'RUN_TIMEOUT' : failure === 'stage-timeout' ? timedOut : failed
 
 const stageFailed = (gateId: GateId, code: StageFailureCode): GateOutcome =>
   unevaluableGate(gateId, code, { message: STAGE_FAILURE_MESSAGES[code] })
@@ -172,10 +178,17 @@ const idsOf = (bundle: EvidenceBundle, type: EvidenceType): string[] =>
   bundle.items.filter((item) => item.type === type).map((item) => item.evidence_id)
 
 /**
- * Runs one stage port until it settles, its window ends, or the run times out. A timed-out stage
- * has its signal aborted and its late settlement ignored, and no stage outcome rejects the run.
+ * Runs one stage port until it settles, its window ends, the run times out, or the run is
+ * interrupted. A timed-out or interrupted stage has its signal aborted and its late settlement
+ * ignored, and no stage outcome rejects the run.
  */
-function runStage<T>(run: AbortSignal, windowEnd: number | null, call: (signal: AbortSignal) => Promise<T>): Promise<StageOutcome<T>> {
+function runStage<T>(
+  run: AbortSignal,
+  interrupt: AbortSignal | undefined,
+  windowEnd: number | null,
+  call: (signal: AbortSignal) => Promise<T>,
+): Promise<StageOutcome<T>> {
+  if (interrupt?.aborted) return Promise.resolve({ ok: false, failure: 'interrupted' })
   if (run.aborted) return Promise.resolve({ ok: false, failure: 'run-timeout' })
   const controller = new AbortController()
   return new Promise((resolve) => {
@@ -186,11 +199,14 @@ function runStage<T>(run: AbortSignal, windowEnd: number | null, call: (signal: 
       settled = true
       if (timer !== undefined) clearTimeout(timer)
       run.removeEventListener('abort', onRunTimeout)
+      interrupt?.removeEventListener('abort', onInterrupt)
       if (!outcome.ok && outcome.failure !== 'error') controller.abort()
       resolve(outcome)
     }
     const onRunTimeout = (): void => settle({ ok: false, failure: 'run-timeout' })
+    const onInterrupt = (): void => settle({ ok: false, failure: 'interrupted' })
     run.addEventListener('abort', onRunTimeout, { once: true })
+    interrupt?.addEventListener('abort', onInterrupt, { once: true })
     if (windowEnd !== null) {
       timer = setTimeout(() => settle({ ok: false, failure: 'stage-timeout' }), Math.max(0, windowEnd - performance.now()))
     }
@@ -431,8 +447,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
   }
 
   const runTimeout = new AbortController()
-  const stage = <T>(windowEnd: number | null, call: (context: RunStageContext) => Promise<T>): Promise<StageOutcome<T>> =>
-    runStage(runTimeout.signal, windowEnd, (signal) => call(Object.freeze({ runId, scenario, store, allocator, signal })))
+  let interrupted = false
+  const stage = async <T>(windowEnd: number | null, call: (context: RunStageContext) => Promise<T>): Promise<StageOutcome<T>> => {
+    const outcome = await runStage(runTimeout.signal, options.interrupt, windowEnd, (signal) =>
+      call(Object.freeze({ runId, scenario, store, allocator, signal })),
+    )
+    if (!outcome.ok && outcome.failure === 'interrupted') interrupted = true
+    return outcome
+  }
 
   /** `reproducing` → `failure_captured`; returns the capture only when the defect reproduced with complete evidence. */
   const reproduce = async (): Promise<CapturedPhase | null> => {
@@ -673,6 +695,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
   } finally {
     clearTimeout(runTimer)
   }
+  if (interrupted) emit({ type: 'agent_message', message: INTERRUPTED })
 
   const finalizeMark = now()
   record(await integrityGate(() => ports.cleanup()))
