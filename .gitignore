@@ -4,3 +4,19 @@
 .DS_Store
 *.log
 .specify/extensions/.cache/
+
+# Dependencies
+node_modules/
+
+# Generated output
+dist/
+*.tsbuildinfo
+coverage/
+
+# FlowProof run artifacts
+.flowproof/
+
+# Playwright output
+test-results/
+playwright-report/
+blob-report/

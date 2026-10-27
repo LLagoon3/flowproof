@@ -27,12 +27,12 @@ adapter and full Proof Trail. Neither internal slice changes the Spec's completi
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Create the pnpm workspace root with `flowproof`, `typecheck`, `build`, `test`, `test:contract`, `test:integration`, `test:e2e`, and `test:meta-smoke` scripts, `MODEL_API_KEY` documentation, and ignore rules for `.flowproof/`, generated output, and local secrets in `package.json`, `pnpm-workspace.yaml`, `.env.example`, and `.gitignore`
-- [ ] T002 Pin the Plan-approved dependencies and configure the engine to compile with `tsc` into `packages/flowproof/dist/` and execute `node --env-file-if-exists=.env packages/flowproof/dist/cli.js` in `tsconfig.base.json`, `packages/flowproof/package.json`, and `packages/flowproof/tsconfig.json`
-- [ ] T003 [P] Configure the CSP-compatible React Studio build with no inline scripts or styles in `apps/studio/index.html`, `apps/studio/package.json`, `apps/studio/vite.config.ts`, `apps/studio/tsconfig.json`, and `apps/studio/src/main.tsx`
-- [ ] T004 [P] Configure the static trusted demo build in `apps/demo-chart/index.html`, `apps/demo-chart/package.json`, `apps/demo-chart/vite.config.ts`, and `apps/demo-chart/tsconfig.json`
-- [ ] T005 [P] Configure Vitest projects and the pinned headed-Chromium Playwright project, excluding `meta-smoke` from default test discovery and avoiding an auto-launched browser fixture, in `vitest.config.ts` and `playwright.config.ts`
-- [ ] T006 Install the pinned dependency graph, run `pnpm exec playwright install chromium`, and commit the reproducible lockfile in `pnpm-lock.yaml`
+- [X] T001 Create the pnpm workspace root with `flowproof`, `typecheck`, `build`, `test`, `test:contract`, `test:integration`, `test:e2e`, and `test:meta-smoke` scripts, `MODEL_API_KEY` documentation, and ignore rules for `.flowproof/`, generated output, and local secrets in `package.json`, `pnpm-workspace.yaml`, `.env.example`, and `.gitignore`
+- [X] T002 Pin the Plan-approved dependencies and configure the engine to compile with `tsc` into `packages/flowproof/dist/` and execute `node --env-file-if-exists=.env packages/flowproof/dist/cli.js` in `tsconfig.base.json`, `packages/flowproof/package.json`, and `packages/flowproof/tsconfig.json`
+- [X] T003 [P] Configure the CSP-compatible React Studio build with no inline scripts or styles in `apps/studio/index.html`, `apps/studio/package.json`, `apps/studio/vite.config.ts`, `apps/studio/tsconfig.json`, and `apps/studio/src/main.tsx`
+- [X] T004 [P] Configure the static trusted demo build in `apps/demo-chart/index.html`, `apps/demo-chart/package.json`, `apps/demo-chart/vite.config.ts`, and `apps/demo-chart/tsconfig.json`
+- [X] T005 [P] Configure Vitest projects and the pinned headed-Chromium Playwright project, excluding `meta-smoke` from default test discovery and avoiding an auto-launched browser fixture, in `vitest.config.ts` and `playwright.config.ts`
+- [X] T006 Install the pinned dependency graph, run `pnpm exec playwright install chromium`, and commit the reproducible lockfile in `pnpm-lock.yaml`
 
 **Checkpoint 1**: `pnpm install --frozen-lockfile`, `pnpm typecheck`, and empty test discovery run
 from the repository root.

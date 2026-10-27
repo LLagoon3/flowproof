@@ -1,0 +1,27 @@
+{
+  "name": "flowproof-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "flowproof": "pnpm --filter flowproof run build && node --env-file-if-exists=.env packages/flowproof/dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm -r run typecheck",
+    "build": "pnpm -r run build",
+    "test": "vitest run --project unit --project contract --project integration --project ui",
+    "test:contract": "vitest run --project contract",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "playwright test",
+    "test:meta-smoke": "vitest run --project meta-smoke"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
