@@ -53,7 +53,7 @@ from the repository root.
 - [X] T012 [P] Write failing connected-stream tests for contiguous sequence from `1`, same-run Evidence IDs, sanitized content, heartbeats, no missed-event replay, and result independence from SSE in `tests/unit/studio-events.test.ts`
 - [X] T013 [P] Write failing registry and loader tests for kebab-case IDs, repository-contained paths, non-overlapping oracle/provider/source paths, fixed build commands, identical replay actions, provider mode per case, and rejection of command/path/oracle/gate/provider/timeout overrides in `tests/unit/scenario-registry.test.ts`
 - [X] T014 [P] Write failing request-guard tests for exact `Host`, launch cookie, POST `Origin`, GET/SSE `Sec-Fetch-Site: same-origin`, loopback binding, `no-store`, restrictive CSP with demo-origin-only `frame-src`, path traversal, and the stable `{"error":{"code","message"}}` envelope in `tests/integration/studio-security.test.ts`
-- [ ] T015 [P] Write failing known-bad filter and trusted chart-probe tests in `tests/unit/demo-chart.test.ts`
+- [X] T015 [P] Write failing known-bad filter and trusted chart-probe tests in `tests/unit/demo-chart.test.ts`
 
 ### Implementation
 
@@ -66,7 +66,7 @@ from the repository root.
 - [X] T022 Implement nine gate outcomes and deterministic all-pass reduction in `packages/flowproof/src/verify/gates.ts`
 - [X] T023 Implement in-memory ordered Studio event emission with live-only SSE delivery in `packages/flowproof/src/studio/events.ts`
 - [X] T024 Implement launch-cookie, Host, Origin, fetch-site, loopback, CSP, and no-store guards plus the stable error-envelope helper in `packages/flowproof/src/studio/auth.ts` and `packages/flowproof/src/studio/errors.ts`
-- [ ] T025 [P] Implement the one-file filter defect in the only permitted candidate target, the fixed-size animation-disabled Canvas chart and filter control, and the read-only trusted probe outside the patch boundary in `apps/demo-chart/src/filterData.ts`, `apps/demo-chart/src/main.ts`, and `apps/demo-chart/src/testProbe.ts`
+- [X] T025 [P] Implement the one-file filter defect in the only permitted candidate target, the fixed-size animation-disabled Canvas chart and filter control, and the read-only trusted probe outside the patch boundary in `apps/demo-chart/src/filterData.ts`, `apps/demo-chart/src/main.ts`, and `apps/demo-chart/src/testProbe.ts`
 
 **Checkpoint 2**: deterministic tests pass without a browser or Meta call; the built demo app
 reproduces the defect in a plain browser.
