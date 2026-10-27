@@ -5,15 +5,21 @@ FlowProof engine. It is not a hosted service or a general repository automation 
 
 ## Transport and session boundary
 
-- Bind only to `127.0.0.1` on an ephemeral port. Do not bind to all interfaces.
+- Bind the Studio only to `127.0.0.1` on an ephemeral port. Do not bind to all interfaces.
+- Build the prepared demo app and serve it from `localhost` on its committed fixed port. The Studio
+  and model-patched iframe therefore do not share a cookie host.
 - Open the Studio in the pinned headed Chromium build used for scenario capture.
-- Establish one launch session with an `HttpOnly`, `SameSite=Strict` cookie. The cookie value is
-  held in memory, never logged, and never written to run artifacts.
-- Require the expected loopback `Origin` on state-changing requests and SSE connections.
+- Establish one launch session with an `HttpOnly; SameSite=Strict; Path=/` cookie injected through
+  Playwright `context.addCookies()` before navigation. The value is held in memory, never logged,
+  and never written to run artifacts.
+- Reject requests whose `Host` does not exactly match the launched Studio authority.
+- Require the launch cookie and exact Studio `Origin` on state-changing POST requests.
+- Require the launch cookie and `Sec-Fetch-Site: same-origin` on GET and SSE requests. Same-origin
+  GET and EventSource requests may omit `Origin`, so its absence is not an error on those methods.
 - Apply a restrictive Content Security Policy that permits only the Studio bundle, its loopback
   API, and the selected prepared target frame.
-- Return `Cache-Control: no-store` on every API and report response.
-- Accept and return JSON unless the endpoint explicitly uses SSE or HTML.
+- Return `Cache-Control: no-store` on every API response.
+- Accept and return JSON unless the endpoint explicitly uses SSE.
 
 ## List prepared cases
 
@@ -50,7 +56,7 @@ Successful response: `202 Accepted`
 
 The MVP rejects a second start request while the session already has an active run.
 
-## Stream ordered activity
+## Stream live activity
 
 `GET /api/runs/:runId/events`
 
@@ -62,10 +68,10 @@ event: evidence_added
 data: {"schema_version":"1.0.0","event_id":"...:7","run_id":"..."}
 ```
 
-The full `data` object validates against `studio-event.schema.json`. The server appends an event to
-`events.jsonl` before delivery. On reconnect, the client supplies `Last-Event-ID`; the server sends
-only later records in ascending sequence. An SSE disconnect never cancels or restarts the run.
-Comment-only heartbeat records are allowed and are not Studio Events.
+The full `data` object validates against `studio-event.schema.json`. Events are sanitized and
+assigned a contiguous sequence before delivery. An SSE disconnect never cancels or restarts the
+run, but the MVP does not persist or replay missed events through `Last-Event-ID`. Comment-only
+heartbeat records are allowed and are not Studio Events.
 
 ## Read the authoritative result
 
@@ -74,17 +80,19 @@ Comment-only heartbeat records are allowed and are not Studio Events.
 - While the run is active: `202 Accepted` with `{"state":"running"}`.
 - After finalization: `200 OK` with the object from `run-result.schema.json`.
 
-The final result comes from deterministic gate reduction, not the Studio event stream.
+The final result comes from deterministic gate reduction, not the Studio event stream. The Studio
+uses the result and Evidence IDs already received to render the in-workspace Proof Trail.
 
-## Review and export the Proof Trail
+## Read Proof Trail evidence
 
-- `GET /api/runs/:runId/report` returns the self-contained sanitized HTML Proof Trail.
-- `GET /api/runs/:runId/evidence/:evidenceId` returns one allowlisted sanitized artifact.
+- `GET /api/runs/:runId/evidence/:evidenceId` returns one sanitized evidence artifact already
+  registered in that run.
 - `GET /api/runs/:runId/artifacts/candidate-diff` returns the validated candidate diff when one
   exists.
 
-There is no generic file endpoint. Route parameters are validated against the selected run and
-contract identifiers; clients cannot submit filesystem paths.
+There is no generic path-based file endpoint, directory listing, portable report route, or bulk
+download. Route parameters are validated against the selected run and contract identifiers; the
+browser cannot submit filesystem paths.
 
 ## Error response
 
@@ -105,7 +113,9 @@ provider payloads, request bodies, query strings, or rejected secret-bearing val
 
 ## Shutdown and failure behavior
 
-Closing the browser disconnects the UI but does not change an active run's deterministic outcome.
-An interrupt stops accepting new requests, finalizes a started run as `Unverified` when required,
-flushes contract-valid artifacts, and then removes the temporary worktree. A target-frame load
-failure occurs before model use and finalizes safely with its failed or unevaluable gates.
+An SSE disconnect alone does not change an active run. Closing the Studio page or browser removes
+the authoritative visible target, so the engine stops the run, marks the affected gate failed or
+unevaluable, finalizes it as `Unverified`, flushes contract-valid artifacts when possible, and
+removes the temporary worktree. An interrupt follows the same safe finalization sequence. A target
+frame load failure occurs before model use and finalizes safely with its failed or unevaluable
+gates.

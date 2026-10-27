@@ -23,9 +23,6 @@
     "candidate_diff_path",
     "failure_screenshot_path",
     "replay_screenshot_path",
-    "visual_diff_path",
-    "report_path",
-    "events_path",
     "total_duration_ms"
   ],
   "properties": {
@@ -44,13 +41,13 @@
     "phase_durations_ms": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["capture", "model", "apply", "replay", "report"],
+      "required": ["capture", "model", "apply", "replay", "finalize"],
       "properties": {
         "capture": { "$ref": "#/$defs/milliseconds" },
         "model": { "$ref": "#/$defs/milliseconds" },
         "apply": { "$ref": "#/$defs/milliseconds" },
         "replay": { "$ref": "#/$defs/milliseconds" },
-        "report": { "$ref": "#/$defs/milliseconds" }
+        "finalize": { "$ref": "#/$defs/milliseconds" }
       }
     },
     "provider": {
@@ -128,9 +125,6 @@
     "candidate_diff_path": { "$ref": "#/$defs/nullablePath" },
     "failure_screenshot_path": { "$ref": "#/$defs/relativePath" },
     "replay_screenshot_path": { "$ref": "#/$defs/nullablePath" },
-    "visual_diff_path": { "$ref": "#/$defs/nullablePath" },
-    "report_path": { "$ref": "#/$defs/relativePath" },
-    "events_path": { "$ref": "#/$defs/relativePath" },
     "total_duration_ms": { "$ref": "#/$defs/milliseconds" }
   },
   "allOf": [
@@ -253,6 +247,7 @@
   },
   "x-flowproof-invariants": [
     "failed_gate_ids contains every gate with fail or unevaluable status and no passing gate.",
-    "Every gate Evidence ID exists in an Evidence Bundle from the same run."
+    "Every gate Evidence ID exists in an Evidence Bundle from the same run.",
+    "canvas_matches compares chart count, labels, and values; screenshots are review evidence only."
   ]
 }

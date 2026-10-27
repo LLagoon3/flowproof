@@ -18,10 +18,10 @@ Represents one local split-view Studio launch.
 | `state` | enum | `ready`, `running`, `finalized`, or `closed`. |
 | `active_run_id` | UUID or null | At most one run in the MVP. |
 | `target_url` | URL or null | Allowlisted loopback iframe URL only. |
-| `last_event_sequence` | integer | Highest event rendered by the Studio. |
 
-The launch credential is held in memory and a secure browser cookie, not in run artifacts. The
-Studio cannot change scenario commands, oracle paths, permitted source paths, or gate definitions.
+The launch credential is held in memory and an `HttpOnly; SameSite=Strict; Path=/` cookie scoped to
+the Studio host, not in run artifacts. Playwright injects it before Studio navigation. The Studio
+cannot change scenario commands, oracle paths, permitted source paths, or gate definitions.
 
 ## Entity: Chat Request
 
@@ -48,15 +48,15 @@ Represents the trusted, committed inputs loaded before a run.
 | `schema_version` | string | Exact supported contract version. |
 | `scenario_id` | string | Stable kebab-case identifier. |
 | `case` | enum | `hero` or `failure-invalid-citation`. |
-| `default_request` | string | Synthetic chat goal for headless and demo use. |
+| `default_request` | string | Synthetic chat goal prefilled in the Studio. |
 | `app.root` | repo-relative path | Must resolve inside the repository. |
-| `app.url` | URL | Loopback HTTP URL only for the MVP. |
+| `app.url` | URL | Fixed `localhost` HTTP URL for the MVP demo server. |
 | `app.start_command` | string array | Committed command tokens; never model-generated. |
+| `app.viewport` | object | Fixed width and height with device scale factor `1`. |
+| `app.canvas` | object | Fixed Canvas width and height used for both phases. |
 | `actions` | array | Ordered Playwright actions reused for failure and replay. |
 | `oracle.dataset_path` | repo-relative path | Committed immutable JSON fixture. |
 | `oracle.chart_path` | repo-relative path | Expected rendered labels and values. |
-| `oracle.screenshot_path` | repo-relative path | Committed immutable PNG fixture. |
-| `oracle.max_diff_pixel_ratio` | number | Range 0–0.01; model cannot change it. |
 | `permitted_source_paths` | string array | Exact file allowlist; one file in this MVP. |
 | `provider.mode` | enum | `meta` for Hero, `fixture` for explicit Failure evaluation. |
 | `provider.fixture_path` | path or null | Required only in fixture mode. |
@@ -85,9 +85,8 @@ Owns lifecycle state, artifact paths, timing, and the final result.
 | `original_head` | Git object ID | Captured before any worktree operation. |
 | `original_status_digest` | SHA-256 | Digest of normalized initial status. |
 | `state` | enum | Lifecycle state below. |
-| `phase_durations_ms` | object | Capture, model, apply, replay, and report durations. |
+| `phase_durations_ms` | object | Capture, model, apply, replay, and finalization durations. |
 | `artifact_root` | repo-relative path | `.flowproof/runs/<run-id>/`. |
-| `events_path` | repo-relative path | Append-only sanitized `events.jsonl`. |
 | `result` | Verification Result | Present only after finalization. |
 
 ### State transitions
@@ -109,7 +108,7 @@ when every required gate passes.
 
 ## Entity: Studio Event
 
-Represents one ordered update streamed to the agent pane and replayed after reconnect.
+Represents one ordered update streamed to the connected agent pane.
 
 | Field | Type | Rules |
 | --- | --- | --- |
@@ -123,11 +122,11 @@ Represents one ordered update streamed to the agent pane and replayed after reco
 | `message` | string | Sanitized human-readable activity text. |
 | `evidence_ids` | string array | Existing Evidence IDs made available by this event. |
 | `gate` | Gate Outcome summary or null | Present only for a gate event. |
-| `artifact_refs` | relative path array | Sanitized run artifacts safe for Studio retrieval. |
+| `artifact_refs` | relative path array | Existing sanitized artifacts referenced by the event. |
 
-Events are appended before SSE delivery. Reconnection supplies `Last-Event-ID`; the server returns
-only later events in ascending sequence. Missing, duplicate, cross-run, or reordered events fail the
-Studio event contract but do not alter the authoritative run result.
+Events are sanitized before SSE delivery and remain ordered while the connection is active. The MVP
+does not persist or replay missed events after a disconnect. Missing, duplicate, cross-run, or
+reordered events fail the Studio event contract but do not alter the authoritative run result.
 
 ## Entity: Evidence Item
 
@@ -226,6 +225,10 @@ Represents the validated form of a Diagnosis candidate and its isolated applicat
 8. `secret_scan_clean`
 9. `original_worktree_unchanged`
 
+`canvas_matches` compares the trusted rendered bar count, labels, and values with the committed
+chart-series oracle. Failure and replay screenshots are Evidence Items for review and do not add a
+pixel-comparison gate in the MVP.
+
 ## Entity: Verification Result
 
 | Field | Type | Rules |
@@ -237,16 +240,14 @@ Represents the validated form of a Diagnosis candidate and its isolated applicat
 | `candidate_diff_path` | path or null | Null if no candidate passed validation. |
 | `failure_screenshot_path` | path | Required. |
 | `replay_screenshot_path` | path or null | Null when replay did not occur. |
-| `visual_diff_path` | path or null | Present after visual comparison. |
-| `report_path` | path | Static HTML Proof Trail. |
-| `events_path` | path | Append-only sanitized Studio event log. |
 | `total_duration_ms` | integer | Includes all run phases. |
 
 ### Reduction rule
 
 `Verified Fix` is produced only when all nine required gates are present and `pass`. Any missing,
 `fail`, or `unevaluable` outcome produces `Unverified` and appears in `failed_gate_ids`. The model
-has no field that can set or override the final status.
+has no field that can set or override the final status. The active Studio renders the Proof Trail
+from this result and the referenced evidence; portable report generation is deferred.
 
 ## Relationships
 

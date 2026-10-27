@@ -33,17 +33,36 @@
     "app": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["root", "url", "start_command"],
+      "required": ["root", "url", "start_command", "viewport", "canvas"],
       "properties": {
         "root": { "$ref": "#/$defs/repoPath" },
         "url": {
           "type": "string",
-          "pattern": "^http://(?:127\\.0\\.0\\.1|localhost):[0-9]+(?:/.*)?$"
+          "pattern": "^http://localhost:[0-9]+(?:/.*)?$"
         },
         "start_command": {
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
+        },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height", "device_scale_factor"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 800, "maximum": 2560 },
+            "height": { "type": "integer", "minimum": 600, "maximum": 1440 },
+            "device_scale_factor": { "const": 1 }
+          }
+        },
+        "canvas": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 320, "maximum": 1600 },
+            "height": { "type": "integer", "minimum": 240, "maximum": 1200 }
+          }
         }
       }
     },
@@ -69,21 +88,10 @@
     "oracle": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "dataset_path",
-        "chart_path",
-        "screenshot_path",
-        "max_diff_pixel_ratio"
-      ],
+      "required": ["dataset_path", "chart_path"],
       "properties": {
         "dataset_path": { "$ref": "#/$defs/repoPath" },
-        "chart_path": { "$ref": "#/$defs/repoPath" },
-        "screenshot_path": { "$ref": "#/$defs/repoPath" },
-        "max_diff_pixel_ratio": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 0.01
-        }
+        "chart_path": { "$ref": "#/$defs/repoPath" }
       }
     },
     "permitted_source_paths": {
@@ -162,6 +170,7 @@
   "x-flowproof-invariants": [
     "The tracked working tree is clean before a run.",
     "Oracle and fixture paths do not overlap permitted_source_paths.",
-    "Failure and replay use the identical actions array."
+    "Failure and replay use the identical actions array.",
+    "Failure and replay use the same fixed viewport, Canvas dimensions, and device scale factor."
   ]
 }

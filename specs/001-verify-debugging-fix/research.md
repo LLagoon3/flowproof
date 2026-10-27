@@ -4,13 +4,12 @@
 
 ## Decision 1: Use Node.js 24 and TypeScript in one pnpm workspace
 
-**Decision**: Build the Studio, local orchestration engine, CLI adapter, and trusted demo fixture
-with Node.js 24 LTS, TypeScript 7.0, and pnpm 10.
+**Decision**: Build the Studio, local orchestration engine, launcher, and trusted demo fixture with
+Node.js 24 LTS, TypeScript 7.0, and pnpm 10.
 
 **Rationale**: The prepared host already has Node.js 24 and pnpm 10. Playwright, Vite, Chart.js,
-Meta's documented OpenAI-compatible SDK path, JSON Schema validation, patch processing, Studio UI,
-and report generation all fit one runtime. A single language reduces build and packaging work during
-the hackathon.
+Meta's documented OpenAI-compatible SDK path, JSON Schema validation, patch processing, and Studio
+UI all fit one runtime. A single language reduces build and packaging work during the hackathon.
 
 **Alternatives considered**:
 
@@ -23,18 +22,18 @@ the hackathon.
 ## Decision 2: Make a local split-view Studio the primary UX
 
 **Decision**: Open one local browser window with the prepared application on the left and Chat,
-Agent Activity, Evidence, Gates, and the final Proof Trail on the right. Keep the CLI as the
-launcher and headless adapter, and retain a self-contained HTML report as an export artifact.
+Agent Activity, Evidence, Gates, and the final Proof Trail on the right. Keep the CLI only as the
+Studio launcher for the MVP.
 
 **Rationale**: The approved product experience requires the developer to see the target behavior and
 the agent's evidence-grounded work together. A local Studio supplies that experience without a
-database, login, cloud deployment, or browser-extension permission flow. The CLI remains useful for
-CI and deterministic tests, while the exported report remains a portable audit artifact.
+database, login, cloud deployment, or browser-extension permission flow. A second headless surface
+and portable report can be added after the visible Hero and Failure paths are stable.
 
 **Alternatives considered**:
 
 - CLI plus static report as the primary UX: safe but does not show the target and agent working
-  together, so it remains only the headless and export path.
+  together; both surfaces are deferred rather than implemented beside the Studio.
 - Chrome Side Panel extension: best aligned with future use on arbitrary sites, but extension
   permissions and local Git access require a companion service and broaden the hackathon surface.
 - Electron with `WebContentsView`: can own both panes and arbitrary navigation, but packaging,
@@ -42,15 +41,27 @@ CI and deterministic tests, while the exported report remains a portable audit a
 
 ## Decision 3: Let headed Playwright control the visible target iframe
 
-**Decision**: The local engine starts the known-bad app in an isolated worktree, launches headed
-Chromium to the Studio, embeds the app in the left iframe, and drives that exact frame with
-Playwright. A Node.js built-in HTTP server serves the built Studio and local API from one origin.
-The right panel receives sanitized ordered events over Server-Sent Events (SSE).
+**Decision**: The local engine builds and serves the known-bad app from an isolated worktree,
+launches headed Chromium to the built Studio, embeds the app in the left iframe, and drives that
+exact frame with Playwright. A Node.js built-in HTTP server serves the Studio and local API from
+`127.0.0.1`; the demo app uses `localhost` on a fixed port. The right panel receives sanitized
+ordered events over Server-Sent Events (SSE).
+
+Both Vite applications are built before the run and served as static assets. The MVP does not use
+Vite development servers or HMR, which would add unrelated network activity and mutable runtime
+state to the captured evidence.
 
 **Rationale**: The user sees the same application instance that provides failure and replay
 evidence. The controlled fixture permits framing, and Playwright can address its frame without the
-Studio frontend bypassing browser-origin boundaries. One-way SSE fits ordered progress updates;
-ordinary local HTTP requests handle chat start and result retrieval.
+Studio frontend bypassing browser-origin boundaries. One-way SSE fits connected-run progress
+updates; ordinary local HTTP requests handle chat start and result retrieval. The MVP does not
+persist or replay missed activity events.
+
+The host split prevents the Studio launch cookie from being sent to model-patched iframe code.
+Playwright injects the `HttpOnly; SameSite=Strict; Path=/` cookie before Studio navigation. The
+server validates the exact `Host`, requires the exact Studio `Origin` on POST requests, and requires
+the launch cookie plus `Sec-Fetch-Site: same-origin` on GET and SSE requests. Same-origin GET and
+EventSource requests may omit `Origin`, so it is not required there.
 
 **Alternatives considered**:
 
@@ -102,13 +113,13 @@ allowed. Stateless mode avoids server-managed conversation history.
 ## Decision 6: Keep SAM 3.1 out of the default MVP path
 
 **Decision**: Do not require SAM 3.1 for Hero verification. Record it as a later experiment gated on
-measured improvement over the fixed screenshot oracle.
+measured improvement over the trusted chart oracle and captured screenshots.
 
 **Rationale**: The specification requires deterministic bar count, label, and value verification,
 not segmentation. Meta documents SAM as returning geometry for concrete objects from short noun
-phrases. Chart bars are possible segmentation targets, but a pinned screenshot comparison is
-simpler, deterministic, cheaper, and sufficient in the prepared demo environment. A forced SAM
-dependency would add parsing, masks, and another paid request without proving better verification.
+phrases. Chart bars are possible segmentation targets, but the trusted chart probe is simpler,
+deterministic, cheaper, and sufficient in the prepared demo environment. A forced SAM dependency
+would add parsing, masks, and another paid request without proving better verification.
 
 **Alternatives considered**:
 
@@ -117,24 +128,26 @@ dependency would add parsing, masks, and another paid request without proving be
   approve its own visual result.
 - Add SAM as a non-blocking overlay: deferred until the Hero path is complete and measured.
 
-## Decision 7: Pair data, rendered-chart, and pinned Canvas screenshot oracles
+## Decision 7: Pair data and rendered-chart oracles, with screenshots as evidence
 
-**Decision**: Verify exact filtered rows, read the rendered Chart.js labels and values through a
-trusted test probe outside the patch boundary, and compare Canvas pixels against a committed
-known-good screenshot.
+**Decision**: Verify exact filtered rows and read the rendered Chart.js labels and values through a
+trusted test probe outside the patch boundary. Capture fixed-size failure and replay screenshots for
+review, but do not use pixel comparison as a required MVP gate.
 
 **Rationale**: The data gate detects semantic filtering errors. The chart probe proves the bar
-count, labels, and values actually passed to the renderer. The screenshot observes final Canvas
-pixels that are absent from the DOM. Pinning Chromium, viewport, fonts, locale, timezone, device
-scale, and disabled animations makes the visual oracle stable for the prepared demo. None of these
-oracles is generated by the failing run or the model.
+count, labels, and values actually passed to the renderer. Screenshots still make the before/after
+change visible to the reviewer, while removing pixel-threshold tuning and cross-environment image
+instability from the critical path. The fixed viewport, Canvas dimensions, Chromium build, locale,
+timezone, device scale, font set, and disabled animations keep the recorded evidence comparable.
 
 **Alternatives considered**:
 
 - DOM assertions only: cannot observe Canvas pixels.
-- Chart.js probe only: verifies rendered data but not final pixels.
+- Chart.js probe plus screenshots: selected because it proves the required chart values while
+  preserving visual evidence without a flaky hard gate.
 - OCR or general computer vision: higher nondeterminism and dependency cost for a fixed fixture.
-- Screenshot-only verification: does not clearly isolate incorrect filtered data.
+- Pixel-level screenshot verification: useful later, but not required to prove this bounded filter
+  defect during the hackathon.
 
 ## Decision 8: Apply patches in a detached temporary Git worktree
 
@@ -156,11 +169,12 @@ after the run.
 ## Decision 9: Persist only local, run-scoped sanitized artifacts
 
 **Decision**: Write artifacts under ignored `.flowproof/runs/<run-id>/` and delete the temporary
-worktree after retaining the verified diff, screenshots, gate outcomes, and reports.
+worktree after retaining the verified diff, screenshots, evidence manifests, and gate outcomes.
 
-**Rationale**: The user needs a reviewable Proof Trail. Local files avoid a database, account model,
-cloud retention policy, and network transmission beyond the explicit Meta request. Content hashes
-make artifact references stable.
+**Rationale**: The active Studio renders the reviewable Proof Trail from contract-valid local
+artifacts. Local files avoid a database, account model, cloud retention policy, portable report
+generator, and network transmission beyond the explicit Meta request. Content hashes make evidence
+references stable.
 
 **Alternatives considered**:
 
@@ -198,8 +212,6 @@ the lockfile.
 | Playwright | 1.64.1 | Apache-2.0 | reproduction and replay |
 | OpenAI SDK | 7.45.0 | Apache-2.0 | Meta Responses API client |
 | Zod | 4.6.7 | MIT | runtime contract validation |
-| pixelmatch | 8.0.0 | ISC | Canvas screenshot comparison |
-| pngjs | 7.0.0 | MIT | PNG decoding and diff output |
 | Commander | 15.0.0 | MIT | CLI surface |
 | Vitest | 5.0.5 | MIT | unit and contract tests |
 

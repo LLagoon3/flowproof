@@ -9,7 +9,7 @@ Reference [the data model](./data-model.md), [the CLI contract](./contracts/cli.
 
 ## Prerequisites
 
-- Linux or macOS
+- Linux
 - Git
 - Node.js 24 LTS
 - pnpm 10
@@ -40,7 +40,7 @@ pnpm test:integration
 Expected outcome:
 
 - Every JSON fixture validates against its contract.
-- Studio event sequence and reconnect fixtures restore the same ordered activity.
+- Studio event fixtures preserve ordered, sanitized activity while connected.
 - Sanitizer tests remove all seeded secret markers.
 - Invalid Evidence IDs and unsafe patches are rejected.
 - Only an all-pass gate set reduces to `Verified Fix`.
@@ -82,7 +82,8 @@ Expected outcome:
   `apps/demo-chart/src/filterData.ts`.
 - Failure capture and patch replay both occur in a detached temporary worktree at the selected
   baseline. The diff passes every guard, applies only there, and replays the same actions.
-- The replay dataset, rendered labels and values, and Canvas screenshot match their fixed oracles.
+- The replay dataset and rendered labels and values match their fixed oracles; the fixed-size
+  failure and replay screenshots remain available as review evidence.
 - All nine required gates pass, the in-workspace Proof Trail shows `Verified Fix`, and total
   duration is below 300 seconds in the prepared environment.
 - The original working copy and Git history are unchanged.
@@ -96,31 +97,12 @@ Review the completed run directly in the right panel:
 3. failure screenshot;
 4. evidence-linked diagnosis;
 5. candidate diff and patch-guard outcome;
-6. replay screenshot and visual diff;
+6. replay screenshot;
 7. every gate outcome; and
 8. final `Verified Fix` or `Unverified` status.
 
-Use **Export HTML** to save the same sanitized Proof Trail as a self-contained artifact. The
-launcher also prints the run artifact directory, so the export can be opened independently:
-
-```bash
-xdg-open .flowproof/runs/<run-id>/report.html
-```
-
-The exported report is an audit artifact, not the primary user interface.
-
-## Run the same engine headlessly
-
-Use the CLI adapter for CI and deterministic automation:
-
-```bash
-pnpm flowproof run --scenario canvas-filter-failure-invalid-citation
-pnpm flowproof run --scenario canvas-filter-hero
-```
-
-Headless mode uses the scenario's committed `default_request` unless `--request` supplies an
-equivalent bounded goal. It produces the same events, result, and static report without opening the
-Studio.
+The MVP keeps the Proof Trail inside the active Studio. Portable HTML export and a headless CLI are
+tracked as follow-up work rather than duplicate implementation surfaces.
 
 ## Run the full end-to-end suite
 
@@ -128,7 +110,7 @@ Studio.
 pnpm test:e2e
 ```
 
-The deterministic suite covers the Studio, target frame, reconnect behavior, and provider
+The deterministic suite covers the Studio, target frame, browser-close cleanup, and provider
 fixtures. Run the credential-gated live smoke separately:
 
 ```bash

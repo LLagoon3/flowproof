@@ -121,8 +121,8 @@
   },
   "x-flowproof-invariants": [
     "event_id equals the event run_id followed by a colon and its decimal sequence.",
-    "Sequences start at one and remain contiguous, unique, and ascending within a run.",
+    "Sequences start at one and remain contiguous, unique, and ascending for a connected run.",
     "Every Evidence ID and artifact reference belongs to the same run and already exists.",
-    "Each event is sanitized and appended before SSE delivery."
+    "Each event is sanitized before SSE delivery; replay after disconnect is outside the MVP."
   ]
 }
