@@ -2,17 +2,19 @@ import { useEffect, useId, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { evidenceUrl, studioError, toStudioError } from '../api.js'
-import type { EvidencePhase, EvidenceType, GateOutcome, PhaseDurations, StudioClient, StudioError } from '../api.js'
+import type { EvidencePhase, EvidenceType, GateId, GateOutcome, PhaseDurations, StudioClient, StudioError } from '../api.js'
 import { selectProofTrail } from '../state.js'
 import type { ProofTrailCapture, ProofTrailEvidence, ProofTrailView, RunView } from '../state.js'
 import { GATE_LABELS, GATE_STATUS_LABELS } from './AgentPanel.js'
 
-// The in-workspace Proof Trail of a finalized run: its final status, who produced the diagnosis
-// (an injected fixture is labeled as such), the failure capture with its screenshot, the candidate
-// diff, the replay capture with its screenshot, all nine gate outcomes, and the phase timing. The
-// trail comes only from the authoritative result and the Evidence IDs the session holds; artifact
-// contents are read through the closed evidence and candidate-diff routes and rendered as text or
-// same-origin images, never as markup. A phase the run never reached is reported absent.
+// The in-workspace Proof Trail of a finalized run: its final status with the candidate guard that
+// rejected it before patch application, if any, who produced the diagnosis (an injected fixture is
+// labeled as such and its content is never shown), the failure capture with its screenshot, the
+// candidate diff, the replay capture with its screenshot, all nine gate outcomes, and the phase
+// timing. The trail comes only from the authoritative result and the Evidence IDs the session
+// holds; artifact contents are read through the closed evidence and candidate-diff routes and
+// rendered as text or same-origin images, never as markup. A phase the run never reached is
+// reported absent.
 
 export interface ProofTrailProps {
   /** The current run from `studioReducer`; the trail appears once its result is final. */
@@ -57,6 +59,9 @@ const DURATION_LABELS: Readonly<Record<keyof PhaseDurations, string>> = {
   replay: 'Replay',
   finalize: 'Finalization',
 }
+
+/** The candidate guards: a failing one rejects the candidate before any patch application. */
+const GUARD_GATES: ReadonlySet<GateId> = new Set(['citations_valid', 'patch_scope_valid'])
 
 /** Dataset and chart evidence decide the oracle gates, so they open by default. */
 const OPEN_BY_DEFAULT: ReadonlySet<EvidenceType> = new Set(['dataset', 'chart'])
@@ -115,7 +120,14 @@ function placeholder(run: RunView | null): string {
   return 'The Proof Trail appears when the authoritative run result is available.'
 }
 
+/** The first failing candidate guard of a run that kept no candidate diff, or null. */
+function rejectingGuard(trail: ProofTrailView): GateOutcome | null {
+  if (trail.candidateDiff) return null
+  return trail.gates.find((gate) => GUARD_GATES.has(gate.gate_id) && gate.status === 'fail') ?? null
+}
+
 function FinalStatus({ trail }: { readonly trail: ProofTrailView }) {
+  const rejection = rejectingGuard(trail)
   return (
     <section className="proof-trail__section proof-trail__status" aria-label="Proof Trail final status" data-status={trail.status === 'Verified Fix' ? 'verified' : 'unverified'}>
       <p className="proof-trail__verdict">{trail.status}</p>
@@ -123,6 +135,12 @@ function FinalStatus({ trail }: { readonly trail: ProofTrailView }) {
         <p className="proof-trail__note">All nine required gates passed.</p>
       ) : (
         <p className="proof-trail__note">Failed or unevaluable gates: {trail.failedGateIds.map((gateId) => GATE_LABELS[gateId]).join(', ')}</p>
+      )}
+      {rejection !== null && (
+        <p className="proof-trail__rejection" data-rejected-by={rejection.gate_id}>
+          Rejected before patch application: {GATE_LABELS[rejection.gate_id]} failed with <code>{rejection.reason_code}</code>. The candidate was
+          never applied or replayed.
+        </p>
       )}
     </section>
   )
@@ -139,6 +157,7 @@ function Provenance({ trail }: { readonly trail: ProofTrailView }) {
             <strong>Injected evaluation fixture.</strong> The diagnosis came from a labeled evaluation fixture, not from Meta Model API.
           </p>
           <p className="proof-trail__fixture-label">Label: {provenance.label}</p>
+          <p className="proof-trail__fixture-note">The fixture is untrusted evaluation input, so its content is not displayed.</p>
         </div>
       ) : (
         <p className="proof-trail__provider" data-provenance="meta">

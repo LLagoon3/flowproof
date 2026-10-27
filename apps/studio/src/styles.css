@@ -562,9 +562,15 @@ code {
   font-weight: 700;
 }
 
+.proof-trail__rejection {
+  margin: 0;
+  font-weight: 600;
+}
+
 .proof-trail__provider,
 .proof-trail__fixture-kind,
-.proof-trail__fixture-label {
+.proof-trail__fixture-label,
+.proof-trail__fixture-note {
   margin: 0;
 }
 
