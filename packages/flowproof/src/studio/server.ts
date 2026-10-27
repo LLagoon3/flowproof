@@ -28,6 +28,7 @@ import { CONTENT_TYPES, canonicalDocumentRoot, readServedFile, requestSegments }
 // refused request creates no run, artifact directory, or worktree. Proof Trail reads are closed
 // lookups by run ID plus a registered Evidence ID or the candidate diff; there is no file route.
 // Outside `/api/`, the launcher's built Studio bundle is served read-only behind the same guards.
+// A case fixed at launch is listed first, so the Studio opens on it.
 
 /** What the server hands the run engine for one accepted start request. */
 export interface StudioRunStart {
@@ -57,6 +58,8 @@ export interface StudioServerOptions {
   readonly testTransport?: ModelTransport
   /** The launcher's built Studio bundle in temporary output; without it only `/api/` is served. */
   readonly studioRoot?: string
+  /** The registered case fixed by `flowproof studio --scenario`; listed first so the Studio opens on it. */
+  readonly scenarioId?: string
 }
 
 export interface StudioServerHandle {
@@ -154,6 +157,9 @@ function assertOptions(options: StudioServerOptions): void {
   if (typeof options.env !== 'object' || options.env === null || typeof options.startRun !== 'function') {
     throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'The Studio needs an environment source and a run starter.')
   }
+  if (options.scenarioId !== undefined && findRegisteredScenario(options.scenarioId) === null) {
+    throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'The launch-selected case is not a committed case.')
+  }
   // Validates the framed target before anything binds.
   buildContentSecurityPolicy(options.targetOrigin)
 }
@@ -192,8 +198,12 @@ function listen(server: Server): Promise<AddressInfo> {
  */
 export async function startStudioServer(options: StudioServerOptions): Promise<StudioServerHandle> {
   assertOptions(options)
-  const { repoRoot, env, startRun, testTransport } = options
+  const { repoRoot, env, startRun, testTransport, scenarioId: launchCase } = options
   const studioRoot = await readStudioRoot(options.studioRoot)
+  const listedCases = [
+    ...SCENARIO_REGISTRY.filter((entry) => entry.scenario_id === launchCase),
+    ...SCENARIO_REGISTRY.filter((entry) => entry.scenario_id !== launchCase),
+  ]
   const runs = new Map<string, StudioRunHandle>()
   const streams = new Set<ServerResponse>()
   let starting = false
@@ -213,7 +223,7 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
 
   const listScenarios = async (res: ServerResponse): Promise<void> => {
     const scenarios = []
-    for (const entry of SCENARIO_REGISTRY) {
+    for (const entry of listedCases) {
       const loaded = await loadCommittedScenario(entry.scenario_id, repoRoot)
       scenarios.push({
         scenario_id: entry.scenario_id,

@@ -52,6 +52,8 @@ export interface StudioServerOptions {
   readonly startRun: (start: StudioRunStart) => Promise<StudioRunHandle>
   /** Forwarded only from the in-process `startStudio({ testTransport })` entry. */
   readonly testTransport?: ModelTransportContract
+  /** The registered case fixed at launch; listed first so the Studio opens on it. */
+  readonly scenarioId?: string
 }
 
 export interface StudioServerHandle {
@@ -103,7 +105,9 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup().catch(() => undefined)
 })
 
-async function studio(options: { readonly testTransport?: ModelTransportContract; readonly env?: Record<string, string> } = {}): Promise<Studio> {
+async function studio(
+  options: { readonly testTransport?: ModelTransportContract; readonly env?: Record<string, string>; readonly scenarioId?: string } = {},
+): Promise<Studio> {
   const mod = await serverModule()
   const clone = await createTempClone()
   cleanups.push(clone.remove)
@@ -135,6 +139,7 @@ async function studio(options: { readonly testTransport?: ModelTransportContract
     env: options.env ?? {},
     startRun,
     ...(options.testTransport ? { testTransport: options.testTransport } : {}),
+    ...(options.scenarioId === undefined ? {} : { scenarioId: options.scenarioId }),
   })
   cleanups.push(() => server.close())
   return { server, repo: clone.path, runs }
@@ -249,6 +254,20 @@ describe('Studio API: transport and prepared cases', () => {
     for (const leak of ['scenarios/', 'apps/', 'pnpm', 'filterData', 'expected', '.json', s.repo]) {
       expect(reply.body).not.toContain(leak)
     }
+  })
+
+  it('lists a launch-selected case first so the Studio opens on it', async () => {
+    const failure = 'canvas-filter-failure-invalid-citation'
+    const s = await studio({ scenarioId: failure })
+    const reply = await get(s, '/api/scenarios')
+
+    expect(reply.status).toBe(200)
+    const ids = (JSON.parse(reply.body) as { scenarios: Array<{ scenario_id: string }> }).scenarios.map((entry) => entry.scenario_id)
+    expect(ids).toEqual([failure, ...SCENARIO_REGISTRY.map((entry) => entry.scenario_id).filter((id) => id !== failure)])
+  })
+
+  it('refuses to start with a launch-selected case that is not registered', async () => {
+    await expect(studio({ scenarioId: 'canvas-filter-unknown' })).rejects.toMatchObject({ code: 'STUDIO_LAUNCH_CONFIG_INVALID' })
   })
 })
 

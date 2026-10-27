@@ -443,6 +443,7 @@ export async function startStudio(options: StartStudioOptions): Promise<StudioIn
         env: process.env,
         startRun,
         studioRoot: studioBuild.path,
+        ...(scenarioId === null ? {} : { scenarioId }),
         ...(testTransport === undefined ? {} : { testTransport }),
       }),
     )
