@@ -97,7 +97,7 @@ from ignored sanitized run artifacts.
 - [X] T031 [P] [US1] Write failing run-state tests for every legal transition, direct fail-closed finalization, nine outcomes always present, downstream `unevaluable` gates, stage-aware artifacts, scenario timeouts, phase/total durations, and cleanup on every exit in `tests/unit/run-state-machine.test.ts`
 - [X] T032 [P] [US1] Write patch-guard tests rejecting absolute, parent, symlink, binary, rename, multi-file, oversized, wrong-target, invalid-citation, and `git apply --check` failures in `tests/unit/patch-guard.test.ts`
 - [X] T033 [P] [US1] Write dataset and Canvas oracle tests for exact ordered rows, bar count, labels, and values, with screenshots excluded from status reduction, in `tests/unit/oracle.test.ts`
-- [ ] T034 [US1] Write the in-process Studio harness and a headed Hero end-to-end skeleton that expects recorded diagnosis, validated one-file diff, isolated apply, patched rebuild, iframe reconnection, identical replay, dataset and Canvas oracle evaluation, nine passing gates, `Verified Fix`, cleanup, and unchanged pre-run snapshots with `MODEL_API_KEY` unset in `tests/support/studioHarness.ts` and `tests/e2e/hero.spec.ts`
+- [X] T034 [US1] Write the in-process Studio harness and a headed Hero end-to-end skeleton that expects recorded diagnosis, validated one-file diff, isolated apply, patched rebuild, iframe reconnection, identical replay, dataset and Canvas oracle evaluation, nine passing gates, `Verified Fix`, cleanup, and unchanged pre-run snapshots with `MODEL_API_KEY` unset in `tests/support/studioHarness.ts` and `tests/e2e/hero.spec.ts`
 
 #### Closed-loop implementation
 
