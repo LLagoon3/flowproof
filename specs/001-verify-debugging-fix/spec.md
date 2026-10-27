@@ -79,7 +79,7 @@ isolated candidate application, replay, and accurate final result.
    workspace connects the chat request, failure evidence, diagnosis, candidate change, replay,
    gate outcomes, and final status.
 9. **Given** the run is finalized as `Verified Fix`, **When** FlowProof hands the result to the
-   developer, **Then** it provides the verified diff and an exportable Proof Trail without
+   developer, **Then** it provides the verified diff and in-workspace Proof Trail without
    committing or changing the developer's original working copy.
 
 ---
@@ -109,8 +109,12 @@ context, the final result remains `Unverified`, and the original working copy re
 - If a candidate change targets content outside the permitted source boundary, application is rejected and the result remains `Unverified`.
 - If candidate application succeeds but either the filtered data check or any Canvas chart check fails, the result remains `Unverified`.
 - If sanitization removes information required to evaluate a gate safely, the system reports that gate as unevaluable rather than exposing the sensitive value or granting `Verified Fix`.
-- If the workspace event stream disconnects, the run continues safely and the workspace restores
-  ordered activity and final state after reconnection without inventing missing events.
+- If the workspace event stream disconnects while the browser remains open, the run continues and
+  the authoritative final result remains available, but the MVP does not promise replay of missed
+  activity events.
+- If the Studio page or browser closes during an active run, FlowProof stops the visible run,
+  finalizes it as `Unverified`, and cleans up the isolated copy without changing the original
+  working copy.
 - If the embedded prepared application cannot load, the run does not call the model or apply a
   patch and reports the startup gate as unevaluable.
 
@@ -137,8 +141,8 @@ context, the final result remains `Unverified`, and the original working copy re
   Evidence IDs, candidate status, verification gates, and the final result as the run progresses.
 - **FR-016**: A chat request MAY express the developer's goal but MUST NOT replace or modify the
   fixed scenario, verification oracle, permitted source boundary, or deterministic final gates.
-- **FR-017**: The completed Proof Trail MUST remain reviewable inside the workspace and MUST be
-  exportable as a self-contained local result.
+- **FR-017**: The completed Proof Trail MUST remain reviewable inside the active workspace and MUST
+  show the verified diff, supporting evidence, gate outcomes, and final status.
 
 ### Key Entities
 
@@ -168,8 +172,9 @@ context, the final result remains `Unverified`, and the original working copy re
   the primary split-view workspace.
 - **SC-010**: For every phase reached by a run, the workspace displays the phase in order and shows
   every emitted Evidence ID and gate update associated with that phase.
-- **SC-011**: Closing and reopening the activity stream during a prepared run does not change the
-  final result and restores the ordered activity already emitted for that run.
+- **SC-011**: Closing the Studio page during an active prepared run yields `Unverified`, records the
+  interruption as a failed or unevaluable gate, removes the isolated copy, and leaves the original
+  working copy unchanged.
 
 ## Assumptions
 
@@ -179,6 +184,8 @@ context, the final result remains `Unverified`, and the original working copy re
 - The developer is authorized to inspect and evaluate the selected project locally.
 - The prepared demo application permits embedding inside the local FlowProof workspace.
 - The chat request is synthetic demo input and is sanitized before persistence or model use.
+- The judged demo runs on the prepared Linux environment; cross-platform support is not an MVP
+  acceptance condition.
 
 ## Scope Boundaries
 
@@ -192,7 +199,8 @@ This specification intentionally defines only the hackathon MVP feature slice. B
 - A completed run provides the candidate diff, evidence, replay outcome, and final status for the developer to review.
 - One local, single-user split-view workspace shows the prepared target application and agent panel.
 - Chat starts one fixed Hero or Failure case and does not redefine its oracle or source boundary.
-- A self-contained Proof Trail can be exported after the run.
+- Failure and replay screenshots are retained as review evidence, while deterministic dataset and
+  rendered bar count, label, and value checks decide the Canvas gate.
 
 ### MVP Out of Scope
 
@@ -203,11 +211,20 @@ This specification intentionally defines only the hackathon MVP feature slice. B
   multi-user collaboration.
 - Allowing chat to create new scenarios, redefine expected behavior, or expand the permitted source
   boundary during a run.
+- A public headless CLI or CI automation interface.
+- Self-contained HTML export and generic or bulk artifact-download endpoints.
+- Replay of missed activity events after an SSE disconnect or reopening a completed Studio session.
+- Pixel-level screenshot comparison as a required verification gate.
+- Multi-turn agent conversations after the single run-start request.
+- Validated macOS support for the local runtime.
 
 ### Future Expansion
 
 - User-supplied or arbitrary visual web defects are intentionally deferred until after the MVP.
 - Additional defect types may be added later without changing the MVP requirement that every fix be grounded in failure evidence and verified by replaying the same scenario.
+- Headless automation, portable Proof Trail export, resilient activity replay, pixel-level visual
+  verification, multi-turn conversations, and macOS support may be added independently after the
+  Hero and Failure Studio flows are stable.
 - Optional Git integration may later preserve an approved verified change as a local commit or remote collaboration artifact.
 - A Chrome Side Panel may later pair the same FlowProof engine with the developer's existing tab;
   an owned desktop browser may be considered when reproducible browser isolation is more important
@@ -217,3 +234,14 @@ This specification intentionally defines only the hackathon MVP feature slice. B
 - A future generalized version should discover the candidate source scope automatically from failure evidence and project relationships while applying safe default exclusions. It should ask for user approval only when the verification oracle is missing or the candidate scope remains materially ambiguous.
 - The absence of a trustworthy oracle or safe source scope MUST result in `Unverified`; it MUST NOT be resolved by letting the patch-producing AI approve its own inferred criteria.
 - The five-minute completion target applies only to the prepared hackathon demo environment. Larger repositories and broader future scenarios require separately measured performance targets.
+
+### Tracked Follow-Up Work
+
+- [#5 Headless run adapter](https://github.com/LLagoon3/flowproof/issues/5)
+- [#6 Portable Proof Trail export](https://github.com/LLagoon3/flowproof/issues/6)
+- [#7 SSE activity replay](https://github.com/LLagoon3/flowproof/issues/7)
+- [#8 Pixel-level Canvas gates](https://github.com/LLagoon3/flowproof/issues/8)
+- [#9 Multi-turn agent conversations](https://github.com/LLagoon3/flowproof/issues/9)
+- [#10 macOS runtime validation](https://github.com/LLagoon3/flowproof/issues/10)
+- [#11 Chrome Side Panel integration](https://github.com/LLagoon3/flowproof/issues/11)
+- [#12 User-defined visual defects](https://github.com/LLagoon3/flowproof/issues/12)
