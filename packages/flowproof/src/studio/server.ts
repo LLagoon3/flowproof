@@ -20,12 +20,14 @@ import type { LaunchSession } from './auth.js'
 import { StudioRequestError, sendJson } from './errors.js'
 import { attachSseClient } from './events.js'
 import type { RunEventStream } from './events.js'
+import { CONTENT_TYPES, canonicalDocumentRoot, readServedFile, requestSegments } from './targetApp.js'
 
 // The loopback Studio API from contracts/studio-api.md. Every route sits behind the launch-session
 // guards. A start request carries only a registered scenario ID and a bounded goal; every
 // rejection, the credential check, and the active-run conflict happen before `startRun`, so a
 // refused request creates no run, artifact directory, or worktree. Proof Trail reads are closed
 // lookups by run ID plus a registered Evidence ID or the candidate diff; there is no file route.
+// Outside `/api/`, the launcher's built Studio bundle is served read-only behind the same guards.
 
 /** What the server hands the run engine for one accepted start request. */
 export interface StudioRunStart {
@@ -53,6 +55,8 @@ export interface StudioServerOptions {
   readonly startRun: (start: StudioRunStart) => Promise<StudioRunHandle>
   /** Forwarded only from the in-process `startStudio({ testTransport })` entry. */
   readonly testTransport?: ModelTransport
+  /** The launcher's built Studio bundle in temporary output; without it only `/api/` is served. */
+  readonly studioRoot?: string
 }
 
 export interface StudioServerHandle {
@@ -154,6 +158,16 @@ function assertOptions(options: StudioServerOptions): void {
   buildContentSecurityPolicy(options.targetOrigin)
 }
 
+/** The built Studio bundle must be a directory with `index.html` in temporary output. */
+async function readStudioRoot(studioRoot: unknown): Promise<string | null> {
+  if (studioRoot === undefined) return null
+  try {
+    return await canonicalDocumentRoot(studioRoot)
+  } catch {
+    throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'The Studio bundle must be a built directory in temporary output.')
+  }
+}
+
 function listen(server: Server): Promise<AddressInfo> {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -179,6 +193,7 @@ function listen(server: Server): Promise<AddressInfo> {
 export async function startStudioServer(options: StudioServerOptions): Promise<StudioServerHandle> {
   assertOptions(options)
   const { repoRoot, env, startRun, testTransport } = options
+  const studioRoot = await readStudioRoot(options.studioRoot)
   const runs = new Map<string, StudioRunHandle>()
   const streams = new Set<ServerResponse>()
   let starting = false
@@ -318,6 +333,18 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
     await sendArtifact(res, handle, evidenceId, parsed.type === 'screenshot' ? 'image/png' : 'application/json; charset=utf-8')
   }
 
+  /** One regular file of the built Studio bundle; `/` is its `index.html`. */
+  const sendStudioAsset = async (req: IncomingMessage, res: ServerResponse, root: string): Promise<void> => {
+    const segments = requestSegments(req.url)
+    const body = segments === null ? null : await readServedFile(root, segments)
+    if (segments === null || body === null) throw fail(404, 'NOT_FOUND', 'The requested route does not exist.')
+    const extension = path.extname(segments[segments.length - 1] ?? '').toLowerCase()
+    res.statusCode = 200
+    res.setHeader('Content-Type', CONTENT_TYPES[extension] ?? 'application/octet-stream')
+    res.setHeader('Content-Length', String(body.length))
+    res.end(req.method === 'HEAD' ? undefined : body)
+  }
+
   const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const pathname = (req.url ?? '/').split(/[?#]/, 1)[0] ?? '/'
     const method = req.method ?? 'GET'
@@ -343,6 +370,11 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
       else if (action === 'result') sendResult(res, handle)
       else if (action === 'artifacts/candidate-diff') await sendArtifact(res, handle, 'candidate-diff', 'text/plain; charset=utf-8')
       else await sendEvidence(res, handle, action.slice('evidence/'.length))
+      return
+    }
+    if (studioRoot !== null && pathname !== '/api' && !pathname.startsWith('/api/')) {
+      if (method !== 'GET' && method !== 'HEAD') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      await sendStudioAsset(req, res, studioRoot)
       return
     }
     throw fail(404, 'NOT_FOUND', 'The requested route does not exist.')

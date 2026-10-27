@@ -135,10 +135,10 @@ export async function callTrustedProbe(frame: Frame, method: TrustedProbeMethod)
 }
 
 // ---------------------------------------------------------------------------------------
-// Static serving
+// Static serving (the Studio server serves its built bundle through the same closed reader)
 // ---------------------------------------------------------------------------------------
 
-const CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
+export const CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -157,7 +157,7 @@ const SAFE_SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/
 const isInside = (root: string, candidate: string): boolean => candidate.startsWith(`${root}${path.sep}`)
 
 /** Maps a request target to plain relative segments; `/` is the index document. */
-function requestSegments(rawUrl: string | undefined): readonly string[] | null {
+export function requestSegments(rawUrl: string | undefined): readonly string[] | null {
   if (typeof rawUrl !== 'string' || !rawUrl.startsWith('/')) return null
   const pathname = rawUrl.split(/[?#]/, 1)[0] ?? ''
   if (pathname === '/') return ['index.html']
@@ -176,7 +176,7 @@ function requestSegments(rawUrl: string | undefined): readonly string[] | null {
 }
 
 /** Reads one regular file that canonically resolves inside the active root, or null. */
-async function readServedFile(root: string, segments: readonly string[]): Promise<Buffer | null> {
+export async function readServedFile(root: string, segments: readonly string[]): Promise<Buffer | null> {
   let canonical: string
   try {
     canonical = await realpath(path.join(root, ...segments))
@@ -209,7 +209,7 @@ function sendStatus(res: ServerResponse, status: number, headers: Readonly<Recor
 }
 
 /** A built app directory under the OS temporary root with a regular `index.html`. */
-async function canonicalDocumentRoot(documentRoot: unknown): Promise<string> {
+export async function canonicalDocumentRoot(documentRoot: unknown): Promise<string> {
   const invalid = (): TargetAppError =>
     new TargetAppError('TARGET_DOCUMENT_ROOT_INVALID', 'A document root is a built app directory in temporary output.')
   if (typeof documentRoot !== 'string' || !path.isAbsolute(documentRoot)) throw invalid()
