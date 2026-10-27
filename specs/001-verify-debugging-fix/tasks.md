@@ -49,10 +49,10 @@ from the repository root.
 - [X] T008 [P] Write failing sanitizer and seeded-marker scan tests for credentials, authorization headers, cookies, queries, bodies, paths, chat, console, source, artifacts, and provider output in `tests/unit/sanitize.test.ts` and `tests/unit/secret-scan.test.ts`
 - [X] T009 [P] Write failing Evidence ID tests for `ev_<phase>_<type>_<ordinal>`, deterministic order, immutability, uniqueness, and rejection of malformed, duplicate, replay-phase, cross-run, and unknown citations in `tests/unit/evidence-ids.test.ts`
 - [X] T010 [P] Write failing artifact-store tests for `.flowproof/runs/<run-id>/` as the only persistent product-artifact addition beneath the original working tree, OS-temp build/worktree output, sanitize-before-hash, atomic writes, closed reads, symlinked-root rejection, and Git-ignored root in `tests/unit/artifact-store.test.ts`
-- [ ] T011 [P] Write failing gate-reducer tests for the nine required gate IDs, complete failed and unevaluable reporting, and all-pass-only `Verified Fix` in `tests/unit/gate-reducer.test.ts`
-- [ ] T012 [P] Write failing connected-stream tests for contiguous sequence from `1`, same-run Evidence IDs, sanitized content, heartbeats, no missed-event replay, and result independence from SSE in `tests/unit/studio-events.test.ts`
+- [X] T011 [P] Write failing gate-reducer tests for the nine required gate IDs, complete failed and unevaluable reporting, and all-pass-only `Verified Fix` in `tests/unit/gate-reducer.test.ts`
+- [X] T012 [P] Write failing connected-stream tests for contiguous sequence from `1`, same-run Evidence IDs, sanitized content, heartbeats, no missed-event replay, and result independence from SSE in `tests/unit/studio-events.test.ts`
 - [X] T013 [P] Write failing registry and loader tests for kebab-case IDs, repository-contained paths, non-overlapping oracle/provider/source paths, fixed build commands, identical replay actions, provider mode per case, and rejection of command/path/oracle/gate/provider/timeout overrides in `tests/unit/scenario-registry.test.ts`
-- [ ] T014 [P] Write failing request-guard tests for exact `Host`, launch cookie, POST `Origin`, GET/SSE `Sec-Fetch-Site: same-origin`, loopback binding, `no-store`, restrictive CSP with demo-origin-only `frame-src`, path traversal, and the stable `{"error":{"code","message"}}` envelope in `tests/integration/studio-security.test.ts`
+- [X] T014 [P] Write failing request-guard tests for exact `Host`, launch cookie, POST `Origin`, GET/SSE `Sec-Fetch-Site: same-origin`, loopback binding, `no-store`, restrictive CSP with demo-origin-only `frame-src`, path traversal, and the stable `{"error":{"code","message"}}` envelope in `tests/integration/studio-security.test.ts`
 - [ ] T015 [P] Write failing known-bad filter and trusted chart-probe tests in `tests/unit/demo-chart.test.ts`
 
 ### Implementation
@@ -63,9 +63,9 @@ from the repository root.
 - [X] T019 Implement pre-persistence and pre-transmission redaction plus whole-run seeded-marker scanning in `packages/flowproof/src/evidence/sanitize.ts` and `packages/flowproof/src/evidence/secretScan.ts`
 - [X] T020 Implement stable Evidence ID creation and same-run failure-phase citation validation in `packages/flowproof/src/evidence/ids.ts`
 - [X] T021 Implement atomic sanitized artifact persistence, canonical manifest hashing, closed identifier lookup, and artifact-root symlink and ignore validation in `packages/flowproof/src/evidence/store.ts`
-- [ ] T022 Implement nine gate outcomes and deterministic all-pass reduction in `packages/flowproof/src/verify/gates.ts`
-- [ ] T023 Implement in-memory ordered Studio event emission with live-only SSE delivery in `packages/flowproof/src/studio/events.ts`
-- [ ] T024 Implement launch-cookie, Host, Origin, fetch-site, loopback, CSP, and no-store guards plus the stable error-envelope helper in `packages/flowproof/src/studio/auth.ts` and `packages/flowproof/src/studio/errors.ts`
+- [X] T022 Implement nine gate outcomes and deterministic all-pass reduction in `packages/flowproof/src/verify/gates.ts`
+- [X] T023 Implement in-memory ordered Studio event emission with live-only SSE delivery in `packages/flowproof/src/studio/events.ts`
+- [X] T024 Implement launch-cookie, Host, Origin, fetch-site, loopback, CSP, and no-store guards plus the stable error-envelope helper in `packages/flowproof/src/studio/auth.ts` and `packages/flowproof/src/studio/errors.ts`
 - [ ] T025 [P] Implement the one-file filter defect in the only permitted candidate target, the fixed-size animation-disabled Canvas chart and filter control, and the read-only trusted probe outside the patch boundary in `apps/demo-chart/src/filterData.ts`, `apps/demo-chart/src/main.ts`, and `apps/demo-chart/src/testProbe.ts`
 
 **Checkpoint 2**: deterministic tests pass without a browser or Meta call; the built demo app
