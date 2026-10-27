@@ -102,7 +102,7 @@ from ignored sanitized run artifacts.
 #### Closed-loop implementation
 
 - [X] T035 [P] [US1] Implement `ModelTransport`, readiness checks, and `selectTransport(scenario, { testTransport? })` so an override is accepted only by the in-process `startStudio` option in `packages/flowproof/src/model/transport.ts`
-- [ ] T036 [P] [US1] Implement the target-app lifecycle owner with one fixed-port `localhost` server, document-root swaps for preview, known-bad, and patched builds, single bind/release, committed worktree build command, iframe reconnection, and trusted-probe readiness in `packages/flowproof/src/studio/targetApp.ts` and `tests/unit/target-app.test.ts`
+- [X] T036 [P] [US1] Implement the target-app lifecycle owner with one fixed-port `localhost` server, document-root swaps for preview, known-bad, and patched builds, single bind/release, committed worktree build command, iframe reconnection, and trusted-probe readiness in `packages/flowproof/src/studio/targetApp.ts` and `tests/unit/target-app.test.ts`
 - [ ] T037 [P] [US1] Implement Playwright action replay plus action, dataset, chart, screenshot, console, metadata-only network, and allowlisted source capture sanitized before persistence and ID emission in `packages/flowproof/src/capture/browserCapture.ts`
 - [ ] T038 [P] [US1] Implement detached worktree creation at original `HEAD`, pre-run snapshots, offline dependency linking, committed build command execution, validated diff application, FlowProof-owned remove/prune, and full post-cleanup snapshot comparison in `packages/flowproof/src/worktree/session.ts`
 - [X] T039 [P] [US1] Build the sanitized evidence manifest and one-file source prompt with no commands, oracle values, or tool definitions in `packages/flowproof/src/model/prompt.ts`
