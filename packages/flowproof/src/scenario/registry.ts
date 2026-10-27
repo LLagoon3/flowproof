@@ -25,6 +25,13 @@ export const SCENARIO_REGISTRY: readonly RegisteredScenario[] = Object.freeze([
     scenario_path: 'scenarios/canvas-filter/hero.json',
     build_command: DEMO_BUILD_COMMAND,
   } satisfies RegisteredScenario),
+  Object.freeze({
+    scenario_id: 'canvas-filter-failure-invalid-citation',
+    case: 'failure-invalid-citation',
+    title: 'Reject an unverified fix (injected invalid citation)',
+    scenario_path: 'scenarios/canvas-filter/failure-invalid-citation.json',
+    build_command: DEMO_BUILD_COMMAND,
+  } satisfies RegisteredScenario),
 ])
 
 /** Resolves an exact registered identifier; anything else, including non-strings, is null. */

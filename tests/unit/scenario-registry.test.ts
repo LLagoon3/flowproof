@@ -4,13 +4,20 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { parseScenario } from '../../packages/flowproof/src/contracts/index.js'
+import { EVIDENCE_TYPES, parseDiagnosis, parseScenario } from '../../packages/flowproof/src/contracts/index.js'
+import type { Diagnosis } from '../../packages/flowproof/src/contracts/index.js'
 import { ScenarioLoadError, loadScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
 import { SCENARIO_REGISTRY, findRegisteredScenario } from '../../packages/flowproof/src/scenario/registry.js'
+import { loadRecordedHeroResponse } from '../support/recordedTransport.js'
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const HERO_ID = 'canvas-filter-hero'
 const HERO_PATH = 'scenarios/canvas-filter/hero.json'
+const FAILURE_ID = 'canvas-filter-failure-invalid-citation'
+const FAILURE_PATH = 'scenarios/canvas-filter/failure-invalid-citation.json'
+const FIXTURE_PATH = 'scenarios/canvas-filter/provider-fixtures/invalid-citation.json'
+const FAULT_LABEL = 'Injected evaluation fixture: nonexistent Evidence ID'
+const NONEXISTENT_ID = 'ev_failure_chart_999'
 const DATASET_PATH = 'scenarios/canvas-filter/expected/filtered-data.json'
 const CHART_PATH = 'scenarios/canvas-filter/expected/chart-series.json'
 const SOURCE_PATH = 'apps/demo-chart/src/filterData.ts'
@@ -124,6 +131,45 @@ describe('committed scenario registry', () => {
     expect(parsed.value.provider).toEqual({ mode: 'meta', fixture_path: null, injected_fault_label: null })
     expect(parsed.value.timeouts.model_ms).toBe(90_000)
     expect(parsed.value.permitted_source_paths).toEqual([SOURCE_PATH])
+  })
+
+  it('commits the Failure case on the Hero app, actions, oracles, and source with a labeled fixture provider', async () => {
+    const hero = parseScenario(JSON.parse(await committed(HERO_PATH)))
+    const failure = parseScenario(JSON.parse(await committed(FAILURE_PATH)))
+
+    expect(findRegisteredScenario(FAILURE_ID)).toMatchObject({ case: 'failure-invalid-citation', scenario_path: FAILURE_PATH })
+    expect(hero.ok && failure.ok).toBe(true)
+    if (!hero.ok || !failure.ok) return
+    const { scenario_id: failureId, case: failureCase, provider, ...failureShared } = failure.value
+    const { scenario_id: heroId, case: heroCase, provider: heroProvider, ...heroShared } = hero.value
+    expect([failureId, failureCase, heroId, heroCase, heroProvider.mode]).toEqual([FAILURE_ID, 'failure-invalid-citation', HERO_ID, 'hero', 'meta'])
+    expect(failureShared).toEqual(heroShared)
+    expect(provider).toEqual({ mode: 'fixture', fixture_path: FIXTURE_PATH, injected_fault_label: FAULT_LABEL })
+  })
+
+  it('loads the committed Failure case with its fixture outside the permitted source boundary', async () => {
+    const loaded = await loadScenario(FAILURE_ID, { repoRoot: REPO_ROOT })
+    const { resolved } = loaded
+
+    expect(loaded.scenarioPath).toBe(FAILURE_PATH)
+    expect(resolved.fixturePath).toBe(path.join(resolved.repoRoot, FIXTURE_PATH))
+    expect(resolved.permittedSourcePaths).toEqual([path.join(resolved.repoRoot, SOURCE_PATH)])
+    expect(loaded.actionsFor('failure')).toEqual((await loadScenario(HERO_ID, { repoRoot: REPO_ROOT })).actionsFor('failure'))
+  })
+
+  it('commits a labeled, contract-valid fixture whose only fault is one nonexistent failure Evidence ID', async () => {
+    const fixture = parseDiagnosis(JSON.parse(await committed(FIXTURE_PATH)))
+
+    expect(fixture.ok).toBe(true)
+    if (!fixture.ok) return
+    expect(fixture.value.summary).toMatch(/^INJECTED EVALUATION FIXTURE \(synthetic; not a Meta Model API response\)/)
+    // A failure capture issues exactly one Evidence ID of each type, with ordinal 001.
+    const issued = new Set(EVIDENCE_TYPES.map((type) => `ev_failure_${type}_001`))
+    const cited = [...fixture.value.claims.flatMap((claim) => claim.evidence_ids), ...fixture.value.candidate.evidence_ids]
+    expect(cited.filter((id) => !issued.has(id))).toEqual([NONEXISTENT_ID])
+    // The candidate is the in-scope recorded fix, so the citation is the only injected fault.
+    expect(fixture.value.candidate.target_paths).toEqual([SOURCE_PATH])
+    expect(fixture.value.candidate.unified_diff).toBe((loadRecordedHeroResponse() as Diagnosis).candidate.unified_diff)
   })
 })
 
