@@ -1,11 +1,15 @@
 import { parseScenario } from '../contracts/index.js'
 import type { Scenario } from '../contracts/index.js'
+import { committedProviderFixture } from '../scenario/loadScenario.js'
+import type { CommittedProviderFixture } from '../scenario/loadScenario.js'
 import { createMetaTransport } from './metaClient.js'
 import type { DiagnosisPrompt } from './prompt.js'
 
 // The model transport seam. Ordinary selection resolves the committed Hero scenario to the live
 // Meta transport, which receives the process environment and reads only `MODEL_API_KEY` from it
-// when a diagnosis starts. A test transport is accepted only as an in-process object that the
+// when a diagnosis starts, and the committed Failure scenario to the labeled fixture transport,
+// which replays the evaluation fixture `loadScenario` read for it without a network request or a
+// credential. A test transport is accepted only as an in-process object that the
 // `startStudio({ testTransport })` entry hands over: no environment variable influences selection,
 // and a scenario file, CLI argument, or Studio API body can carry only data, never transport functions.
 
@@ -21,7 +25,7 @@ export interface DiagnoseOptions {
 }
 
 export interface ModelTransport {
-  /** The model this transport speaks to; null for an in-process test transport. */
+  /** The model this transport speaks to; null for the fixture or an in-process test transport. */
   readonly model: string | null
   /** Checks credentials against the explicit environment it is given; never reads `process.env`. */
   checkReadiness(env: Readonly<Record<string, string | undefined>>): TransportReadiness
@@ -79,6 +83,21 @@ export function checkMetaReadiness(env: Readonly<Record<string, string | undefin
   return typeof value === 'string' && value.trim() !== '' ? READY : CREDENTIAL_MISSING
 }
 
+/**
+ * Replays the committed evaluation fixture as untrusted output: a fresh copy per call, so the
+ * engine can never change the fixture, with no network request and no credential.
+ */
+function createFixtureTransport(fixture: CommittedProviderFixture): ModelTransport {
+  return Object.freeze({
+    model: null,
+    checkReadiness: (): TransportReadiness => READY,
+    async diagnose(_prompt: DiagnosisPrompt, options: DiagnoseOptions): Promise<unknown> {
+      if (options.signal.aborted) throw new ModelTransportError('PROVIDER_ABORTED', 'The diagnosis request was cancelled.')
+      return structuredClone(fixture.output)
+    },
+  })
+}
+
 export interface SelectTransportOptions {
   /** Passed only by the in-process `startStudio({ testTransport })` entry. */
   readonly testTransport?: ModelTransport | undefined
@@ -117,7 +136,9 @@ function readOverride(options: unknown): ModelTransport | undefined {
 
 /**
  * Resolves the transport for a contract-valid scenario. Hero (`provider.mode=meta`) resolves to
- * the live Meta transport unless the in-process test entry supplies a transport object.
+ * the live Meta transport unless the in-process test entry supplies a transport object. A
+ * `provider.mode=fixture` case resolves to its committed fixture, available only for a scenario
+ * returned by `loadScenario`, and never accepts a test transport.
  */
 export function selectTransport(scenario: Scenario, options?: SelectTransportOptions): ModelTransport {
   const parsed = parseScenario(scenario)
@@ -127,6 +148,9 @@ export function selectTransport(scenario: Scenario, options?: SelectTransportOpt
   if (override !== undefined) {
     throw new TransportSelectionError('TRANSPORT_OVERRIDE_INVALID', 'A test transport substitutes only the live Meta transport.')
   }
-  // T058 adds the labeled fixture transport for the Failure case.
-  throw new TransportSelectionError('TRANSPORT_PROVIDER_UNAVAILABLE', 'The fixture provider transport is not available in this build.')
+  const fixture = committedProviderFixture(scenario)
+  if (fixture === null) {
+    throw new TransportSelectionError('TRANSPORT_PROVIDER_UNAVAILABLE', 'The fixture provider needs a scenario loaded from the committed registry.')
+  }
+  return createFixtureTransport(fixture)
 }

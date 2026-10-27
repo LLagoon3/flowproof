@@ -28,6 +28,7 @@ export type ScenarioLoadErrorCode =
   | 'SCENARIO_REGISTRY_MISMATCH'
   | 'SCENARIO_COMMAND_NOT_ALLOWED'
   | 'ORACLE_INVALID'
+  | 'PROVIDER_FIXTURE_INVALID'
 
 /** A load failure with a stable code; messages and issues never echo committed values. */
 export class ScenarioLoadError extends Error {
@@ -72,7 +73,23 @@ export interface LoadedScenario {
   actionsFor(phase: EvidencePhase): readonly ScenarioAction[]
 }
 
+/** The committed evaluation fixture of a `provider.mode=fixture` case, as `loadScenario` read it. */
+export interface CommittedProviderFixture {
+  /** The fixture JSON, deeply frozen; untrusted model output until the candidate guards pass. */
+  readonly output: unknown
+}
+
 const MAX_COMMITTED_JSON_BYTES = 256 * 1024
+
+// Keyed by the frozen scenario object `loadScenario` returned, so only a scenario loaded from the
+// committed registry carries a fixture: a deserialized or forged copy names a fixture path as data
+// but can never make the fixture transport read a file.
+const committedFixtures = new WeakMap<object, CommittedProviderFixture>()
+
+/** The provider fixture `loadScenario` read for exactly this returned scenario object, or null. */
+export function committedProviderFixture(scenario: unknown): CommittedProviderFixture | null {
+  return typeof scenario === 'object' && scenario !== null ? (committedFixtures.get(scenario) ?? null) : null
+}
 
 function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
@@ -107,7 +124,7 @@ async function resolveInside(repoRoot: string, relative: string, kind: 'file' | 
 
 async function readCommittedJson(
   file: string,
-  failure: 'SCENARIO_JSON_INVALID' | 'ORACLE_INVALID',
+  failure: 'SCENARIO_JSON_INVALID' | 'ORACLE_INVALID' | 'PROVIDER_FIXTURE_INVALID',
 ): Promise<{ json: unknown; sha256: string }> {
   const bytes = await readFile(file)
   if (bytes.length > MAX_COMMITTED_JSON_BYTES) throw new ScenarioLoadError(failure, 'A committed JSON file is too large.')
@@ -137,7 +154,8 @@ function assertOptions(options: unknown): string {
 /**
  * Loads one committed scenario by its registered identifier. Every path is resolved from the
  * committed file inside the repository, the build command must equal the registered command,
- * and the scenario, oracles, and actions are returned deeply frozen.
+ * and the scenario, oracles, and actions are returned deeply frozen. A fixture-provider case also
+ * reads its committed fixture, which `committedProviderFixture` then yields for that scenario only.
  */
 export async function loadScenario(scenarioId: string, options: LoadScenarioOptions): Promise<LoadedScenario> {
   const requestedRoot = assertOptions(options)
@@ -201,8 +219,11 @@ export async function loadScenario(scenarioId: string, options: LoadScenarioOpti
   const chartFile = await readCommittedJson(chartPath, 'ORACLE_INVALID')
   const chart = parseChartSeries(chartFile.json)
   if (!chart.ok) throw new ScenarioLoadError('ORACLE_INVALID', 'The chart-series oracle is malformed.', chart.error.issues)
+  // Only JSON is required here: the fixture stays untrusted output for the run's guards to judge.
+  const fixtureFile = fixturePath === null ? null : await readCommittedJson(fixturePath, 'PROVIDER_FIXTURE_INVALID')
 
   const frozenScenario = deepFreeze(scenario)
+  if (fixtureFile !== null) committedFixtures.set(frozenScenario, Object.freeze({ output: deepFreeze(fixtureFile.json) }))
   return Object.freeze({
     scenario: frozenScenario,
     title: entry.title,

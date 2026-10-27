@@ -45,7 +45,8 @@ import type { WorktreeIntegrityReport } from './worktree/session.js'
 // `result.json`. A stage failure, rejection, or timeout finalizes directly as `Unverified` with
 // its gate failed or unevaluable and every later gate unevaluable. Cleanup runs exactly once on
 // every exit, and the run's own gate, event, and error text never echoes stage errors, prompts,
-// model output, or diffs.
+// model output, or diffs. When a committed evaluation fixture stands in for the model, the run
+// labels that injected fault in its activity as well as in the result's provider.
 
 export interface DiagnosisExchange {
   /** The sanitized prompt actually sent; part of the whole-run secret scan. */
@@ -128,6 +129,9 @@ const PHASE_MESSAGES: Readonly<Record<Exclude<RunState, 'initialized' | 'finaliz
   applying: 'Applying the candidate in the isolated worktree and rebuilding the app.',
   replaying: 'Replaying the same scenario against the patched app.',
 }
+
+const FIXTURE_DIAGNOSING = 'Reading the labeled injected evaluation fixture in place of a model diagnosis and checking its candidate.'
+const REJECTED_BEFORE_APPLY = 'The candidate was rejected before patch application, so nothing was applied or replayed.'
 
 const STAGE_FAILURE_MESSAGES = {
   FAILURE_CAPTURE_FAILED: 'The failure capture did not complete, so reproduction could not be evaluated.',
@@ -362,7 +366,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
 
   const runId = request.run_id
   const scenarioId = scenario.scenario.scenario_id
-  const { timeouts } = scenario.scenario
+  const { timeouts, provider } = scenario.scenario
+  /** The injected-fault label when a committed evaluation fixture answers instead of the model. */
+  const injectedFault = provider.mode === 'fixture' ? provider.injected_fault_label : null
   const gates = new Map<GateId, GateOutcome>()
   const published = new Map<GateId, string>()
   const announcedIds = new Set<string>()
@@ -389,7 +395,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
   const enter = (next: Exclude<RunState, 'initialized'>): void => {
     if (!isLegalRunTransition(state, next)) throw new RunError('RUN_TRANSITION_ILLEGAL', 'The run attempted an illegal state transition.')
     state = next
-    if (next !== 'finalized') emit({ type: 'phase_started', message: PHASE_MESSAGES[next] })
+    if (next === 'finalized') return
+    emit({ type: 'phase_started', message: next === 'diagnosing' && injectedFault !== null ? FIXTURE_DIAGNOSING : PHASE_MESSAGES[next] })
   }
 
   const record = (outcome: GateOutcome): void => {
@@ -469,6 +476,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
   /** `diagnosing` → `candidate_validated`; returns the candidate only when both guards pass and its diff is persisted. */
   const diagnose = async (failure: CapturedPhase): Promise<ValidatedCandidate | null> => {
     enter('diagnosing')
+    if (injectedFault !== null) {
+      emit({
+        type: 'agent_message',
+        message: `The diagnosis comes from a committed evaluation fixture, not from Meta Model API. Injected fault label: ${injectedFault}`,
+      })
+    }
     const mark = now()
     try {
       const exchanged = await stage(windowOf(timeouts.model_ms), (context) => ports.diagnose(context, failure))
@@ -492,13 +505,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<RunResult>
       if (diagnosis.ok) {
         store.register('diagnosis', await store.writeJson(DIAGNOSIS_PATH, diagnosis.value))
         paths.diagnosis = DIAGNOSIS_PATH
-        emit({ type: 'diagnosis_ready', message: 'Received a strict-schema diagnosis.', artifact_refs: [DIAGNOSIS_PATH] })
+        const message = injectedFault === null ? 'Received a strict-schema diagnosis.' : 'Received a strict-schema diagnosis from the injected evaluation fixture.'
+        emit({ type: 'diagnosis_ready', message, artifact_refs: [DIAGNOSIS_PATH] })
       }
       const citations = guardGate('citations_valid', validation.citations)
       const scope = guardGate('patch_scope_valid', validation.scope)
       record(citations)
       record(scope)
-      if (citations.status !== 'pass' || scope.status !== 'pass') return null
+      if (citations.status !== 'pass' || scope.status !== 'pass') {
+        emit({ type: 'agent_message', message: REJECTED_BEFORE_APPLY })
+        return null
+      }
       const candidate = paths.diagnosis === null ? null : usableCandidate(validation.candidate, scenario.scenario.permitted_source_paths)
       if (candidate === null) {
         record(

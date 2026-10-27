@@ -134,6 +134,20 @@ describe('fixture provider selection', () => {
       expect(selectionError(() => selectTransport(copy)).code).toBe('TRANSPORT_PROVIDER_UNAVAILABLE')
     }
   })
+
+  it('refuses to load the Failure case when its committed fixture is not JSON', async () => {
+    const root = await createTempDirectory('flowproof-failure-fixture-')
+    cleanups.push(root.remove)
+    const { scenario } = FAILURE
+    for (const relative of [FAILURE.scenarioPath, scenario.oracle.dataset_path, scenario.oracle.chart_path, SOURCE]) {
+      await mkdir(path.dirname(path.join(root.path, relative)), { recursive: true })
+      await writeFile(path.join(root.path, relative), await readFile(path.join(REPO_ROOT, relative)))
+    }
+    await mkdir(path.dirname(path.join(root.path, FIXTURE_PATH)), { recursive: true })
+    await writeFile(path.join(root.path, FIXTURE_PATH), `{ "summary": ${JSON.stringify(COMMITTED_FIXTURE.summary)}`)
+
+    await expect(loadScenario(FAILURE_ID, { repoRoot: root.path })).rejects.toMatchObject({ code: 'PROVIDER_FIXTURE_INVALID' })
+  })
 })
 
 // ---------------------------------------------------------------------------------------
