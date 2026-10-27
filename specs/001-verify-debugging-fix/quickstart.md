@@ -49,8 +49,9 @@ Expected outcome:
 - Invalid Evidence IDs and unsafe patches are rejected.
 - Only an all-pass gate set reduces to `Verified Fix`.
 - Worktree tests leave the original tracked-file status, index, checked-out branch, `HEAD`, Git
-  history, and protected file hashes unchanged. Ignored sanitized files under `.flowproof/runs/`
-  are the only permitted additions beneath the original repository root.
+  history, protected file hashes, and complete registered-worktree list unchanged. Ignored
+  sanitized files under `.flowproof/runs/` are the only persistent additions beneath the original
+  working tree; pre-existing unrelated worktrees remain registered.
 
 ## Open the Studio for the deterministic Failure case
 
@@ -119,15 +120,17 @@ pnpm test:e2e
 ```
 
 The deterministic suite covers the Studio, target frame, browser-close cleanup, and provider
-fixtures. Its Hero path feeds a recorded schema-valid response through a test-only provider
-transport and does not call Meta; the committed Hero scenario remains configured for the live Meta
-provider. Run the credential-gated protocol smoke separately:
+fixtures. Its Hero path feeds a recorded schema-valid response only through the in-process
+`startStudio({ testTransport })` test entry and does not call Meta; no CLI flag, environment
+variable, scenario field, or API body can select that transport, and the committed Hero scenario
+remains configured for the live Meta provider. Run the credential-gated protocol smoke separately:
 
 ```bash
 pnpm test:meta-smoke
 ```
 
-The live smoke must not persist prompts, raw model output, or credentials. It records only sanitized
+Without `MODEL_API_KEY`, the live smoke prints a visible skip result and exits successfully. With a
+key, it must not persist prompts, raw model output, or credentials. It records only sanitized
 status, model ID, token usage, latency, schema-parse outcome, and citation-validation outcome.
 
 ## Failure expectations

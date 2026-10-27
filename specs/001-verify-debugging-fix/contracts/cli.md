@@ -12,9 +12,10 @@ launch cookie into a pinned headed Chromium context, and opens the split-view wo
 execution and candidate builds occur in a detached worktree. Without `--scenario`, the Studio
 presents the two committed demo cases for selection.
 
-The root `pnpm flowproof` script uses Node.js 24 `--env-file-if-exists=.env`, so an ignored local
-`.env` supplies `MODEL_API_KEY` without adding an environment-loader dependency. An already exported
-process value takes precedence according to Node's environment-file behavior.
+The root `pnpm flowproof` script compiles the engine with `tsc` and executes
+`node --env-file-if-exists=.env packages/flowproof/dist/cli.js`, so an ignored local `.env` supplies
+`MODEL_API_KEY` without adding an environment-loader dependency. An already exported process value
+takes precedence according to Node's environment-file behavior.
 
 The Studio accepts one bounded natural-language run-start request through chat. Neither the CLI nor
 chat accepts source paths, expected values, commands, gate definitions, or patch instructions.
@@ -25,6 +26,9 @@ chat accepts source paths, expected values, commands, gate definitions, or patch
 - The repository has a `HEAD` commit and no tracked working-tree changes.
 - The scenario, oracle, provider fixture, and permitted source files resolve inside the repository.
 - Hero mode can read `MODEL_API_KEY` from the process environment or ignored local `.env` file.
+  With `--scenario canvas-filter-hero`, this is a startup precondition. Without `--scenario`, the
+  Studio may launch without a key; the key is checked only if the developer later starts Hero, and
+  that request fails with `PROVIDER_CREDENTIAL_MISSING` before a run is created.
 - The default artifact root `.flowproof/runs` is ignored by Git and is not a symlink outside the
   repository.
 - The Studio can bind an ephemeral `127.0.0.1` port, the demo app can bind its committed fixed
@@ -90,9 +94,17 @@ of the MVP contract.
 
 - Generated Studio and initial preview assets are written only to operating-system temporary
   output. Run execution, dependency linking, patch checks, patch application, and replay occur in
-  an operating-system temporary detached Git worktree.
+  an operating-system temporary detached Git worktree. The committed `app.start_command` builds
+  the app inside that worktree; a FlowProof-owned fixed-port static server binds once and swaps its
+  document root between preview, known-bad, and patched builds.
 - The Studio service binds only to `127.0.0.1`; the prepared demo app binds only to `localhost`.
-- The command never commits, changes branches, pushes, opens a pull request, or edits tracked files
-  or Git state. Sanitized ignored files under `.flowproof/runs/` are the only repository-root write.
+- The command never commits, changes branches, pushes, opens a pull request, or edits tracked
+  files, the index, refs, `HEAD`, or history. Sanitized ignored files under `.flowproof/runs/` are
+  the only persistent additions beneath the original working tree. Before worktree creation it
+  resolves `git rev-parse --git-common-dir` and snapshots the complete
+  `git worktree list --porcelain` output. Every finalization path removes and prunes only the
+  FlowProof-owned entry, then requires the full registered-worktree snapshot to match so unrelated
+  pre-existing worktrees remain untouched.
 - Closing the Studio during an active run or interrupting the process forces `Unverified`, flushes a
-  contract-valid stage-aware result when possible, and removes the temporary worktree.
+  contract-valid stage-aware result when possible, runs `git worktree remove --force` followed by
+  `git worktree prune` for the temporary worktree, and verifies the pre-run worktree-list snapshot.

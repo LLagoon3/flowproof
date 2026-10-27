@@ -51,7 +51,7 @@ Represents the trusted, committed inputs loaded before a run.
 | `default_request` | string | Synthetic chat goal prefilled in the Studio. |
 | `app.root` | repo-relative path | Must resolve inside the repository. |
 | `app.url` | URL | Fixed `localhost` HTTP URL for the MVP demo server. |
-| `app.start_command` | string array | Committed command tokens; never model-generated. |
+| `app.start_command` | string array | Committed worktree build command tokens; never model-generated and never responsible for the fixed-port HTTP server. |
 | `app.viewport` | object | Fixed width and height with device scale factor `1`. |
 | `app.canvas` | object | Fixed Canvas width and height used for both phases. |
 | `actions` | array | Ordered Playwright actions reused for failure and replay. |
@@ -84,9 +84,10 @@ Owns lifecycle state, artifact paths, timing, and the final result.
 | `started_at` / `completed_at` | ISO 8601 | UTC timestamps. |
 | `original_head` | Git object ID | Captured before any worktree operation. |
 | `original_status_digest` | SHA-256 | Digest of normalized initial status. |
+| `original_worktree_list_digest` | SHA-256 | Digest of the complete pre-run `git worktree list --porcelain` snapshot. |
 | `state` | enum | Lifecycle state below. |
 | `phase_durations_ms` | object | Capture, model, apply, replay, and finalization durations. |
-| `artifact_root` | repo-relative path | `.flowproof/runs/<run-id>/`; only ignored repo-root write. |
+| `artifact_root` | repo-relative path | `.flowproof/runs/<run-id>/`; only persistent addition beneath the original working tree. |
 | `result` | Verification Result | Present only after finalization. |
 
 ### State transitions

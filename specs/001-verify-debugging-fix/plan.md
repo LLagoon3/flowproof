@@ -12,19 +12,23 @@ the visible target frame with Playwright, asks Meta Model API `muse-spark-1.3` f
 schema-constrained diagnosis and diff, applies the validated diff in a detached Git worktree, and
 replays the same scenario. The CLI only launches the Studio; the active workspace renders the Proof
 Trail from local contract-valid artifacts. The engine never changes tracked files, the index, the
-checked-out branch, `HEAD`, or Git history in the original repository. The only write under that
-repository root is the ignored sanitized run-artifact directory.
+checked-out branch, `HEAD`, or Git history in the original repository. The only persistent write
+beneath that working tree is the ignored sanitized run-artifact directory; detached-worktree Git
+metadata is transient, scoped to the resolved Git common directory, and removed before
+finalization.
 
 ## Technical Context
 
-**Language/Version**: Node.js 24 LTS, TypeScript 7.0
+**Language/Version**: Node.js 24 LTS, TypeScript 7.0 compiled with `tsc` to `dist/`; the root
+launcher runs `node --env-file-if-exists=.env packages/flowproof/dist/cli.js`
 
 **Primary Dependencies**: pnpm 10 workspace, React 19, Vite 8, Commander 15, Zod 4, OpenAI
 JavaScript SDK 7, Playwright 1.64, Chart.js 4
 
 **Storage**: Local sanitized run artifacts under ignored `.flowproof/runs/<run-id>/`; generated
 Studio preview assets and detached Git worktrees under operating-system temporary directories; no
-database or cloud storage
+database or cloud storage; transient worktree administrative metadata only under the path resolved
+by `git rev-parse --git-common-dir`
 
 **Testing**: Vitest 5 for unit and contract tests; Playwright for Studio, browser capture, and
 deterministic Hero/Failure end-to-end scenarios using recorded provider transport; committed JSON
@@ -47,7 +51,8 @@ model call per normal run; loopback-only local service; fixed framed target; cha
 scenario, oracles, source boundary, or gates; fail closed on missing evidence, invalid citations,
 unsafe patches, API failures, or unevaluable gates; the prepared tracked working tree must be clean;
 tracked files, Git index, checked-out branch, HEAD, and history must remain unchanged; ignored
-sanitized run artifacts are the only permitted repository-root additions
+sanitized run artifacts are the only persistent working-tree additions; the registered-worktree
+list must equal its pre-run snapshot after FlowProof removes and prunes its own temporary entry
 
 **Scale/Scope**: One Hero case and one deterministic Failure fixture derived from the same defect;
 one local Studio process, one browser context, one target iframe, one temporary worktree, and one
@@ -82,7 +87,8 @@ run-scoped artifact bundle
 ### III. Risk-Based Verification — PASS
 
 - Test-driven implementation is required for the high-risk sanitizer, Evidence ID validator, patch
-  guard, gate reducer, and original-worktree integrity check.
+  guard, gate reducer, run state machine, launch preconditions, lifecycle finalization, and
+  original-worktree integrity check.
 - Contract tests validate every JSON artifact and the model response before use.
 - Studio event tests prove that connected-run activity is ordered and sanitized.
 - End-to-end tests prove both the `Verified Fix` Hero path and a fail-closed `Unverified` path.
@@ -120,7 +126,8 @@ complexity justification is required.
 2. Accept a sanitized chat request, bind it to the selected committed scenario, create the run, and
    emit the first ordered activity event.
 3. Load and validate the immutable oracle and permitted source boundary. Require a clean tracked
-   working tree and record the original HEAD, status, and protected hashes.
+   working tree and record the original HEAD, status, index, protected hashes, resolved Git common
+   directory, and complete `git worktree list --porcelain` snapshot.
 4. Create a detached temporary Git worktree, start the known-bad app, frame it in the left pane, and
    drive that exact frame with Playwright to reproduce the failure visibly.
 5. Capture actions, data, rendered chart labels and values, Canvas screenshot, console entries,
@@ -146,9 +153,14 @@ complexity justification is required.
   Run execution and candidate builds occur in the detached worktree. There is no headless CLI in
   the MVP.
 - One Node.js built-in HTTP server serves the compiled Studio assets, JSON API, and live SSE stream
-  from `127.0.0.1`. A separate fixed-port static server exposes the built demo app on `localhost`.
+  from `127.0.0.1`. One FlowProof-owned fixed-port static server exposes the built demo app on
+  `localhost`; it binds once per Studio session and swaps its document root from initial preview to
+  known-bad worktree build to patched worktree build before Playwright reconnects the iframe and
+  waits for the trusted probe.
 - The Studio resolves a selected scenario ID through a committed registry. The browser never
   supplies a scenario file path, command, oracle path, or source allowlist.
+- `app.start_command` is a committed build command executed inside the detached worktree. It never
+  starts or owns the demo HTTP server; the FlowProof target-app lifecycle owns that fixed port.
 - The Studio page owns the right agent pane and one target iframe. Playwright controls the iframe in
   the same browser page, so the visible target is the authoritative failure and replay surface.
 - Chat supplies a sanitized goal to the diagnosis prompt but cannot select commands, paths, or
@@ -180,12 +192,22 @@ complexity justification is required.
   agentic work, supports strict structured output, and does not use submitted content for training.
 - Use one stateless Responses API call with `store: false`; do not use server-managed history,
   search grounding, model-selected tools, or model-selected shell commands.
-- Make exactly one HTTP attempt for that call. Timeout, 429, 5xx, and other provider failures finish
-  as `Unverified`; the MVP does not retry automatically.
+- Make exactly one HTTP attempt for that call with SDK `maxRetries: 0` and
+  `scenario.timeouts.model_ms`. Timeout, 429, 5xx, and other provider failures finish as
+  `Unverified`; the MVP does not retry automatically.
 - The response contains a diagnosis, evidence-linked claims, and one unified diff. FlowProof
   performs all validation, application, replay, and final status computation deterministically.
 - A deterministic recorded provider fixture is permitted only in automated tests and the explicit
   Failure demonstration. The Hero demonstration must use the live Meta endpoint.
+- Automated Hero tests may inject a `ModelTransport` only through the in-process
+  `startStudio({ testTransport })` test entry. No CLI flag, environment variable, scenario field,
+  chat/API field, or production code path may select that transport; ordinary Hero resolution
+  always returns the live Meta adapter.
+- With `--scenario canvas-filter-hero`, credential readiness is checked before any app, browser,
+  worktree, artifact, or Git-metadata side effect and missing credentials exit with code `3`.
+  Without `--scenario`, the Studio may open without credentials; selecting Hero later performs the
+  same readiness check in `POST /api/runs`, returns `PROVIDER_CREDENTIAL_MISSING`, and creates no
+  run.
 
 ### Failure demonstration
 
@@ -203,9 +225,9 @@ fault to Meta Model API.
   Evidence IDs, and Evidence Bundle contract.
 - **FR-005, FR-006, SC-006**: strict diagnosis contract plus deterministic citation, target-path,
   and patch guards.
-- **FR-007, FR-013, SC-007**: clean baseline precondition, detached worktree execution, the single
-  ignored artifact-root exception, and original tracked-file/index/branch/HEAD/history integrity
-  gate.
+- **FR-007, FR-013, SC-007**: clean baseline precondition, detached worktree execution, the ignored
+  persistent artifact-root exception, transient FlowProof-owned Git administrative metadata, and
+  pre/post tracked-file/index/branch/HEAD/history/worktree-list integrity gate.
 - **FR-008, FR-009, FR-010, SC-004, SC-005**: exact action replay, independent dataset and Canvas
   gates, exact rendered label/value checks, nine-gate fail-closed reducer, and deterministic
   Failure fixture.
@@ -280,18 +302,27 @@ apps/
 
 packages/
 └── flowproof/
+    ├── package.json
+    ├── tsconfig.json
     └── src/
         ├── cli.ts
+        ├── run.ts
         ├── capture/
         ├── contracts/
         ├── evidence/
         ├── model/
+        │   ├── metaClient.ts
+        │   ├── prompt.ts
+        │   └── transport.ts
         ├── patch/
         ├── scenario/
         ├── studio/
+        │   ├── auth.ts
+        │   ├── errors.ts
         │   ├── events.ts
         │   ├── launch.ts
-        │   └── server.ts
+        │   ├── server.ts
+        │   └── targetApp.ts
         ├── verify/
         └── worktree/
 
@@ -308,7 +339,10 @@ scenarios/
 tests/
 ├── contract/
 ├── e2e/
+├── fixtures/
+│   └── provider/
 ├── integration/
+├── support/
 ├── ui/
 └── unit/
 ```
@@ -339,9 +373,11 @@ patch-producing model cannot change them through the permitted source boundary.
 - Capture a known-bad run from the trusted app and validate every required Evidence Bundle field,
   including the rendered chart labels and values from the trusted probe.
 - Parse a recorded schema-valid Meta response and a recorded invalid-citation fixture.
-- Create and remove a detached worktree, apply a known patch, and verify that the original worktree
-  tracked status, index, checked-out branch, HEAD, history, and protected file hashes do not change;
-  ignore the expected sanitized `.flowproof/runs/` addition.
+- Resolve the Git common directory, snapshot the complete registered-worktree list, create and
+  remove a detached worktree, apply a known patch, then run `git worktree remove --force` followed
+  by `git worktree prune`. Verify that the original tracked status, index, checked-out branch,
+  `HEAD`, history, protected file hashes, and registered-worktree list equal their pre-run snapshots;
+  ignore only the expected sanitized `.flowproof/runs/` addition and preserve unrelated worktrees.
 - Prove the fixed Canvas dimensions and chart-series probe remain outside the permitted patch path;
   retain failure and replay screenshots as evidence without using pixel thresholds.
 - Reject an unexpected `Host`, a foreign POST `Origin`, a non-same-origin fetch context, an invalid
@@ -375,9 +411,11 @@ patch-producing model cannot change them through the permitted source boundary.
 - **Unsafe model patch**: validate strict schema, citations, paths, patch grammar, size, and
   `git apply --check` before creating an application outcome.
 - **Original-tree mutation**: refuse a dirty tracked baseline, record tracked status, index,
-  checked-out branch, HEAD, history, and protected hashes before the run, and re-check after cleanup;
-  disregard only the expected ignored `.flowproof/runs/` addition. Any other mismatch forces
-  `Unverified` and a prominent integrity warning.
+  checked-out branch, HEAD, history, protected hashes, resolved Git common directory, and complete
+  registered-worktree list before the run. Remove and prune only the FlowProof-owned worktree and
+  compare every snapshot after cleanup, preserving unrelated worktrees; disregard only the
+  expected ignored `.flowproof/runs/` addition. Any other mismatch forces `Unverified` and a
+  prominent integrity warning.
 - **Sensitive-data leakage**: capture metadata by allowlist, sanitize before persistence or network
   transmission, and run seeded-marker scans over every emitted artifact.
 - **Local UI attack surface**: bind only to loopback, separate Studio and demo hosts, require the

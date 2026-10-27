@@ -7,6 +7,10 @@
 **Decision**: Build the Studio, local orchestration engine, launcher, and trusted demo fixture with
 Node.js 24 LTS, TypeScript 7.0, and pnpm 10.
 
+Compile the engine with `tsc` into `packages/flowproof/dist/` and execute the emitted CLI with
+`node --env-file-if-exists=.env packages/flowproof/dist/cli.js`. Do not depend on Node type
+stripping or a runtime TypeScript loader in the MVP.
+
 **Rationale**: The prepared host already has Node.js 24 and pnpm 10. Playwright, Vite, Chart.js,
 Meta's documented OpenAI-compatible SDK path, JSON Schema validation, patch processing, and Studio
 UI all fit one runtime. A single language reduces build and packaging work during the hackathon.
@@ -52,6 +56,10 @@ as static assets without writing generated files into the original repository. R
 dependency linking, known-bad capture, patching, and replay use the detached worktree. The MVP does
 not use Vite development servers or HMR, which would add unrelated network activity and mutable
 runtime state to the captured evidence.
+
+`app.start_command` is the committed build command run inside the detached worktree. A
+FlowProof-owned fixed-port static server binds once, swaps its document root across preview,
+known-bad, and patched builds, and reconnects the iframe only after the trusted probe is ready.
 
 **Rationale**: The user sees the same application instance that provides failure and replay
 evidence. The controlled fixture permits framing, and Playwright can address its frame without the
@@ -103,6 +111,12 @@ evidence-linked claims, target paths, and a unified diff.
 The MVP makes one HTTP attempt for this diagnosis operation. A timeout, 429, or 5xx response ends
 the run as `Unverified`; automatic retries are deferred so the one-call budget remains literal and
 the five-minute demonstration stays predictable.
+
+Automated Hero tests use a recorded response only through an in-process `ModelTransport` override
+passed to `startStudio`. CLI flags, environment variables, scenario data, chat/API bodies, and
+production transport selection cannot activate the test seam. When Hero is fixed by `--scenario`,
+credential readiness is a startup precondition; when the Studio opens with no fixed scenario, the
+same check occurs when Hero is selected and rejects the start request without creating a run.
 
 **Rationale**: One call minimizes latency and cost. Strict decoding guarantees the response shape,
 while FlowProof separately validates that every cited Evidence ID exists and every target path is
@@ -157,13 +171,16 @@ timezone, device scale, font set, and disabled animations keep the recorded evid
 
 ## Decision 8: Apply patches in a detached temporary Git worktree
 
-**Decision**: Create a detached worktree at the captured original HEAD, reject unsafe diffs, run
-`git apply --check`, apply only the permitted file, replay there, then remove the worktree.
+**Decision**: Resolve the Git common directory, snapshot the complete output of
+`git worktree list --porcelain`, create a detached worktree at the captured original `HEAD`, reject
+unsafe diffs, run `git apply --check`, apply only the permitted file, replay there, then run
+`git worktree remove --force` followed by `git worktree prune` for the FlowProof-owned entry.
 
 **Rationale**: Git supplies an exact tracked baseline and a verifiable diff while leaving the
 developer's tracked files, index, checked-out branch, HEAD, and history untouched. A detached
-worktree avoids creating a candidate branch or commit. The original HEAD, status, index, and
-protected hashes are compared before and after the run.
+worktree avoids creating a candidate branch or commit. The original `HEAD`, status, index,
+protected hashes, and full registered-worktree snapshot are compared before and after the run, so
+pre-existing unrelated worktrees are preserved rather than treated as errors.
 
 **Alternatives considered**:
 
@@ -177,9 +194,11 @@ protected hashes are compared before and after the run.
 **Decision**: Write artifacts under ignored `.flowproof/runs/<run-id>/` and delete the temporary
 worktree after retaining the verified diff, screenshots, evidence manifests, and gate outcomes.
 
-This ignored artifact root is the only permitted write inside the original repository. Generated
-Studio assets live in operating-system temporary output, and demo build, dependency-linking, patch,
-and replay writes remain inside the detached worktree.
+This ignored artifact root is the only permitted persistent addition beneath the original working
+tree. Generated Studio assets live in operating-system temporary output, and demo build,
+dependency-linking, patch, and replay writes remain inside the detached worktree. Git's transient
+administrative metadata for that worktree lives under the resolved common directory and is removed
+and pruned before finalization.
 
 **Rationale**: The active Studio renders the reviewable Proof Trail from contract-valid local
 artifacts. Local files avoid a database, account model, cloud retention policy, portable report

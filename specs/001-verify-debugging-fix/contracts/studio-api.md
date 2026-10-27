@@ -42,7 +42,14 @@ paths, or the source allowlist. The Studio uses this endpoint for its prepared-c
 
 The body contains only a committed scenario identifier and bounded natural-language goal. It does
 not accept paths, commands, expected values, oracle locations, gate definitions, model options, or
-patch instructions. The server resolves every execution boundary from the committed scenario.
+patch instructions. It also rejects provider or transport-selection fields. The server resolves
+every execution boundary from the committed scenario.
+
+If the selected committed case uses the live Meta provider and `MODEL_API_KEY` is unavailable, the
+server returns the standard error envelope with code `PROVIDER_CREDENTIAL_MISSING` before creating
+a run, artifact directory, worktree, target-app build, or model request. This deferred check applies
+when the Studio was launched without a fixed `--scenario`; a CLI-fixed Hero case performs the same
+check before Studio startup.
 
 Successful response: `202 Accepted`
 
