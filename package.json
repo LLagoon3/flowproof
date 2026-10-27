@@ -16,7 +16,7 @@
     "test:contract": "vitest run --project contract",
     "test:integration": "vitest run --project integration",
     "test:e2e": "playwright test",
-    "test:meta-smoke": "vitest run --project meta-smoke"
+    "test:meta-smoke": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --project meta-smoke --reporter=verbose"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

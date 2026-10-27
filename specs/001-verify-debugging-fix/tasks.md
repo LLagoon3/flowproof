@@ -126,7 +126,7 @@ a recorded response. It is an internal implementation checkpoint, not the live M
 - [X] T051 [US1] Implement the `muse-spark-1.3` Responses API adapter with strict schema, `store:false`, `maxRetries:0`, scenario timeout, one attempt, safe metrics, and ordinary Hero registration as the live transport in `packages/flowproof/src/model/metaClient.ts` and `packages/flowproof/src/model/transport.ts`
 - [X] T052 [US1] Implement the in-workspace Proof Trail with verified diff, failure and replay evidence, screenshots, gate outcomes, fixture provenance when present, and final status in `apps/studio/src/components/ProofTrail.tsx` and `apps/studio/src/App.tsx`
 - [X] T053 [US1] Complete deterministic Hero assertions for the full Proof Trail, visible replay, nine passing gates, phase budgets, `total_duration_ms < 300000`, no live Meta request, and restored original snapshots in `tests/e2e/hero.spec.ts`
-- [ ] T054 [US1] Add an opt-in adapter-level live Meta smoke that is excluded from default tests, visibly skips without `MODEL_API_KEY`, and records only model ID, tokens, latency, schema outcome, and citation outcome in `tests/integration/meta-smoke.test.ts` and the `test:meta-smoke` script in `package.json`
+- [X] T054 [US1] Add an opt-in adapter-level live Meta smoke that is excluded from default tests, visibly skips without `MODEL_API_KEY`, and records only model ID, tokens, latency, schema outcome, and citation outcome in `tests/integration/meta-smoke.test.ts` and the `test:meta-smoke` script in `package.json`
 
 **Checkpoint 3B**: User Story 1 is implementation-complete; the final credential-gated full live
 Hero run remains an explicit Quickstart verification gate.
