@@ -462,7 +462,9 @@ export async function createWorktreeSession(options: CreateWorktreeSessionOption
         resolve('failed')
         return
       }
-      const env: NodeJS.ProcessEnv = { NO_COLOR: '1' }
+      // pnpm's Node processes otherwise create `node-compile-cache` under TMPDIR, outside the
+      // owned worktree output. Disable it so disposing the session restores the temporary root.
+      const env: NodeJS.ProcessEnv = { NO_COLOR: '1', NODE_DISABLE_COMPILE_CACHE: '1' }
       for (const key of BUILD_ENVIRONMENT_KEYS) if (process.env[key] !== undefined) env[key] = process.env[key]
       // Its own process group, so a timeout or abort reaches every process the build started.
       const child = spawn(executable, args, { cwd: worktreePath, env, stdio: 'ignore', detached: true, shell: false })

@@ -8,7 +8,7 @@ import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario
 import type { LoadedScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
 import { loadPendingModule } from '../support/pendingModule.js'
 import { loadRecordedHeroResponse } from '../support/recordedTransport.js'
-import { createTempClone, createTempDirectory, git, gitStatus, snapshotRepository } from '../support/repoFixture.js'
+import { createTempClone, createTempDirectory, git, gitStatus, listTree, snapshotRepository } from '../support/repoFixture.js'
 import type { RepositorySnapshot } from '../support/repoFixture.js'
 
 // T027: the detached-worktree contract that T038 implements in
@@ -199,6 +199,30 @@ describe('detached worktree session', () => {
       // The original working tree receives no build output.
       expect(existsSync(path.join(fx.repo, fx.scenario.scenario.app.root, 'dist'))).toBe(false)
       expect(originalState(await snapshotRepository(fx.repo))).toEqual(originalState(before))
+    },
+    BUILD_TIMEOUT,
+  )
+
+  it(
+    'leaves no Node compile-cache residue in the temporary root after a build',
+    async () => {
+      const mod = await worktreeModule()
+      const fx = await fixture()
+      const privateTmp = await createTempDirectory('flowproof-build-tmp-')
+      cleanups.push(privateTmp.remove)
+      const savedTmp = process.env.TMPDIR
+      process.env.TMPDIR = privateTmp.path
+
+      try {
+        const session = await open(mod, fx)
+        await session.build()
+        await session.dispose()
+
+        expect(await listTree(privateTmp.path)).toEqual([])
+      } finally {
+        if (savedTmp === undefined) delete process.env.TMPDIR
+        else process.env.TMPDIR = savedTmp
+      }
     },
     BUILD_TIMEOUT,
   )
