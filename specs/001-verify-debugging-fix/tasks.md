@@ -166,7 +166,7 @@ adding another product surface.
 - [X] T064 Implement page/browser-close detection and interrupt handling with safe finalization, FlowProof-owned worktree remove/prune, snapshot comparison, and exit `2` in `packages/flowproof/src/studio/launch.ts`, `packages/flowproof/src/run.ts`, and `packages/flowproof/src/cli.ts`
 - [X] T065 Implement target-frame load-failure handling before model use in `packages/flowproof/src/run.ts` and `packages/flowproof/src/studio/targetApp.ts`
 - [X] T066 Add cleanup-residue integration coverage proving no FlowProof-owned temporary directory, server, browser, or Git common-directory worktree entry remains after success, provider failure, apply failure, browser close, target failure, or interrupt in `tests/integration/cleanup.test.ts`
-- [ ] T067 [P] Update the public MVP overview, setup, runtime build strategy, security and isolation boundary, Hero/Failure demo, and explicit non-goals in `README.md`
+- [X] T067 [P] Update the public MVP overview, setup, runtime build strategy, security and isolation boundary, Hero/Failure demo, and explicit non-goals in `README.md`
 - [ ] T068 Run all deterministic commands and correct documentation-only drift in `specs/001-verify-debugging-fix/quickstart.md`
 - [ ] T069 Run `pnpm test:meta-smoke` with and without credentials, verify the documented skip and sanitized live result, and correct only protocol-smoke drift in `specs/001-verify-debugging-fix/quickstart.md`
 - [ ] T070 Run the credential-gated full live Hero flow, verify one Meta request and `total_duration_ms < 300000`, compare every expected outcome, and correct only observed Quickstart drift in `specs/001-verify-debugging-fix/quickstart.md`
