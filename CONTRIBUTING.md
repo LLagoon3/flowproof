@@ -47,10 +47,44 @@ branch from the current `HEAD` before `speckit-specify` writes the specification
 A Plan must document Constitution compliance, justified complexity, verification,
 and known risks.
 
-Keep the Git extension's auto-commit hooks disabled. Commit each task or small group
-of related tasks yourself so every commit stays coherent and follows the commit
-message rules. The extension configuration lives in
-`.specify/extensions/git/git-config.yml`; change it only together with this guide.
+### Phase ownership and completion gates
+
+- **Specify and Clarify** are collaborative product-definition phases. The
+  contributor may prepare drafts, but the repository owner must agree to user
+  scenarios, scope, and measurable success criteria before the specification is
+  used for planning. Complete `checklists/requirements.md` and resolve every
+  `[NEEDS CLARIFICATION]` marker before planning begins.
+- **Plan** is a technical-design phase. The contributor researches and proposes the
+  architecture, dependencies, data model, contracts, verification approach, and
+  operational risks. Return to the repository owner when a decision changes product
+  scope, user experience, verification effort, storage, network access, or an
+  external service commitment.
+- **Tasks** derives small, independently verifiable work items from the approved
+  specification and Plan. It must not introduce new product behavior or completion
+  criteria.
+- **Analyze**, when run, is a read-only consistency check across requirements,
+  success criteria, the Plan, and tasks. Resolve any reported critical or
+  high-severity gaps and any Constitution violation before implementation.
+- **Implement** follows the approved task order, verifies each completed unit, and
+  marks only work with supporting evidence as complete. Keep automated checks and
+  any remaining human-only verification clearly separated.
+
+### Commit boundaries
+
+Keep the Git extension's auto-commit hooks disabled. Prefer one manual Conventional
+Commit per reviewable artifact set:
+
+1. `spec.md` and `checklists/requirements.md` after Specify and Clarify, if Clarify
+   is run;
+2. the complete Plan artifact set, such as `plan.md`, `research.md`,
+   `data-model.md`, `contracts/`, and `quickstart.md`;
+3. `tasks.md` after task validation;
+4. corrections resulting from Analyze; and
+5. each small implementation unit together with its tests or other verification.
+
+Do not commit only because a Spec Kit command finished; review the diff first. The
+extension configuration lives in `.specify/extensions/git/git-config.yml`; change
+it only together with this guide.
 
 `specify extension add` registers extension commands only for the default
 integration (`codex`). After adding or updating an extension, run
@@ -69,13 +103,25 @@ Do not work directly on, commit to, or push directly to `main`. Every change rea
    the branch manually for other changes. See [Branch names](#branch-names).
 3. Make focused commits that serve one coherent purpose.
 4. Run risk-appropriate validation and review the complete diff.
-5. Push the branch and open a pull request targeting `main`.
+5. Push the branch and open a pull request targeting `main` when the work is ready
+   for review, or use a Draft pull request when early feedback is useful.
 6. Address review feedback and ensure required checks pass.
 7. Merge the pull request with a merge commit, then delete the source branch.
 
-Use a Draft pull request when work is incomplete or early feedback is needed. Do not
-maintain a long-lived `develop` branch unless the repository workflow is explicitly
-changed.
+Publishing a branch and opening a pull request are not required after every Spec Kit
+phase or commit. Continue the lifecycle on the same feature branch unless the change
+is an unrelated concern that deserves its own branch.
+
+Open a Draft pull request after a validated phase when early review of the
+specification, Plan, or another incomplete artifact is useful. Keep subsequent phase
+commits on that branch and keep the pull request description current. A Draft pull
+request is not mergeable work.
+
+For a Spec Kit feature pull request, mark it ready for review only after the approved
+implementation scope is complete, any Analyze findings rated critical or high are
+resolved, and required checks pass. Document any remaining human-only verification
+in the pull request. Do not maintain a long-lived `develop` branch unless the
+repository workflow is explicitly changed.
 
 ## Change types
 
