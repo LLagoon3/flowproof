@@ -1,11 +1,13 @@
-import { META_MODEL_ID, parseScenario } from '../contracts/index.js'
+import { parseScenario } from '../contracts/index.js'
 import type { Scenario } from '../contracts/index.js'
+import { createMetaTransport } from './metaClient.js'
 import type { DiagnosisPrompt } from './prompt.js'
 
 // The model transport seam. Ordinary selection resolves the committed Hero scenario to the live
-// Meta transport. A test transport is accepted only as an in-process object that the
-// `startStudio({ testTransport })` entry hands over: selection never reads the environment, and a
-// scenario file, CLI argument, or Studio API body can carry only data, never transport functions.
+// Meta transport, which receives the process environment and reads only `MODEL_API_KEY` from it
+// when a diagnosis starts. A test transport is accepted only as an in-process object that the
+// `startStudio({ testTransport })` entry hands over: no environment variable influences selection,
+// and a scenario file, CLI argument, or Studio API body can carry only data, never transport functions.
 
 export const MODEL_API_KEY_ENV = 'MODEL_API_KEY'
 
@@ -43,7 +45,15 @@ export class TransportSelectionError extends Error {
   }
 }
 
-export type ModelTransportErrorCode = 'PROVIDER_ADAPTER_UNAVAILABLE'
+export type ModelTransportErrorCode =
+  | 'PROVIDER_CREDENTIAL_MISSING'
+  | 'PROVIDER_RATE_LIMITED'
+  | 'PROVIDER_SERVER_ERROR'
+  | 'PROVIDER_REQUEST_REJECTED'
+  | 'PROVIDER_CONNECTION_FAILED'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_ABORTED'
+  | 'PROVIDER_RESPONSE_INVALID'
 
 /** A fail-closed provider outcome; messages never carry prompts, payloads, or credentials. */
 export class ModelTransportError extends Error {
@@ -68,15 +78,6 @@ export function checkMetaReadiness(env: Readonly<Record<string, string | undefin
   const value: unknown = typeof env === 'object' && env !== null ? env[MODEL_API_KEY_ENV] : undefined
   return typeof value === 'string' && value.trim() !== '' ? READY : CREDENTIAL_MISSING
 }
-
-const META_TRANSPORT: ModelTransport = Object.freeze({
-  model: META_MODEL_ID,
-  checkReadiness: checkMetaReadiness,
-  async diagnose(): Promise<unknown> {
-    // T051 registers the Responses API adapter here. Until then the live call fails closed.
-    throw new ModelTransportError('PROVIDER_ADAPTER_UNAVAILABLE', 'The live Meta Responses API adapter is not available in this build.')
-  },
-})
 
 export interface SelectTransportOptions {
   /** Passed only by the in-process `startStudio({ testTransport })` entry. */
@@ -122,7 +123,7 @@ export function selectTransport(scenario: Scenario, options?: SelectTransportOpt
   const parsed = parseScenario(scenario)
   if (!parsed.ok) throw new TransportSelectionError('TRANSPORT_SCENARIO_INVALID', 'The scenario violates the scenario contract.')
   const override = readOverride(options)
-  if (parsed.value.provider.mode === 'meta') return override ?? META_TRANSPORT
+  if (parsed.value.provider.mode === 'meta') return override ?? createMetaTransport({ env: process.env })
   if (override !== undefined) {
     throw new TransportSelectionError('TRANSPORT_OVERRIDE_INVALID', 'A test transport substitutes only the live Meta transport.')
   }

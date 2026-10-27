@@ -11,8 +11,9 @@ import { createRecordedTransport } from '../support/recordedTransport.js'
 import { REPO_ROOT } from '../support/repoFixture.js'
 
 // T035 details beyond the provider seam: readiness reads only the explicit environment it is
-// given, the live Meta transport fails closed without any network request until T051 adds the
-// Responses API adapter, and selection accepts no option or override it does not recognize.
+// given, the live Meta transport that T051 registers fails closed without any network request
+// when the process environment holds no key, and selection accepts no option or override it does
+// not recognize.
 
 const HERO = (await loadScenario('canvas-filter-hero', { repoRoot: REPO_ROOT })).scenario
 const failureScenario = parseScenario(
@@ -55,13 +56,25 @@ describe('live Meta transport readiness', () => {
     }
   })
 
-  it('fails the diagnosis closed without a network request until the adapter exists', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
-    const live = selectTransport(HERO)
+  it('fails the diagnosis closed without a network request when the process environment holds no key', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Live network access is forbidden in unit tests.'))
+    // The developer's real key stays unreachable: it is answered as absent, never read or changed.
+    const realEnv = process.env
+    process.env = new Proxy(realEnv, {
+      get: (target, name) => (name === 'MODEL_API_KEY' ? undefined : Reflect.get(target, name)),
+      has: (target, name) => name !== 'MODEL_API_KEY' && Reflect.has(target, name),
+      getOwnPropertyDescriptor: (target, name) => (name === 'MODEL_API_KEY' ? undefined : Reflect.getOwnPropertyDescriptor(target, name)),
+      ownKeys: (target) => Reflect.ownKeys(target).filter((name) => name !== 'MODEL_API_KEY'),
+    })
+    try {
+      const live = selectTransport(HERO)
 
-    const attempt = live.diagnose(PROMPT, { signal: new AbortController().signal, timeoutMs: HERO.timeouts.model_ms })
-    await expect(attempt).rejects.toBeInstanceOf(ModelTransportError)
-    await expect(attempt).rejects.toMatchObject({ code: 'PROVIDER_ADAPTER_UNAVAILABLE' })
+      const attempt = live.diagnose(PROMPT, { signal: new AbortController().signal, timeoutMs: HERO.timeouts.model_ms })
+      await expect(attempt).rejects.toBeInstanceOf(ModelTransportError)
+      await expect(attempt).rejects.toMatchObject({ code: 'PROVIDER_CREDENTIAL_MISSING' })
+    } finally {
+      process.env = realEnv
+    }
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
