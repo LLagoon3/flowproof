@@ -170,7 +170,7 @@ adding another product surface.
 - [X] T068 Run all deterministic commands and correct documentation-only drift in `specs/001-verify-debugging-fix/quickstart.md`
 - [X] T069 Run `pnpm test:meta-smoke` with and without credentials, verify the documented skip and sanitized live result, and correct only protocol-smoke drift in `specs/001-verify-debugging-fix/quickstart.md`
 - [X] T070 Run the credential-gated full live Hero flow, verify one Meta request and `total_duration_ms < 300000`, compare every expected outcome, and correct only observed Quickstart drift in `specs/001-verify-debugging-fix/quickstart.md`
-- [ ] T071 Run `pnpm test`, `pnpm test:contract`, `pnpm test:integration`, `pnpm test:e2e`, `pnpm typecheck`, `pnpm build`, JSON Schema validation, `git diff --check`, requirement/task traceability, dependency-DAG validation, and a repository secret scan against `package.json` and `specs/001-verify-debugging-fix/tasks.md`
+- [X] T071 Run `pnpm test`, `pnpm test:contract`, `pnpm test:integration`, `pnpm test:e2e`, `pnpm typecheck`, `pnpm build`, JSON Schema validation, `git diff --check`, requirement/task traceability, dependency-DAG validation, and a repository secret scan against `package.json` and `specs/001-verify-debugging-fix/tasks.md`
 
 ---
 
