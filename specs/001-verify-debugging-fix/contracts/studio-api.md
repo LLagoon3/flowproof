@@ -115,7 +115,8 @@ provider payloads, request bodies, query strings, or rejected secret-bearing val
 
 An SSE disconnect alone does not change an active run. Closing the Studio page or browser removes
 the authoritative visible target, so the engine stops the run, marks the affected gate failed or
-unevaluable, finalizes it as `Unverified`, flushes contract-valid artifacts when possible, and
-removes the temporary worktree. An interrupt follows the same safe finalization sequence. A target
-frame load failure occurs before model use and finalizes safely with its failed or unevaluable
-gates.
+unevaluable, finalizes it as `Unverified`, writes only contract-valid artifacts for phases reached,
+and removes the temporary worktree. An interrupt follows the same safe finalization sequence. A
+target frame load failure occurs before model use, keeps `failure_screenshot_path` null, omits the
+failure Evidence Bundle, and finalizes safely with `failure_reproduced` and dependent gates marked
+failed or unevaluable.

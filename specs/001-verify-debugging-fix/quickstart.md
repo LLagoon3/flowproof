@@ -29,6 +29,10 @@ cp .env.example .env
 Set `MODEL_API_KEY` in `.env`. Never commit `.env` or paste the key into logs, reports, fixtures, or
 issues.
 
+The root `pnpm flowproof` script loads this ignored file with Node.js 24
+`--env-file-if-exists=.env`. An already exported environment variable takes precedence, so no
+additional environment-loader package is required.
+
 ## Validate contracts and deterministic logic
 
 ```bash
@@ -44,7 +48,9 @@ Expected outcome:
 - Sanitizer tests remove all seeded secret markers.
 - Invalid Evidence IDs and unsafe patches are rejected.
 - Only an all-pass gate set reduces to `Verified Fix`.
-- Worktree tests leave the original HEAD, status, and protected file hashes unchanged.
+- Worktree tests leave the original tracked-file status, index, checked-out branch, `HEAD`, Git
+  history, and protected file hashes unchanged. Ignored sanitized files under `.flowproof/runs/`
+  are the only permitted additions beneath the original repository root.
 
 ## Open the Studio for the deterministic Failure case
 
@@ -63,7 +69,8 @@ Expected outcome:
 - The nonexistent Evidence ID fails `citations_valid` before patch application.
 - The final status is `Unverified`; the failed gate and collected evidence remain visible in the
   right panel without leaving the Studio.
-- The original working copy and Git history are unchanged.
+- The original repository's tracked files, index, checked-out branch, `HEAD`, and Git history are
+  unchanged; only ignored sanitized run artifacts may be added.
 
 ## Open the Studio for the live Hero case
 
@@ -86,7 +93,8 @@ Expected outcome:
   failure and replay screenshots remain available as review evidence.
 - All nine required gates pass, the in-workspace Proof Trail shows `Verified Fix`, and total
   duration is below 300 seconds in the prepared environment.
-- The original working copy and Git history are unchanged.
+- The original repository's tracked files, index, checked-out branch, `HEAD`, and Git history are
+  unchanged; only ignored sanitized run artifacts may be added.
 
 ## Inspect the Proof Trail
 
@@ -94,10 +102,10 @@ Review the completed run directly in the right panel:
 
 1. reproduction actions and failure evidence;
 2. expected versus observed dataset;
-3. failure screenshot;
+3. failure screenshot, when failure capture completed;
 4. evidence-linked diagnosis;
 5. candidate diff and patch-guard outcome;
-6. replay screenshot;
+6. replay screenshot, when replay completed;
 7. every gate outcome; and
 8. final `Verified Fix` or `Unverified` status.
 
@@ -111,7 +119,9 @@ pnpm test:e2e
 ```
 
 The deterministic suite covers the Studio, target frame, browser-close cleanup, and provider
-fixtures. Run the credential-gated live smoke separately:
+fixtures. Its Hero path feeds a recorded schema-valid response through a test-only provider
+transport and does not call Meta; the committed Hero scenario remains configured for the live Meta
+provider. Run the credential-gated protocol smoke separately:
 
 ```bash
 pnpm test:meta-smoke
@@ -123,5 +133,8 @@ status, model ID, token usage, latency, schema-parse outcome, and citation-valid
 ## Failure expectations
 
 Any missing evidence, invalid citation, unsafe patch, apply failure, replay mismatch, secret-marker
-leak, original-worktree mutation, timeout, or unavailable gate must finish as `Unverified`. A failed
-run is a valid test result when its failed gate and safe artifacts are reported accurately.
+leak, original-repository tracked/Git-state mutation, timeout, or unavailable gate must finish as
+`Unverified`. A safely finalized run always writes `result.json`, but it records only artifacts from
+phases actually reached. In particular, a target-frame failure before capture keeps
+`failure_screenshot_path` null and does not invent a failure Evidence Bundle. A failed run is a
+valid test result when its failed gate and safe artifacts are reported accurately.

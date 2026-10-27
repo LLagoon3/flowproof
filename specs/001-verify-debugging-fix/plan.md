@@ -11,7 +11,9 @@ and Chat, Agent Activity, Evidence, Gates, and the Proof Trail on the right. A l
 the visible target frame with Playwright, asks Meta Model API `muse-spark-1.3` for a
 schema-constrained diagnosis and diff, applies the validated diff in a detached Git worktree, and
 replays the same scenario. The CLI only launches the Studio; the active workspace renders the Proof
-Trail from local contract-valid artifacts. The original working copy is never edited or committed.
+Trail from local contract-valid artifacts. The engine never changes tracked files, the index, the
+checked-out branch, `HEAD`, or Git history in the original repository. The only write under that
+repository root is the ignored sanitized run-artifact directory.
 
 ## Technical Context
 
@@ -20,11 +22,14 @@ Trail from local contract-valid artifacts. The original working copy is never ed
 **Primary Dependencies**: pnpm 10 workspace, React 19, Vite 8, Commander 15, Zod 4, OpenAI
 JavaScript SDK 7, Playwright 1.64, Chart.js 4
 
-**Storage**: Local sanitized run artifacts under ignored `.flowproof/runs/<run-id>/`; temporary
-detached Git worktrees under the operating-system temporary directory; no database or cloud storage
+**Storage**: Local sanitized run artifacts under ignored `.flowproof/runs/<run-id>/`; generated
+Studio preview assets and detached Git worktrees under operating-system temporary directories; no
+database or cloud storage
 
 **Testing**: Vitest 5 for unit and contract tests; Playwright for Studio, browser capture, and
-end-to-end Hero/Failure scenarios; committed JSON and image fixtures for deterministic assertions
+deterministic Hero/Failure end-to-end scenarios using recorded provider transport; committed JSON
+and image fixtures for deterministic assertions; credential-gated live Meta smoke and Hero
+Quickstart validation run separately
 
 **Target Platform**: The prepared Linux hackathon environment with Git, Node.js 24, pnpm 10, and
 headed Chromium
@@ -40,8 +45,9 @@ seconds for result generation
 **Constraints**: One predefined defect, permitted source file, Studio session, and active run; one
 model call per normal run; loopback-only local service; fixed framed target; chat cannot change the
 scenario, oracles, source boundary, or gates; fail closed on missing evidence, invalid citations,
-unsafe patches, API failures, or unevaluable gates; the prepared tracked working tree must be clean
-and remain unchanged
+unsafe patches, API failures, or unevaluable gates; the prepared tracked working tree must be clean;
+tracked files, Git index, checked-out branch, HEAD, and history must remain unchanged; ignored
+sanitized run artifacts are the only permitted repository-root additions
 
 **Scale/Scope**: One Hero case and one deterministic Failure fixture derived from the same defect;
 one local Studio process, one browser context, one target iframe, one temporary worktree, and one
@@ -81,7 +87,8 @@ run-scoped artifact bundle
 - Studio event tests prove that connected-run activity is ordered and sanitized.
 - End-to-end tests prove both the `Verified Fix` Hero path and a fail-closed `Unverified` path.
 - Real Meta API smoke coverage is opt-in and credential-gated; deterministic CI uses a recorded
-  schema-valid provider fixture.
+  schema-valid response through a test-only provider transport without changing the committed Hero
+  scenario's `meta` mode.
 
 ### IV. Security by Design — PASS
 
@@ -107,8 +114,9 @@ complexity justification is required.
 
 ### Run sequence
 
-1. Start the loopback Studio service, create a launch session, open headed Chromium, and render the
-   two registered cases with the target pane and agent pane.
+1. Build the Studio and initial prepared preview into operating-system temporary output, start the
+   loopback services, create a launch session, open headed Chromium, and render the two registered
+   cases with the target pane and agent pane.
 2. Accept a sanitized chat request, bind it to the selected committed scenario, create the run, and
    emit the first ordered activity event.
 3. Load and validate the immutable oracle and permitted source boundary. Require a clean tracked
@@ -128,12 +136,15 @@ complexity justification is required.
    while emitting ordered gate events. Retain the failure and replay screenshots as review evidence,
    not as a pixel-comparison gate.
 10. Reduce the gates to `Verified Fix` or `Unverified`, render the in-workspace Proof Trail, write
-    contract-valid local artifacts, then remove the temporary worktree.
+    the contract-valid artifacts available for phases actually reached, never invent artifacts for
+    skipped phases, then remove the temporary worktree.
 
 ### Studio boundary
 
-- `flowproof studio` builds the trusted applications, launches the loopback service, injects the
-  launch cookie, and opens headed Chromium. There is no headless CLI in the MVP.
+- `flowproof studio` builds the Studio and initial prepared preview into operating-system temporary
+  output, launches the loopback service, injects the launch cookie, and opens headed Chromium.
+  Run execution and candidate builds occur in the detached worktree. There is no headless CLI in
+  the MVP.
 - One Node.js built-in HTTP server serves the compiled Studio assets, JSON API, and live SSE stream
   from `127.0.0.1`. A separate fixed-port static server exposes the built demo app on `localhost`.
 - The Studio resolves a selected scenario ID through a committed registry. The browser never
@@ -169,6 +180,8 @@ complexity justification is required.
   agentic work, supports strict structured output, and does not use submitted content for training.
 - Use one stateless Responses API call with `store: false`; do not use server-managed history,
   search grounding, model-selected tools, or model-selected shell commands.
+- Make exactly one HTTP attempt for that call. Timeout, 429, 5xx, and other provider failures finish
+  as `Unverified`; the MVP does not retry automatically.
 - The response contains a diagnosis, evidence-linked claims, and one unified diff. FlowProof
   performs all validation, application, replay, and final status computation deterministically.
 - A deterministic recorded provider fixture is permitted only in automated tests and the explicit
@@ -190,15 +203,16 @@ fault to Meta Model API.
   Evidence IDs, and Evidence Bundle contract.
 - **FR-005, FR-006, SC-006**: strict diagnosis contract plus deterministic citation, target-path,
   and patch guards.
-- **FR-007, FR-013, SC-007**: clean baseline precondition, detached worktree execution, and original
-  HEAD/status/hash integrity gate.
+- **FR-007, FR-013, SC-007**: clean baseline precondition, detached worktree execution, the single
+  ignored artifact-root exception, and original tracked-file/index/branch/HEAD/history integrity
+  gate.
 - **FR-008, FR-009, FR-010, SC-004, SC-005**: exact action replay, independent dataset and Canvas
   gates, exact rendered label/value checks, nine-gate fail-closed reducer, and deterministic
   Failure fixture.
 - **FR-011**: the in-workspace Proof Trail connects the complete evidence-to-result flow.
 - **FR-012, SC-008**: allowlisted metadata capture, pre-persistence sanitization, seeded-marker
   scanning, and secret-safe output contracts.
-- **SC-001**: one model call, phase budgets, total 300-second limit, and recorded durations.
+- **SC-001**: one model HTTP attempt, phase budgets, total 300-second limit, and recorded durations.
 - **FR-014, SC-009**: one browser page contains the target iframe and agent pane from start through
   final review.
 - **FR-015, SC-010**: the chat and ordered Studio event contract expose activity, Evidence IDs,
@@ -207,9 +221,9 @@ fault to Meta Model API.
   gate selection.
 - **FR-017**: the active Studio renders the verified diff, evidence, gate outcomes, and final status
   from the same sanitized run artifacts.
-- **SC-011**: page-close detection finalizes an active run as `Unverified`, records the
-  interruption,
-  cleans the detached worktree, and rechecks the original working copy.
+- **SC-011**: page-close detection finalizes an active run as `Unverified`, records the interruption,
+  omits artifacts for phases not reached, cleans the detached worktree, and rechecks the original
+  tracked files and Git state.
 
 ## Project Structure
 
@@ -326,7 +340,8 @@ patch-producing model cannot change them through the permitted source boundary.
   including the rendered chart labels and values from the trusted probe.
 - Parse a recorded schema-valid Meta response and a recorded invalid-citation fixture.
 - Create and remove a detached worktree, apply a known patch, and verify that the original worktree
-  status, HEAD, and protected file hashes do not change.
+  tracked status, index, checked-out branch, HEAD, history, and protected file hashes do not change;
+  ignore the expected sanitized `.flowproof/runs/` addition.
 - Prove the fixed Canvas dimensions and chart-series probe remain outside the permitted patch path;
   retain failure and replay screenshots as evidence without using pixel thresholds.
 - Reject an unexpected `Host`, a foreign POST `Origin`, a non-same-origin fetch context, an invalid
@@ -334,37 +349,43 @@ patch-producing model cannot change them through the permitted source boundary.
 
 ### End-to-end gates
 
-- Hero: launch the Studio, start through chat, visibly reproduce and replay the target frame,
-  receive a live `muse-spark-1.3` response, pass every oracle, show `Verified Fix` in the agent
-  pane, and preserve the original working copy.
+- Deterministic Hero automation: launch the Studio, start through chat, visibly reproduce and replay
+  the target frame, feed a recorded schema-valid response through the test-only Meta transport,
+  pass every oracle, show `Verified Fix` in the agent pane, and preserve the original tracked files
+  and Git state.
+- Live Hero Quickstart: repeat the complete visible flow with the committed Hero scenario and the
+  real `muse-spark-1.3` endpoint using a credential-gated manual run.
 - Failure: injected nonexistent Evidence ID, no patch application, `Unverified`, visible failed
-  gate in the Studio, and unchanged original working copy.
+  gate in the Studio, and unchanged original tracked files and Git state.
 - Secret safety: seeded markers are absent from evidence JSON, request-capture fixture, chat/events,
   UI, logs, and final run result.
-- Browser lifecycle: closing the Studio during an active run yields `Unverified`, cleans the
-  detached worktree, and preserves the original working copy.
+- Browser lifecycle: closing the Studio during an active run yields `Unverified`, writes only
+  stage-available artifacts, cleans the detached worktree, and preserves the original tracked files
+  and Git state.
 - Timing: Hero total duration is below 300 seconds in the prepared demo environment, with phase
   durations recorded in the result.
 
 ## Operational Risks and Mitigations
 
-- **Model latency or outage**: apply a 90-second request timeout, bounded retry only for transient
-  429/5xx responses, and finalize `Unverified` on exhaustion.
+- **Model latency or outage**: apply a 90-second request timeout, make no automatic retry, and
+  finalize `Unverified` after any timeout or provider failure.
 - **Screenshot inconsistency**: pin Playwright Chromium, viewport, Canvas dimensions, fonts, locale,
   timezone, and device scale, and disable Chart.js animation; screenshots remain review evidence,
   not hard gates.
 - **Unsafe model patch**: validate strict schema, citations, paths, patch grammar, size, and
   `git apply --check` before creating an application outcome.
-- **Original-tree mutation**: refuse a dirty tracked baseline, record HEAD/status/hashes before the
-  run, and re-check after cleanup; any mismatch forces `Unverified` and a prominent integrity
-  warning.
+- **Original-tree mutation**: refuse a dirty tracked baseline, record tracked status, index,
+  checked-out branch, HEAD, history, and protected hashes before the run, and re-check after cleanup;
+  disregard only the expected ignored `.flowproof/runs/` addition. Any other mismatch forces
+  `Unverified` and a prominent integrity warning.
 - **Sensitive-data leakage**: capture metadata by allowlist, sanitize before persistence or network
   transmission, and run seeded-marker scans over every emitted artifact.
 - **Local UI attack surface**: bind only to loopback, separate Studio and demo hosts, require the
   launch cookie, validate Host and request context, and apply CSP and no-store headers.
 - **Iframe, browser, or event-stream failure**: frame only the controlled app and fail before model
   use when it cannot load. An SSE disconnect does not cancel the engine; a browser/page close forces
-  `Unverified` because the authoritative visible target no longer exists.
+  `Unverified` because the authoritative visible target no longer exists. Pre-capture failures omit
+  the failure bundle and screenshot instead of inventing them.
 - **Five-minute target overrun**: use one model call, one browser, one source file, a shared pnpm
   store, and phase-level timeouts; retain timings for demo evidence.
 

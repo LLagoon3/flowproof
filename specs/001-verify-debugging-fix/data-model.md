@@ -86,7 +86,7 @@ Owns lifecycle state, artifact paths, timing, and the final result.
 | `original_status_digest` | SHA-256 | Digest of normalized initial status. |
 | `state` | enum | Lifecycle state below. |
 | `phase_durations_ms` | object | Capture, model, apply, replay, and finalization durations. |
-| `artifact_root` | repo-relative path | `.flowproof/runs/<run-id>/`. |
+| `artifact_root` | repo-relative path | `.flowproof/runs/<run-id>/`; only ignored repo-root write. |
 | `result` | Verification Result | Present only after finalization. |
 
 ### State transitions
@@ -104,7 +104,8 @@ initialized
 
 Any state after `initialized` may transition directly to `finalized` with `Unverified` when a
 required step fails or becomes unevaluable. `Verified Fix` is legal only after `replaying` and only
-when every required gate passes.
+when every required gate passes. Finalization persists only artifacts for phases actually reached;
+a pre-capture transition does not create an Evidence Bundle or screenshot.
 
 ## Entity: Studio Event
 
@@ -238,7 +239,7 @@ pixel-comparison gate in the MVP.
 | `failed_gate_ids` | string array | Every `fail` or `unevaluable` gate. |
 | `diagnosis_path` | path or null | Null if diagnosis was never obtained. |
 | `candidate_diff_path` | path or null | Null if no candidate passed validation. |
-| `failure_screenshot_path` | path | Required. |
+| `failure_screenshot_path` | path or null | Required after capture; null when no failure screenshot exists. |
 | `replay_screenshot_path` | path or null | Null when replay did not occur. |
 | `total_duration_ms` | integer | Includes all run phases. |
 
@@ -256,7 +257,7 @@ Workspace Session 1 ── 0..1 Chat Request
 Chat Request 1 ── 1 Run
 Predefined Scenario 1 ── * Run
 Run 1 ── * Studio Event
-Run 1 ── 2 Evidence Bundle (failure, replay when reached)
+Run 1 ── 0..2 Evidence Bundle (failure after completed capture, replay when reached)
 Evidence Bundle 1 ── * Evidence Item
 Run 1 ── 0..1 Diagnosis
 Diagnosis 1 ── 0..1 Candidate Change

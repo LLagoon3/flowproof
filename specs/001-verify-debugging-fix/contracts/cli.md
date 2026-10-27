@@ -6,10 +6,15 @@
 flowproof studio [--scenario <scenario-id>]
 ```
 
-`studio` is the only MVP command. It builds the Studio and trusted demo fixture, starts their local
-servers, creates a launch session, injects the launch cookie into a pinned headed Chromium context,
-and opens the split-view workspace. Without `--scenario`, the Studio presents the two committed demo
-cases for selection.
+`studio` is the only MVP command. It builds the Studio and initial prepared preview into
+operating-system temporary output, starts their local servers, creates a launch session, injects the
+launch cookie into a pinned headed Chromium context, and opens the split-view workspace. Run
+execution and candidate builds occur in a detached worktree. Without `--scenario`, the Studio
+presents the two committed demo cases for selection.
+
+The root `pnpm flowproof` script uses Node.js 24 `--env-file-if-exists=.env`, so an ignored local
+`.env` supplies `MODEL_API_KEY` without adding an environment-loader dependency. An already exported
+process value takes precedence according to Node's environment-file behavior.
 
 The Studio accepts one bounded natural-language run-start request through chat. Neither the CLI nor
 chat accepts source paths, expected values, commands, gate definitions, or patch instructions.
@@ -25,8 +30,8 @@ chat accepts source paths, expected values, commands, gate definitions, or patch
 - The Studio can bind an ephemeral `127.0.0.1` port, the demo app can bind its committed fixed
   `localhost` port, and the pinned Chromium build can launch.
 
-A failed precondition must not start the app, call Meta Model API, create a patch, or alter the
-original working copy.
+A failed precondition must not start the app, call Meta Model API, create a patch, or alter tracked
+files or Git state.
 
 ## Studio launch output
 
@@ -64,25 +69,30 @@ raw provider payloads.
 
 ## Artifact contract
 
-For every started run, the launcher creates one `.flowproof/runs/<run-id>/` directory. A finalized
-run contains at minimum:
+For every started run, the launcher creates one `.flowproof/runs/<run-id>/` directory. Every safely
+finalized run contains `result.json`, valid against `run-result.schema.json`.
 
-- `result.json`, valid against `run-result.schema.json`;
-- `evidence/failure/manifest.json`, valid against `evidence-bundle.schema.json`;
-- sanitized evidence artifacts referenced by that manifest; and
-- the failure screenshot.
+Artifact requirements are phase-dependent:
 
-Diagnosis, candidate diff, replay evidence, and replay screenshot are required only when the
-corresponding phase was reached. Partial or failed runs must never invent those artifacts. The
-active Studio renders the Proof Trail from these artifacts; portable report export is not part of
-the MVP contract.
+- after completed failure capture: `evidence/failure/manifest.json`, its sanitized referenced
+  artifacts, and the failure screenshot are required;
+- after diagnosis or candidate validation: the corresponding diagnosis and candidate diff are
+  required;
+- after replay capture: the replay manifest, its sanitized referenced artifacts, and replay
+  screenshot are required.
+
+A run that finalizes before failure capture keeps `failure_screenshot_path` null and omits the
+failure manifest. Partial or failed runs never invent artifacts for phases not reached. The active
+Studio renders the Proof Trail from the artifacts that exist; portable report export is not part
+of the MVP contract.
 
 ## Side-effect boundary
 
-- All app execution, dependency linking, patch checks, patch application, and replay occur in an
-  operating-system temporary detached Git worktree.
+- Generated Studio and initial preview assets are written only to operating-system temporary
+  output. Run execution, dependency linking, patch checks, patch application, and replay occur in
+  an operating-system temporary detached Git worktree.
 - The Studio service binds only to `127.0.0.1`; the prepared demo app binds only to `localhost`.
-- The command never commits, changes branches, pushes, opens a pull request, or edits the original
-  working copy.
+- The command never commits, changes branches, pushes, opens a pull request, or edits tracked files
+  or Git state. Sanitized ignored files under `.flowproof/runs/` are the only repository-root write.
 - Closing the Studio during an active run or interrupting the process forces `Unverified`, flushes a
-  contract-valid result when possible, and removes the temporary worktree.
+  contract-valid stage-aware result when possible, and removes the temporary worktree.

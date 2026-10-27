@@ -47,9 +47,11 @@ exact frame with Playwright. A Node.js built-in HTTP server serves the Studio an
 `127.0.0.1`; the demo app uses `localhost` on a fixed port. The right panel receives sanitized
 ordered events over Server-Sent Events (SSE).
 
-Both Vite applications are built before the run and served as static assets. The MVP does not use
-Vite development servers or HMR, which would add unrelated network activity and mutable runtime
-state to the captured evidence.
+The initial Studio and prepared preview are built into operating-system temporary output and served
+as static assets without writing generated files into the original repository. Run execution,
+dependency linking, known-bad capture, patching, and replay use the detached worktree. The MVP does
+not use Vite development servers or HMR, which would add unrelated network activity and mutable
+runtime state to the captured evidence.
 
 **Rationale**: The user sees the same application instance that provides failure and replay
 evidence. The controlled fixture permits framing, and Playwright can address its frame without the
@@ -97,6 +99,10 @@ Muse Wonder is unavailable in South Korea and unnecessary for one-file diagnosis
 **Decision**: Send the sanitized evidence manifest and one allowlisted source file in a single
 request with `store: false` and a strict JSON Schema response. The response must contain diagnosis,
 evidence-linked claims, target paths, and a unified diff.
+
+The MVP makes one HTTP attempt for this diagnosis operation. A timeout, 429, or 5xx response ends
+the run as `Unverified`; automatic retries are deferred so the one-call budget remains literal and
+the five-minute demonstration stays predictable.
 
 **Rationale**: One call minimizes latency and cost. Strict decoding guarantees the response shape,
 while FlowProof separately validates that every cited Evidence ID exists and every target path is
@@ -155,9 +161,9 @@ timezone, device scale, font set, and disabled animations keep the recorded evid
 `git apply --check`, apply only the permitted file, replay there, then remove the worktree.
 
 **Rationale**: Git supplies an exact tracked baseline and a verifiable diff while leaving the
-developer's checked-out files and branch history untouched. A detached worktree avoids creating a
-candidate branch or commit. The original HEAD, status, and protected hashes are compared before and
-after the run.
+developer's tracked files, index, checked-out branch, HEAD, and history untouched. A detached
+worktree avoids creating a candidate branch or commit. The original HEAD, status, index, and
+protected hashes are compared before and after the run.
 
 **Alternatives considered**:
 
@@ -171,10 +177,15 @@ after the run.
 **Decision**: Write artifacts under ignored `.flowproof/runs/<run-id>/` and delete the temporary
 worktree after retaining the verified diff, screenshots, evidence manifests, and gate outcomes.
 
+This ignored artifact root is the only permitted write inside the original repository. Generated
+Studio assets live in operating-system temporary output, and demo build, dependency-linking, patch,
+and replay writes remain inside the detached worktree.
+
 **Rationale**: The active Studio renders the reviewable Proof Trail from contract-valid local
 artifacts. Local files avoid a database, account model, cloud retention policy, portable report
 generator, and network transmission beyond the explicit Meta request. Content hashes make evidence
-references stable.
+references stable. The tracked working tree and Git state remain unchanged even though the ignored
+run-artifact directory is intentionally added.
 
 **Alternatives considered**:
 
