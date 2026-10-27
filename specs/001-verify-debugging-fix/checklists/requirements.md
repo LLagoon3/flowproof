@@ -43,3 +43,6 @@
   dependency installation.
 - Frameworks, model selection, isolation mechanism, and other technical design decisions remain for
   the Plan phase.
+- The isolation requirement permits only transient administrative metadata for the system-owned
+  isolated copy and requires the complete pre-run registered-copy set to be restored; unrelated
+  copies that existed before the run must remain untouched.

@@ -149,8 +149,11 @@ unchanged.
 - **FR-011**: The completed result MUST connect the failure evidence, evidence-grounded diagnosis, candidate diff, replay evidence, gate outcomes, and final status in one review flow.
 - **FR-012**: The system MUST omit or redact secrets, credentials, cookies, authorization headers, and unnecessary sensitive request or response data from captured evidence and model inputs.
 - **FR-013**: The system MUST NOT automatically commit, push, open or merge a pull request, deploy,
-  or modify the developer's tracked files or Git state. It MAY add sanitized run artifacts only
-  under the ignored `.flowproof/runs/` root.
+  change tracked files, the Git index, the checked-out branch, `HEAD`, or Git history in the
+  original repository. Sanitized artifacts under the ignored `.flowproof/runs/` root are its only
+  persistent additions beneath the original working tree. While an isolated project copy exists,
+  the system MAY create only the transient Git administrative metadata required for that copy and
+  MUST remove and prune only the metadata it created on every finalization path.
 - **FR-014**: The system MUST provide a local split-view workspace that presents the prepared web
   application and the FlowProof agent in the same browser window.
 - **FR-015**: The agent panel MUST provide chat input and show ordered run activity, available
@@ -183,8 +186,9 @@ unchanged.
 - **SC-005**: The agreed Failure case remains `Unverified` and visibly identifies at least one failed or unevaluable gate.
 - **SC-006**: Every factual claim in the final diagnosis and candidate rationale references an Evidence ID that exists in the same run's Evidence Bundle.
 - **SC-007**: After both demo cases finish, the developer's tracked working-tree contents, Git
-  index, checked-out branch, HEAD, and history are unchanged; the only permitted repository-root
-  additions are sanitized ignored artifacts under `.flowproof/runs/`.
+  index, checked-out branch, `HEAD`, Git history, protected file hashes, and registered-worktree
+  list equal their respective pre-run snapshots; the only persistent additions are sanitized
+  ignored artifacts under `.flowproof/runs/`.
 - **SC-008**: Seeded secret markers used for validation do not appear in captured evidence, model inputs, or the completed result.
 - **SC-009**: A developer can start either prepared case and review its final result without leaving
   the primary split-view workspace.
@@ -202,8 +206,11 @@ unchanged.
 - The developer is authorized to inspect and evaluate the selected project locally.
 - The prepared demo application permits embedding inside the local FlowProof workspace.
 - The chat request is synthetic demo input and is sanitized before persistence or model use.
-- Sanitized run artifacts under ignored `.flowproof/runs/` are the only intentional writes inside
-  the original repository root; build outputs and temporary worktrees live outside it.
+- Sanitized run artifacts under ignored `.flowproof/runs/` are the only intentional persistent
+  additions beneath the original working tree; build outputs and temporary worktrees live outside
+  it. Git may create transient administrative metadata for the FlowProof-owned detached worktree
+  under the resolved Git common directory, but FlowProof removes and prunes only its own entry and
+  restores the complete pre-run registered-worktree snapshot before finalization.
 - The judged demo runs on the prepared Linux environment; cross-platform support is not an MVP
   acceptance condition.
 
