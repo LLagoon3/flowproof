@@ -6,43 +6,47 @@
 
 ## Summary
 
-Build a local TypeScript CLI that runs one predefined Canvas filter-defect scenario, captures a
-sanitized Evidence Bundle with Playwright, asks Meta Model API `muse-spark-1.3` for a
-schema-constrained diagnosis and unified diff, validates and applies that diff in a detached Git
-worktree, and replays the same scenario. A run becomes `Verified Fix` only when the patch guard,
-fixed dataset oracle, and Canvas screenshot oracle all pass. The CLI writes a run-scoped JSON and
-static HTML Proof Trail; it never edits or commits the developer's original working copy.
+Build a local TypeScript split-view Studio that opens the prepared Canvas application on the left
+and Chat, Agent Activity, Evidence, Gates, and the Proof Trail on the right. A local engine drives
+the visible target frame with Playwright, asks Meta Model API `muse-spark-1.3` for a
+schema-constrained diagnosis and diff, applies the validated diff in a detached Git worktree, and
+replays the same scenario. The CLI remains the Studio launcher and headless adapter; a static HTML
+Proof Trail remains exportable. The original working copy is never edited or committed.
 
 ## Technical Context
 
 **Language/Version**: Node.js 24 LTS, TypeScript 7.0
 
-**Primary Dependencies**: pnpm 10 workspace, Commander 15, Zod 4, OpenAI JavaScript SDK 7,
-Playwright 1.64, Vite 8, Chart.js 4, pixelmatch 8, pngjs 7
+**Primary Dependencies**: pnpm 10 workspace, React 19, Vite 8, Commander 15, Zod 4, OpenAI
+JavaScript SDK 7, Playwright 1.64, Chart.js 4, pixelmatch 8, pngjs 7
 
-**Storage**: Local run artifacts only under ignored `.flowproof/runs/<run-id>/`; temporary detached
-Git worktrees under the operating-system temporary directory; no database or cloud storage
+**Storage**: Local run artifacts and sanitized ordered Studio events under ignored
+`.flowproof/runs/<run-id>/`; temporary detached Git worktrees under the operating-system temporary
+directory; no database or cloud storage
 
-**Testing**: Vitest 5 for unit and contract tests; Playwright for browser capture and end-to-end
-Hero/Failure scenarios; committed JSON and image fixtures for deterministic assertions
+**Testing**: Vitest 5 for unit and contract tests; Playwright for Studio, browser capture, and
+end-to-end Hero/Failure scenarios; committed JSON and image fixtures for deterministic assertions
 
 **Target Platform**: Local Linux or macOS developer machine with Git, Node.js 24, pnpm 10, and
-headless Chromium; the prepared hackathon demo runs on Linux
+Chromium; the prepared hackathon demo runs in headed Chromium on Linux
 
-**Project Type**: CLI application plus one trusted Vite/Chart.js demo fixture
+**Project Type**: Local React Studio, Node.js orchestration service and CLI adapter, plus one
+trusted Vite/Chart.js demo fixture
 
-**Performance Goals**: Excluding the initial root dependency install, complete the Hero run in less
-than five minutes; target budgets are 45 seconds for failure capture, 90 seconds for one model call,
-120 seconds for worktree setup/build/replay, and 15 seconds for result generation
+**Performance Goals**: Excluding the initial root dependency install, open the Studio within ten
+seconds and complete the Hero run in less than five minutes; target budgets are 45 seconds for
+failure capture, 90 seconds for one model call, 120 seconds for worktree setup/build/replay, and 15
+seconds for result generation
 
-**Constraints**: One predefined defect and permitted source file; one model call per normal run;
-Standard-mode Meta Model API only; fixed pre-authored data and screenshot oracles; fail closed on
-missing evidence, invalid citations, unsafe patches, API failures, or unevaluable gates; original
-working-copy contents and Git history must remain unchanged; the prepared tracked working tree must
-be clean before a run
+**Constraints**: One predefined defect, permitted source file, Studio session, and active run; one
+model call per normal run; loopback-only local service; fixed framed target; chat cannot change the
+scenario, oracles, source boundary, or gates; fail closed on missing evidence, invalid citations,
+unsafe patches, API failures, or unevaluable gates; the prepared tracked working tree must be clean
+and remain unchanged
 
 **Scale/Scope**: One Hero case and one deterministic Failure fixture derived from the same defect;
-one CLI process, one browser context, one temporary worktree, and one run-scoped artifact bundle
+one local Studio process, one browser context, one target iframe, one temporary worktree, and one
+run-scoped artifact bundle
 
 ## Constitution Check
 
@@ -60,18 +64,22 @@ one CLI process, one browser context, one temporary worktree, and one run-scoped
 ### II. Scope and Justified Complexity — PASS
 
 - The design supports exactly one Canvas filter defect, one Hero path, and one Failure path.
-- A local CLI and static report avoid a database, hosted backend, queue, account system, or generic
-  repository abstraction.
+- A local split-view Studio is required by the approved user experience. It reuses the same Node.js
+  process and browser while avoiding a database, hosted backend, queue, account system, extension,
+  or desktop wrapper.
 - SAM 3.1 is not in the default path. It may be evaluated later only if it materially improves the
   fixed screenshot oracle without threatening the five-minute target.
 - The temporary Git worktree and independent visual oracle are justified by the explicit isolation
   and Canvas verification requirements.
+- React and a narrow loopback HTTP/SSE surface are justified by the approved Chat, Agent Activity,
+  Evidence, Gates, and in-workspace Proof Trail requirements.
 
 ### III. Risk-Based Verification — PASS
 
 - Test-driven implementation is required for the high-risk sanitizer, Evidence ID validator, patch
   guard, gate reducer, and original-worktree integrity check.
 - Contract tests validate every JSON artifact and the model response before use.
+- Studio event and reconnection tests prove that the visible activity is ordered and recoverable.
 - End-to-end tests prove both the `Verified Fix` Hero path and a fail-closed `Unverified` path.
 - Real Meta API smoke coverage is opt-in and credential-gated; deterministic CI uses a recorded
   schema-valid provider fixture.
@@ -86,6 +94,9 @@ one CLI process, one browser context, one temporary worktree, and one run-scoped
   patch-size checks, and `git apply --check` all pass.
 - The Model API key is read only from `MODEL_API_KEY`, never written to artifacts, and never
   included in model input or logs.
+- The Studio binds only to loopback, validates the browser origin and launch session, applies a
+  restrictive content-security policy, and frames only the prepared loopback target.
+- Chat text and Studio events are sanitized before persistence, display, or model transmission.
 
 ### Post-Design Re-check — PASS
 
@@ -96,25 +107,44 @@ complexity justification is required.
 
 ### Run sequence
 
-1. Load and validate the committed scenario, immutable oracle, and permitted source boundary.
-2. Require a clean tracked working tree, then record the original branch HEAD, status, and hashes of
-   protected tracked files.
-3. Create a detached temporary Git worktree at the original HEAD, start the trusted known-bad demo
-   app there, and reproduce the filter failure with Playwright.
-4. Capture actions, observed/expected data, rendered chart labels and values, clipped Canvas
-   screenshot, console entries, metadata-only network observations, and allowlisted source context.
-5. Sanitize every evidence item, assign stable Evidence IDs, hash persisted artifacts, and validate
-   the failure Evidence Bundle contract.
-6. Send only the sanitized source context and evidence manifest to `muse-spark-1.3` through Meta's
-   Responses API with `store: false` and a strict JSON Schema response contract.
-7. Reject unknown Evidence IDs, paths outside the allowlist, non-unified diffs, excessive patch
-   size, binary/rename patches, and patches that fail `git apply --check`.
-8. Stop the known-bad app, apply the candidate in the same temporary worktree, install dependencies
-   from the frozen lockfile, and start the patched fixture.
-9. Replay the exact same Playwright actions and evaluate application, dataset, Canvas screenshot,
-   secret-scan, and original-worktree integrity gates.
-10. Reduce the gates to `Verified Fix` or `Unverified`, write contract-valid JSON artifacts,
-    render a static HTML Proof Trail, save the verified diff, and remove the temporary worktree.
+1. Start the loopback Studio service, create a launch session, open headed Chromium, and render the
+   two registered cases with the target pane and agent pane.
+2. Accept a sanitized chat request, bind it to the selected committed scenario, create the run, and
+   emit the first ordered activity event.
+3. Load and validate the immutable oracle and permitted source boundary. Require a clean tracked
+   working tree and record the original HEAD, status, and protected hashes.
+4. Create a detached temporary Git worktree, start the known-bad app, frame it in the left pane, and
+   drive that exact frame with Playwright to reproduce the failure visibly.
+5. Capture actions, data, rendered chart labels and values, Canvas screenshot, console entries,
+   metadata-only network observations, and allowlisted source context. Sanitize and persist every
+   item before emitting its Evidence ID to the Studio.
+6. Send the sanitized chat goal, source context, and evidence manifest to `muse-spark-1.3` through
+   the Responses API with `store: false` and a strict JSON Schema response contract.
+7. Reject unknown Evidence IDs, paths outside the allowlist, unsafe patch forms, excessive size, and
+   patches that fail `git apply --check`; stream the safe diagnosis and guard outcomes.
+8. Stop the known-bad app, apply the candidate in the same worktree, start the patched fixture,
+   repoint the left frame, and replay the exact actions visibly.
+9. Evaluate application, dataset, rendered chart, screenshot, secret-scan, and original-worktree
+   integrity gates while emitting ordered gate events.
+10. Reduce the gates to `Verified Fix` or `Unverified`, render the in-workspace Proof Trail, write
+    contract-valid artifacts and a self-contained HTML export, then remove the temporary worktree.
+
+### Studio boundary
+
+- `flowproof studio` launches the loopback service and headed Chromium. `flowproof run` executes the
+  same engine without the Studio for tests and CI.
+- One Node.js built-in HTTP server serves the compiled Studio assets, JSON API, SSE stream, and
+  sanitized report routes from the same loopback origin.
+- The Studio resolves a selected scenario ID through a committed registry. The browser never
+  supplies a scenario file path, command, oracle path, or source allowlist.
+- The Studio page owns the right agent pane and one target iframe. Playwright controls the iframe in
+  the same browser page, so the visible target is the authoritative failure and replay surface.
+- Chat supplies a sanitized goal to the diagnosis prompt but cannot select commands, paths, or
+  expected values and cannot modify the committed scenario.
+- `POST /api/runs` starts a run. `GET /api/runs/:id/events` provides ordered SSE with replay through
+  `Last-Event-ID`. Result and report endpoints expose only the selected run's sanitized artifacts.
+- The event log is append-only within the run directory. The final result remains authoritative if
+  the Studio disconnects or closes.
 
 ### Verification oracle
 
@@ -149,8 +179,8 @@ fault to Meta Model API.
 
 ## Requirement Traceability
 
-- **FR-001, SC-002**: committed scenario contract, immutable oracle paths, and CLI without
-  interactive verification inputs.
+- **FR-001, SC-002**: committed scenario contract, immutable oracle paths, and chat start without
+  interactive verification configuration.
 - **FR-002, FR-003, FR-004, SC-003**: failure reproduction, seven required evidence types, stable
   Evidence IDs, and Evidence Bundle contract.
 - **FR-005, FR-006, SC-006**: strict diagnosis contract plus deterministic citation, target-path,
@@ -160,11 +190,20 @@ fault to Meta Model API.
 - **FR-008, FR-009, FR-010, SC-004, SC-005**: exact action replay, independent dataset and Canvas
   gates, exact rendered label/value checks, nine-gate fail-closed reducer, and deterministic
   Failure fixture.
-- **FR-011**: run-result contract and static Proof Trail connect the complete evidence-to-result
+- **FR-011**: the in-workspace and exported Proof Trails connect the complete evidence-to-result
   flow.
 - **FR-012, SC-008**: allowlisted metadata capture, pre-persistence sanitization, seeded-marker
   scanning, and secret-safe output contracts.
 - **SC-001**: one model call, phase budgets, total 300-second limit, and recorded durations.
+- **FR-014, SC-009**: one browser page contains the target iframe and agent pane from start through
+  final review.
+- **FR-015, SC-010**: the chat and ordered Studio event contract expose activity, Evidence IDs,
+  candidate state, gates, and final status.
+- **FR-016**: server-side scenario binding keeps chat outside oracle, source-scope, command, and
+  gate selection.
+- **FR-017**: the report route and static export share the same sanitized run artifacts.
+- **SC-011**: the append-only event log and `Last-Event-ID` replay restore ordered activity after
+  stream reconnection.
 
 ## Project Structure
 
@@ -182,7 +221,9 @@ specs/001-verify-debugging-fix/
 │   ├── diagnosis.schema.json
 │   ├── evidence-bundle.schema.json
 │   ├── run-result.schema.json
-│   └── scenario.schema.json
+│   ├── scenario.schema.json
+│   ├── studio-api.md
+│   └── studio-event.schema.json
 └── tasks.md                 # created by the next Spec Kit phase
 ```
 
@@ -196,6 +237,18 @@ tsconfig.base.json
 .env.example
 
 apps/
+├── studio/
+│   ├── index.html
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── AgentPanel.tsx
+│   │   │   ├── ProofTrail.tsx
+│   │   │   └── TargetPane.tsx
+│   │   ├── api.ts
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   └── state.ts
+│   └── vite.config.ts
 └── demo-chart/
     ├── index.html
     ├── src/
@@ -216,6 +269,10 @@ packages/
         ├── patch/
         ├── report/
         ├── scenario/
+        ├── studio/
+        │   ├── eventLog.ts
+        │   ├── launch.ts
+        │   └── server.ts
         ├── verify/
         └── worktree/
 
@@ -234,20 +291,21 @@ tests/
 ├── contract/
 ├── e2e/
 ├── integration/
+├── ui/
 └── unit/
 ```
 
-**Structure Decision**: Use one pnpm workspace with a single production CLI package and a separate
-trusted demo fixture. Shared libraries remain internal folders until reuse is proven. Scenario
-inputs and verification oracles live outside source code so the patch-producing model cannot change
-them through the permitted source boundary.
+**Structure Decision**: Use one pnpm workspace with a React Studio, a single local engine package
+that also exposes the CLI adapter, and a separate trusted demo fixture. Shared libraries remain
+internal folders until reuse is proven. Scenario inputs and verification oracles live outside source
+code so the patch-producing model cannot change them through the permitted source boundary.
 
 ## Verification Strategy
 
 ### Unit and contract gates
 
-- Validate scenario, Evidence Bundle, diagnosis, and run-result fixtures against the committed JSON
-  Schemas.
+- Validate scenario, Studio event, Evidence Bundle, diagnosis, and run-result fixtures against the
+  committed JSON Schemas.
 - Prove deterministic Evidence IDs and reject duplicate, malformed, cross-run, and unknown IDs.
 - Seed representative tokens in console, URL, network metadata, source, and model-output fixtures;
   assert that no raw marker reaches persisted or transmitted payloads.
@@ -255,6 +313,8 @@ them through the permitted source boundary.
   diffs, and any path outside `apps/demo-chart/src/filterData.ts`.
 - Exercise every verification-gate combination and prove only the all-pass set yields
   `Verified Fix`.
+- Reject chat or local API input that attempts to change the scenario, path allowlist, oracle,
+  command, or gate definitions.
 
 ### Integration gates
 
@@ -264,15 +324,22 @@ them through the permitted source boundary.
 - Create and remove a detached worktree, apply a known patch, and verify that the original worktree
   status, HEAD, and protected file hashes do not change.
 - Compare exact and intentionally different Canvas screenshots and retain the expected diff image.
+- Disconnect and reconnect the SSE consumer with `Last-Event-ID`; prove event sequences are ordered,
+  gap-free, run-scoped, and restored from the append-only log.
+- Reject non-loopback binding, foreign `Origin` values, invalid launch sessions, and artifact path
+  traversal.
 
 ### End-to-end gates
 
-- Hero: live `muse-spark-1.3` response, allowed patch, passing dataset and screenshot oracles,
-  `Verified Fix`, complete Proof Trail, and unchanged original working copy.
+- Hero: launch the Studio, start through chat, visibly reproduce and replay the target frame,
+  receive a live `muse-spark-1.3` response, pass every oracle, show `Verified Fix` in the agent
+  pane, export the Proof Trail, and preserve the original working copy.
 - Failure: injected nonexistent Evidence ID, no patch application, `Unverified`, visible failed
-  gate, and unchanged original working copy.
+  gate in the Studio, and unchanged original working copy.
 - Secret safety: seeded markers are absent from evidence JSON, request-capture fixture, static
-  report, logs, and final run result.
+  report, chat/event log, UI, logs, and final run result.
+- Workspace continuity: closing and reopening the event connection restores the same ordered
+  activity and final result without restarting the run.
 - Timing: Hero total duration is below 300 seconds in the prepared demo environment, with phase
   durations recorded in the result.
 
@@ -289,6 +356,12 @@ them through the permitted source boundary.
   warning.
 - **Sensitive-data leakage**: capture metadata by allowlist, sanitize before persistence or network
   transmission, and run seeded-marker scans over every emitted artifact.
+- **Local UI attack surface**: bind only to loopback, require a launch session and expected Origin,
+  apply CSP and no-store headers, expose no generic file endpoint, and validate every run/artifact
+  identifier.
+- **Iframe or event-stream failure**: frame only the controlled app, fail before model use when it
+  cannot load, keep the engine independent from the Studio connection, and replay ordered events
+  after reconnect.
 - **Five-minute target overrun**: use one model call, one browser, one source file, a shared pnpm
   store, and phase-level timeouts; retain timings for demo evidence.
 

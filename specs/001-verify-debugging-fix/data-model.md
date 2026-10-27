@@ -2,8 +2,42 @@
 
 ## Overview
 
-The MVP stores one immutable scenario definition and one run-scoped Proof Trail. Model output is an
-untrusted intermediate object. Only deterministic gate reduction produces the final status.
+The MVP holds one local Studio session, one immutable scenario definition, and one run-scoped Proof
+Trail. Chat, activity, and model output are untrusted inputs or intermediate objects. Only
+deterministic gate reduction produces the final status.
+
+## Entity: Workspace Session
+
+Represents one local split-view Studio launch.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `session_id` | UUID | Generated once per Studio launch. |
+| `created_at` | ISO 8601 | UTC timestamp. |
+| `scenario_id` | string or null | Selected committed case; null before selection. |
+| `state` | enum | `ready`, `running`, `finalized`, or `closed`. |
+| `active_run_id` | UUID or null | At most one run in the MVP. |
+| `target_url` | URL or null | Allowlisted loopback iframe URL only. |
+| `last_event_sequence` | integer | Highest event rendered by the Studio. |
+
+The launch credential is held in memory and a secure browser cookie, not in run artifacts. The
+Studio cannot change scenario commands, oracle paths, permitted source paths, or gate definitions.
+
+## Entity: Chat Request
+
+Represents the developer's natural-language start request.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `request_id` | UUID | Generated before the run starts. |
+| `session_id` | UUID | Owning Workspace Session. |
+| `run_id` | UUID | Run created for this request. |
+| `created_at` | ISO 8601 | UTC timestamp. |
+| `text` | string | Sanitized bounded text; no HTML rendering. |
+| `scenario_id` | string | Server-selected committed scenario. |
+
+The text may be included as the developer's goal in the model request. It is never interpreted as a
+command, path, oracle, expected value, gate definition, or permission expansion.
 
 ## Entity: Predefined Scenario
 
@@ -14,6 +48,7 @@ Represents the trusted, committed inputs loaded before a run.
 | `schema_version` | string | Exact supported contract version. |
 | `scenario_id` | string | Stable kebab-case identifier. |
 | `case` | enum | `hero` or `failure-invalid-citation`. |
+| `default_request` | string | Synthetic chat goal for headless and demo use. |
 | `app.root` | repo-relative path | Must resolve inside the repository. |
 | `app.url` | URL | Loopback HTTP URL only for the MVP. |
 | `app.start_command` | string array | Committed command tokens; never model-generated. |
@@ -44,6 +79,7 @@ Owns lifecycle state, artifact paths, timing, and the final result.
 | --- | --- | --- |
 | `run_id` | UUID | Generated once; used by every related entity. |
 | `scenario_id` | string | References one Predefined Scenario. |
+| `request_id` | UUID | References the initiating Chat Request. |
 | `case` | enum | Copied from the scenario. |
 | `started_at` / `completed_at` | ISO 8601 | UTC timestamps. |
 | `original_head` | Git object ID | Captured before any worktree operation. |
@@ -51,6 +87,7 @@ Owns lifecycle state, artifact paths, timing, and the final result.
 | `state` | enum | Lifecycle state below. |
 | `phase_durations_ms` | object | Capture, model, apply, replay, and report durations. |
 | `artifact_root` | repo-relative path | `.flowproof/runs/<run-id>/`. |
+| `events_path` | repo-relative path | Append-only sanitized `events.jsonl`. |
 | `result` | Verification Result | Present only after finalization. |
 
 ### State transitions
@@ -69,6 +106,28 @@ initialized
 Any state after `initialized` may transition directly to `finalized` with `Unverified` when a
 required step fails or becomes unevaluable. `Verified Fix` is legal only after `replaying` and only
 when every required gate passes.
+
+## Entity: Studio Event
+
+Represents one ordered update streamed to the agent pane and replayed after reconnect.
+
+| Field | Type | Rules |
+| --- | --- | --- |
+| `schema_version` | string | Exact supported contract version. |
+| `event_id` | string | `<run_id>:<sequence>`; unique and stable. |
+| `run_id` | UUID | Owning run. |
+| `sequence` | integer | Starts at 1 and increases contiguously. |
+| `occurred_at` | ISO 8601 | UTC timestamp. |
+| `type` | enum | Chat, phase, evidence, candidate, gate, or final event. |
+| `phase` | run state or null | Phase associated with the event. |
+| `message` | string | Sanitized human-readable activity text. |
+| `evidence_ids` | string array | Existing Evidence IDs made available by this event. |
+| `gate` | Gate Outcome summary or null | Present only for a gate event. |
+| `artifact_refs` | relative path array | Sanitized run artifacts safe for Studio retrieval. |
+
+Events are appended before SSE delivery. Reconnection supplies `Last-Event-ID`; the server returns
+only later events in ascending sequence. Missing, duplicate, cross-run, or reordered events fail the
+Studio event contract but do not alter the authoritative run result.
 
 ## Entity: Evidence Item
 
@@ -180,6 +239,7 @@ Represents the validated form of a Diagnosis candidate and its isolated applicat
 | `replay_screenshot_path` | path or null | Null when replay did not occur. |
 | `visual_diff_path` | path or null | Present after visual comparison. |
 | `report_path` | path | Static HTML Proof Trail. |
+| `events_path` | path | Append-only sanitized Studio event log. |
 | `total_duration_ms` | integer | Includes all run phases. |
 
 ### Reduction rule
@@ -191,7 +251,10 @@ has no field that can set or override the final status.
 ## Relationships
 
 ```text
+Workspace Session 1 ── 0..1 Chat Request
+Chat Request 1 ── 1 Run
 Predefined Scenario 1 ── * Run
+Run 1 ── * Studio Event
 Run 1 ── 2 Evidence Bundle (failure, replay when reached)
 Evidence Bundle 1 ── * Evidence Item
 Run 1 ── 0..1 Diagnosis

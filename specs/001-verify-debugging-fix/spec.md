@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-27
 
-**Status**: Ready for Plan Revision
+**Status**: Ready for Tasks
 
 **Input**: User description: "Define FlowProof's first hackathon MVP together, starting with the problem and primary user."
 

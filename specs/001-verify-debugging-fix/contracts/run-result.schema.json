@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "run_id",
+    "request_id",
     "scenario_id",
     "case",
     "started_at",
@@ -24,11 +25,13 @@
     "replay_screenshot_path",
     "visual_diff_path",
     "report_path",
+    "events_path",
     "total_duration_ms"
   ],
   "properties": {
     "schema_version": { "const": "1.0.0" },
     "run_id": { "type": "string", "format": "uuid" },
+    "request_id": { "type": "string", "format": "uuid" },
     "scenario_id": {
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
@@ -127,6 +130,7 @@
     "replay_screenshot_path": { "$ref": "#/$defs/nullablePath" },
     "visual_diff_path": { "$ref": "#/$defs/nullablePath" },
     "report_path": { "$ref": "#/$defs/relativePath" },
+    "events_path": { "$ref": "#/$defs/relativePath" },
     "total_duration_ms": { "$ref": "#/$defs/milliseconds" }
   },
   "allOf": [
@@ -214,6 +218,13 @@
         "original_worktree_unchanged"
       ]
     },
+    "evidenceId": {
+      "type": "string",
+      "allOf": [
+        { "pattern": "^ev_(failure|replay)_" },
+        { "pattern": "_(actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$" }
+      ]
+    },
     "gateOutcome": {
       "type": "object",
       "additionalProperties": false,
@@ -224,10 +235,7 @@
         "evidence_ids": {
           "type": "array",
           "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^ev_(?:failure|replay)_(?:actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$"
-          }
+          "items": { "$ref": "#/$defs/evidenceId" }
         },
         "reason_code": {
           "type": "string",

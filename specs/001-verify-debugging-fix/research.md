@@ -4,40 +4,65 @@
 
 ## Decision 1: Use Node.js 24 and TypeScript in one pnpm workspace
 
-**Decision**: Build the orchestration CLI and trusted demo fixture with Node.js 24 LTS,
-TypeScript 7.0, and pnpm 10.
+**Decision**: Build the Studio, local orchestration engine, CLI adapter, and trusted demo fixture
+with Node.js 24 LTS, TypeScript 7.0, and pnpm 10.
 
 **Rationale**: The prepared host already has Node.js 24 and pnpm 10. Playwright, Vite, Chart.js,
-Meta's documented OpenAI-compatible SDK path, JSON Schema validation, patch processing, and static
-report generation all fit one runtime. A single language reduces build and packaging work during the
-hackathon.
+Meta's documented OpenAI-compatible SDK path, JSON Schema validation, patch processing, Studio UI,
+and report generation all fit one runtime. A single language reduces build and packaging work during
+the hackathon.
 
 **Alternatives considered**:
 
 - Python: strong automation ecosystem, but would add a second application language for the browser
   fixture and duplicate contracts.
-- Separate frontend and backend services: rejected because the MVP needs a local developer tool and
-  static report, not a hosted multi-user service.
+- Separately deployed frontend and backend services: rejected because the MVP needs one local
+  process, not hosted multi-user infrastructure.
 - Multiple reusable packages: rejected until a second consumer exists.
 
-## Decision 2: Use a CLI with a static HTML Proof Trail
+## Decision 2: Make a local split-view Studio the primary UX
 
-**Decision**: Expose the MVP as `flowproof run` and write machine-readable artifacts plus a static
-HTML report per run.
+**Decision**: Open one local browser window with the prepared application on the left and Chat,
+Agent Activity, Evidence, Gates, and the final Proof Trail on the right. Keep the CLI as the
+launcher and headless adapter, and retain a self-contained HTML report as an export artifact.
 
-**Rationale**: The primary user is a solo developer running a local project. A CLI can coordinate
-Git, Playwright, Meta Model API, and verification without a daemon, database, login flow, or hosted
-backend. A static HTML report provides the single review flow required by the specification and is
-easy to demonstrate in a browser.
+**Rationale**: The approved product experience requires the developer to see the target behavior and
+the agent's evidence-grounded work together. A local Studio supplies that experience without a
+database, login, cloud deployment, or browser-extension permission flow. The CLI remains useful for
+CI and deterministic tests, while the exported report remains a portable audit artifact.
 
 **Alternatives considered**:
 
-- Full web dashboard and API server: more operational surface with no MVP requirement.
-- Terminal-only output: insufficient for connecting screenshots, diff, gates, and evidence in one
-  visible review flow.
-- Electron desktop application: unjustified packaging complexity.
+- CLI plus static report as the primary UX: safe but does not show the target and agent working
+  together, so it remains only the headless and export path.
+- Chrome Side Panel extension: best aligned with future use on arbitrary sites, but extension
+  permissions and local Git access require a companion service and broaden the hackathon surface.
+- Electron with `WebContentsView`: can own both panes and arbitrary navigation, but packaging,
+  security hardening, and update distribution are unnecessary for the controlled fixture.
 
-## Decision 3: Use Meta Model API `muse-spark-1.3` Standard mode
+## Decision 3: Let headed Playwright control the visible target iframe
+
+**Decision**: The local engine starts the known-bad app in an isolated worktree, launches headed
+Chromium to the Studio, embeds the app in the left iframe, and drives that exact frame with
+Playwright. A Node.js built-in HTTP server serves the built Studio and local API from one origin.
+The right panel receives sanitized ordered events over Server-Sent Events (SSE).
+
+**Rationale**: The user sees the same application instance that provides failure and replay
+evidence. The controlled fixture permits framing, and Playwright can address its frame without the
+Studio frontend bypassing browser-origin boundaries. One-way SSE fits ordered progress updates;
+ordinary local HTTP requests handle chat start and result retrieval.
+
+**Alternatives considered**:
+
+- Mirror a separate hidden browser with screenshots: easier, but the displayed target would not be
+  the authoritative run.
+- Let the Studio inspect and drive the iframe directly: ties evidence collection to custom demo
+  instrumentation and does not preserve the Playwright path.
+- WebSocket: bidirectional transport is unnecessary because chat and run commands use HTTP.
+- Arbitrary external pages in the iframe: deferred because framing policy and authentication differ
+  by site; a Chrome extension or owned browser is the later integration boundary.
+
+## Decision 4: Use Meta Model API `muse-spark-1.3` Standard mode
 
 **Decision**: Use `muse-spark-1.3` through `https://api.meta.ai/v1/responses` with a key supplied as
 `MODEL_API_KEY`.
@@ -56,7 +81,7 @@ Muse Wonder is unavailable in South Korea and unnecessary for one-file diagnosis
   API integration.
 - Non-Meta model: allowed only as a local test double, not as the Hero runtime.
 
-## Decision 4: Use one stateless strict-schema Responses API call
+## Decision 5: Use one stateless strict-schema Responses API call
 
 **Decision**: Send the sanitized evidence manifest and one allowlisted source file in a single
 request with `store: false` and a strict JSON Schema response. The response must contain diagnosis,
@@ -74,7 +99,7 @@ allowed. Stateless mode avoids server-managed conversation history.
   for one file.
 - Model tool calls: rejected because the model must not select commands or mutate the workspace.
 
-## Decision 5: Keep SAM 3.1 out of the default MVP path
+## Decision 6: Keep SAM 3.1 out of the default MVP path
 
 **Decision**: Do not require SAM 3.1 for Hero verification. Record it as a later experiment gated on
 measured improvement over the fixed screenshot oracle.
@@ -92,7 +117,7 @@ dependency would add parsing, masks, and another paid request without proving be
   approve its own visual result.
 - Add SAM as a non-blocking overlay: deferred until the Hero path is complete and measured.
 
-## Decision 6: Pair data, rendered-chart, and pinned Canvas screenshot oracles
+## Decision 7: Pair data, rendered-chart, and pinned Canvas screenshot oracles
 
 **Decision**: Verify exact filtered rows, read the rendered Chart.js labels and values through a
 trusted test probe outside the patch boundary, and compare Canvas pixels against a committed
@@ -111,7 +136,7 @@ oracles is generated by the failing run or the model.
 - OCR or general computer vision: higher nondeterminism and dependency cost for a fixed fixture.
 - Screenshot-only verification: does not clearly isolate incorrect filtered data.
 
-## Decision 7: Apply patches in a detached temporary Git worktree
+## Decision 8: Apply patches in a detached temporary Git worktree
 
 **Decision**: Create a detached worktree at the captured original HEAD, reject unsafe diffs, run
 `git apply --check`, apply only the permitted file, replay there, then remove the worktree.
@@ -128,7 +153,7 @@ after the run.
 - Container per run: stronger isolation but unnecessary complexity for the controlled fixture.
 - Automatic candidate commit/PR: explicitly out of scope.
 
-## Decision 8: Persist only local, run-scoped sanitized artifacts
+## Decision 9: Persist only local, run-scoped sanitized artifacts
 
 **Decision**: Write artifacts under ignored `.flowproof/runs/<run-id>/` and delete the temporary
 worktree after retaining the verified diff, screenshots, gate outcomes, and reports.
@@ -143,7 +168,7 @@ make artifact references stable.
 - SQLite: no query or concurrency requirement justifies it.
 - Cloud object storage: expands security, cost, and deployment scope.
 
-## Decision 9: Make the Failure case deterministic and explicitly injected
+## Decision 10: Make the Failure case deterministic and explicitly injected
 
 **Decision**: Use a committed provider fixture with one nonexistent Evidence ID. Label the run as an
 evaluation fixture and reject it before patch application.
@@ -158,7 +183,7 @@ guard without misrepresenting the source of the bad citation.
 - Break the expected oracle: undermines trust in the oracle.
 - Inject an apply failure: valid but less directly demonstrates evidence grounding.
 
-## Decision 10: Dependency versions and licenses
+## Decision 11: Dependency versions and licenses
 
 **Decision**: Start implementation from the following verified package lines; pin exact versions in
 the lockfile.
@@ -166,7 +191,9 @@ the lockfile.
 | Package | Version checked | License | Purpose |
 | --- | ---: | --- | --- |
 | TypeScript | 7.0.2 | Apache-2.0 | typed implementation |
-| Vite | 8.3.5 | MIT | trusted demo fixture |
+| React | 19.3.1 | MIT | Studio interface |
+| Vite | 8.3.5 | MIT | Studio and trusted demo fixture |
+| `@vitejs/plugin-react` | 6.1.2 | MIT | Studio build integration |
 | Chart.js | 4.6.1 | MIT | Canvas chart |
 | Playwright | 1.64.1 | Apache-2.0 | reproduction and replay |
 | OpenAI SDK | 7.45.0 | Apache-2.0 | Meta Responses API client |
@@ -209,3 +236,5 @@ does not block the MVP.
 - [Media segmentation](https://dev.meta.ai/docs/media-segmentation)
 - [Pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits)
 - [Meta Model API quickstart](https://dev.meta.ai/docs/quickstart)
+- [Chrome Side Panel API](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
+- [Electron WebContentsView](https://www.electronjs.org/docs/latest/api/web-contents-view)

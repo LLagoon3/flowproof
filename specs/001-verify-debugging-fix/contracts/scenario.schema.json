@@ -8,6 +8,7 @@
     "schema_version",
     "scenario_id",
     "case",
+    "default_request",
     "app",
     "actions",
     "oracle",
@@ -23,6 +24,11 @@
     },
     "case": {
       "enum": ["hero", "failure-invalid-citation"]
+    },
+    "default_request": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
     },
     "app": {
       "type": "object",
