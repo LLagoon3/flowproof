@@ -108,7 +108,7 @@ from ignored sanitized run artifacts.
 - [X] T039 [P] [US1] Build the sanitized evidence manifest and one-file source prompt with no commands, oracle values, or tool definitions in `packages/flowproof/src/model/prompt.ts`
 - [X] T040 [P] [US1] Implement citation, target-path, grammar, size, and `git apply --check` validation producing `citations_valid` and `patch_scope_valid` before any apply in `packages/flowproof/src/patch/validateDiff.ts`
 - [X] T041 [P] [US1] Implement exact dataset and rendered-chart oracle evaluation in `packages/flowproof/src/verify/oracle.ts`
-- [ ] T042 [US1] Implement the complete recorded-transport run state machine from reproduction through diagnosis, safe apply, patched rebuild, visible replay, nine-gate reduction, stage-aware artifacts, `result.json`, cleanup, and final integrity comparison in `packages/flowproof/src/run.ts`
+- [X] T042 [US1] Implement the complete recorded-transport run state machine from reproduction through diagnosis, safe apply, patched rebuild, visible replay, nine-gate reduction, stage-aware artifacts, `result.json`, cleanup, and final integrity comparison in `packages/flowproof/src/run.ts`
 - [ ] T043 [US1] Implement the guarded loopback endpoints and live SSE lifecycle from `contracts/studio-api.md`, including deferred credential readiness and no-side-effect rejection, in `packages/flowproof/src/studio/server.ts`
 - [ ] T044 [US1] Implement the typed Studio client and session/activity/evidence/gate/candidate/result state with a state test in `apps/studio/src/api.ts`, `apps/studio/src/state.ts`, and `tests/ui/state.test.ts`
 - [ ] T045 [US1] Implement bounded chat, ordered Agent Activity, Evidence, Gate, and final-status views without inline styles in `apps/studio/src/components/AgentPanel.tsx`
