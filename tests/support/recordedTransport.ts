@@ -42,6 +42,45 @@ export function loadRecordedHeroResponse(): unknown {
   return JSON.parse(readFileSync(RECORDED_HERO_RESPONSE_URL, 'utf8')) as unknown
 }
 
+export interface HeldTransport extends RecordedTransport {
+  /** Resolves once the first diagnosis call arrived; that call is then held until it is cancelled. */
+  readonly held: Promise<void>
+  /** True once the engine cancelled a held call through its signal. */
+  cancelled(): boolean
+}
+
+/**
+ * A test transport that never answers: it records each diagnosis call and holds it until the
+ * engine aborts the call's signal, so a test can act while the run is still diagnosing.
+ */
+export function createHeldTransport(): HeldTransport {
+  const calls: RecordedCall[] = []
+  let cancelled = false
+  let markHeld: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    markHeld = resolve
+  })
+  return Object.freeze({
+    model: null,
+    calls,
+    held,
+    cancelled: () => cancelled,
+    checkReadiness: (): TransportReadiness => ({ ready: true }),
+    diagnose(prompt: unknown, diagnoseOptions: DiagnoseOptions): Promise<unknown> {
+      calls.push(Object.freeze({ prompt: structuredClone(prompt), timeoutMs: diagnoseOptions.timeoutMs }))
+      markHeld()
+      return new Promise((_resolve, reject) => {
+        const cancel = (): void => {
+          cancelled = true
+          reject(new Error('HELD_TRANSPORT_CANCELLED: the held diagnosis request was cancelled.'))
+        }
+        if (diagnoseOptions.signal.aborted) cancel()
+        else diagnoseOptions.signal.addEventListener('abort', cancel, { once: true })
+      })
+    },
+  })
+}
+
 export function createRecordedTransport(options: { readonly response?: unknown } = {}): RecordedTransport {
   const response = structuredClone(options.response ?? loadRecordedHeroResponse())
   const calls: RecordedCall[] = []

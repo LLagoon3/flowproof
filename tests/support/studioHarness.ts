@@ -59,7 +59,7 @@ export interface StudioHarness {
   readonly baseline: RepositorySnapshot
   readonly studio: StudioInstance
   readonly page: Page
-  /** The recorded Hero transport; null when the case keeps its committed fixture provider. */
+  /** The test transport replacing Meta; null when the case keeps its committed fixture provider. */
   readonly transport: RecordedTransport | null
   /** Non-loopback HTTP requests this process attempted (and the harness refused). */
   readonly blockedRequests: readonly string[]
@@ -95,6 +95,10 @@ export interface StudioHarnessOptions {
   readonly scenarioId: string
   /** Replaces the live Meta transport with the recorded one; `false` for a fixture-provider case. */
   readonly recordedTransport?: boolean
+  /** Replaces the live Meta transport with this test transport instead of the recorded one. */
+  readonly testTransport?: RecordedTransport
+  /** Runs against the fresh clone before its baseline snapshot, for example to add an unrelated worktree. */
+  readonly prepareClone?: (repoRoot: string) => Promise<void> | void
 }
 
 export async function openStudioHarness(options: StudioHarnessOptions): Promise<StudioHarness> {
@@ -117,6 +121,7 @@ export async function openStudioHarness(options: StudioHarnessOptions): Promise<
 
     const clone: TempDirectory = await createTempClone({ withDependencies: true })
     undo.push(clone.remove)
+    await options.prepareClone?.(clone.path)
     const baseline = await snapshotRepository(clone.path)
 
     const tmp = await createTempDirectory('flowproof-e2e-tmp-')
@@ -142,7 +147,7 @@ export async function openStudioHarness(options: StudioHarnessOptions): Promise<
       globalThis.fetch = realFetch
     })
 
-    const transport = options.recordedTransport === false ? null : createRecordedTransport()
+    const transport = options.testTransport ?? (options.recordedTransport === false ? null : createRecordedTransport())
     const studio = await startStudio({
       repoRoot: clone.path,
       scenarioId: options.scenarioId,
