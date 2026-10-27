@@ -71,7 +71,8 @@ isolated candidate application, replay, and accurate final result.
 5. **Given** the failure evidence exists, **When** FlowProof produces a candidate change, **Then**
    the candidate's factual claims are connected to evidence from the same run.
 6. **Given** a candidate change is ready, **When** FlowProof evaluates it, **Then** FlowProof applies
-   it only to an isolated copy and leaves the developer's original working copy unchanged.
+   it only to an isolated copy and leaves the developer's tracked files, Git index, checked-out
+   branch, HEAD, and history unchanged.
 7. **Given** the candidate change was applied successfully, **When** FlowProof replays the same
    scenario, **Then** the left application shows the replay and the result becomes `Verified Fix`
    only if every agreed verification condition passes.
@@ -80,7 +81,7 @@ isolated candidate application, replay, and accurate final result.
    gate outcomes, and final status.
 9. **Given** the run is finalized as `Verified Fix`, **When** FlowProof hands the result to the
    developer, **Then** it provides the verified diff and in-workspace Proof Trail without
-   committing or changing the developer's original working copy.
+   committing or changing the developer's tracked files or Git state.
 
 ---
 
@@ -92,15 +93,19 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 
 **Independent Test**: Start the predefined Failure case from the local workspace. The story
 succeeds when the right panel stops before unsafe application, shows the failed gate and supporting
-context, the final result remains `Unverified`, and the original working copy remains unchanged.
+context, the final result remains `Unverified`, and the original tracked files and Git state remain
+unchanged.
 
 **Acceptance Scenarios**:
 
 1. **Given** a required evidence reference is invalid, **When** FlowProof evaluates the candidate, **Then** it rejects the unsupported claim and keeps the result `Unverified`.
-2. **Given** the candidate cannot be applied within the permitted isolated scope, **When** application is attempted, **Then** the result remains `Unverified` and the original working copy remains unchanged.
+2. **Given** the candidate cannot be applied within the permitted isolated scope, **When**
+   application is attempted, **Then** the result remains `Unverified` and the original tracked
+   files and Git state remain unchanged.
 3. **Given** the candidate was applied in isolation but replay fails any agreed verification condition, **When** the run is finalized, **Then** FlowProof reports `Unverified` and identifies the failed condition.
 4. **Given** the run is `Unverified`, **When** the developer reviews the result, **Then** the same result view connects the relevant evidence, candidate change, failed gate, and final status without requiring a separate review workspace.
-5. **Given** the run remains `Unverified`, **When** FlowProof hands the result to the developer, **Then** it does not create a commit or modify the developer's original working copy.
+5. **Given** the run remains `Unverified`, **When** FlowProof hands the result to the developer,
+   **Then** it does not create a commit or modify the developer's tracked files or Git state.
 
 ### Edge Cases
 
@@ -113,10 +118,11 @@ context, the final result remains `Unverified`, and the original working copy re
   the authoritative final result remains available, but the MVP does not promise replay of missed
   activity events.
 - If the Studio page or browser closes during an active run, FlowProof stops the visible run,
-  finalizes it as `Unverified`, and cleans up the isolated copy without changing the original
-  working copy.
+  finalizes it as `Unverified`, writes only artifacts available for the phases reached, and cleans
+  up the isolated copy without changing the original tracked files or Git state.
 - If the embedded prepared application cannot load, the run does not call the model or apply a
-  patch and reports the startup gate as unevaluable.
+  patch, does not invent a failure Evidence Bundle or screenshot, and reports
+  `failure_reproduced` and dependent gates as unevaluable.
 
 ## Requirements *(mandatory)*
 
@@ -124,17 +130,27 @@ context, the final result remains `Unverified`, and the original working copy re
 
 - **FR-001**: The system MUST load the predefined scenario, fixed verification oracle, and permitted source boundary without requiring the developer to enter file paths, expected values, or structured verification rules for each run.
 - **FR-002**: The system MUST reproduce the known-bad Canvas filter defect before producing or evaluating a candidate change.
-- **FR-003**: The system MUST capture a failure Evidence Bundle containing the reproduction actions, expected and observed filtered data, a failure screenshot, console errors, a sanitized network summary, and relevant source context selected from within the permitted boundary.
+- **FR-003**: For every run that reaches failure capture, the system MUST produce a failure Evidence
+  Bundle containing the reproduction actions, expected and observed filtered data, a failure
+  screenshot, console errors, a sanitized network summary, and relevant source context selected
+  from within the permitted boundary. A run that ends before failure capture MUST NOT invent this
+  bundle or its artifacts.
 - **FR-004**: The system MUST assign a stable Evidence ID to every captured evidence item so later claims and results can reference the exact supporting item.
 - **FR-005**: The system MUST produce an evidence-grounded diagnosis and candidate diff whose factual claims reference Evidence IDs from the same failure run.
 - **FR-006**: The system MUST reject unsupported evidence references and MUST NOT apply a candidate change outside the permitted source boundary.
-- **FR-007**: The system MUST apply the candidate change only to an isolated project copy and MUST leave the developer's original working copy unchanged.
+- **FR-007**: The system MUST apply the candidate change only to an isolated project copy and MUST
+  leave the developer's original tracked files, Git index, checked-out branch, HEAD, and history
+  unchanged.
 - **FR-008**: The system MUST replay the same predefined scenario after candidate application and capture the observed filtered data, chart result, screenshot, and outcome of each verification gate.
 - **FR-009**: The system MUST grant `Verified Fix` only when the candidate applies successfully, the replayed filtered data exactly matches the fixed expected dataset, and the Canvas bar count, labels, and values all match the fixed expected chart result.
-- **FR-010**: The system MUST keep the result `Unverified` when any required evidence, application step, or verification gate is missing, cannot be evaluated, or fails, and MUST identify the failed gate.
+- **FR-010**: The system MUST keep the result `Unverified` when any required evidence, application
+  step, or verification gate is missing, cannot be evaluated, or fails; MUST identify the failed
+  or unevaluable gate; and MUST require only artifacts for phases the run actually reached.
 - **FR-011**: The completed result MUST connect the failure evidence, evidence-grounded diagnosis, candidate diff, replay evidence, gate outcomes, and final status in one review flow.
 - **FR-012**: The system MUST omit or redact secrets, credentials, cookies, authorization headers, and unnecessary sensitive request or response data from captured evidence and model inputs.
-- **FR-013**: The system MUST NOT automatically commit, push, open or merge a pull request, deploy, or modify the developer's original working copy.
+- **FR-013**: The system MUST NOT automatically commit, push, open or merge a pull request, deploy,
+  or modify the developer's tracked files or Git state. It MAY add sanitized run artifacts only
+  under the ignored `.flowproof/runs/` root.
 - **FR-014**: The system MUST provide a local split-view workspace that presents the prepared web
   application and the FlowProof agent in the same browser window.
 - **FR-015**: The agent panel MUST provide chat input and show ordered run activity, available
@@ -166,15 +182,17 @@ context, the final result remains `Unverified`, and the original working copy re
 - **SC-004**: The agreed Hero case receives `Verified Fix` only after every required application, data, and Canvas chart gate passes.
 - **SC-005**: The agreed Failure case remains `Unverified` and visibly identifies at least one failed or unevaluable gate.
 - **SC-006**: Every factual claim in the final diagnosis and candidate rationale references an Evidence ID that exists in the same run's Evidence Bundle.
-- **SC-007**: After both demo cases finish, the developer's original working-copy contents and Git history are unchanged.
+- **SC-007**: After both demo cases finish, the developer's tracked working-tree contents, Git
+  index, checked-out branch, HEAD, and history are unchanged; the only permitted repository-root
+  additions are sanitized ignored artifacts under `.flowproof/runs/`.
 - **SC-008**: Seeded secret markers used for validation do not appear in captured evidence, model inputs, or the completed result.
 - **SC-009**: A developer can start either prepared case and review its final result without leaving
   the primary split-view workspace.
 - **SC-010**: For every phase reached by a run, the workspace displays the phase in order and shows
   every emitted Evidence ID and gate update associated with that phase.
 - **SC-011**: Closing the Studio page during an active prepared run yields `Unverified`, records the
-  interruption as a failed or unevaluable gate, removes the isolated copy, and leaves the original
-  working copy unchanged.
+  interruption as a failed or unevaluable gate, writes no artifacts for phases not reached, removes
+  the isolated copy, and leaves the original tracked files and Git state unchanged.
 
 ## Assumptions
 
@@ -184,6 +202,8 @@ context, the final result remains `Unverified`, and the original working copy re
 - The developer is authorized to inspect and evaluate the selected project locally.
 - The prepared demo application permits embedding inside the local FlowProof workspace.
 - The chat request is synthetic demo input and is sanitized before persistence or model use.
+- Sanitized run artifacts under ignored `.flowproof/runs/` are the only intentional writes inside
+  the original repository root; build outputs and temporary worktrees live outside it.
 - The judged demo runs on the prepared Linux environment; cross-platform support is not an MVP
   acceptance condition.
 
@@ -204,7 +224,8 @@ This specification intentionally defines only the hackathon MVP feature slice. B
 
 ### MVP Out of Scope
 
-- Automatically modifying the developer's original working copy.
+- Automatically modifying the developer's tracked files, Git index, checked-out branch, HEAD, or
+  history.
 - Automatically creating a commit, pushing a branch, opening or merging a pull request, or deploying a change.
 - Installing a browser extension or supporting arbitrary third-party sites.
 - General-purpose browser tabs, arbitrary URL navigation, accounts, cloud synchronization, or
