@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-27
 
-**Status**: Ready for Planning
+**Status**: Ready for Plan Revision
 
 **Input**: User description: "Define FlowProof's first hackathon MVP together, starting with the problem and primary user."
 
@@ -44,20 +44,43 @@ If any required condition fails or cannot be evaluated, the result remains `Unve
 
 ### User Story 1 - Obtain a Verified Fix (Priority: P1)
 
-An indie or solo full-stack developer runs FlowProof against a reproducible visual web defect. FlowProof gathers evidence from the failing run, produces an evidence-grounded candidate change, applies that change to an isolated copy of the project, and replays the same scenario. The developer receives a `Verified Fix` result only when the replay satisfies every agreed verification condition.
+An indie or solo full-stack developer opens a local FlowProof workspace with the prepared web
+application on the left and the FlowProof agent on the right. The developer starts the run through
+chat, watches the agent reproduce the defect and expose its evidence and verification progress, and
+receives a `Verified Fix` result only when replay satisfies every agreed verification condition.
 
 **Why this priority**: This closed loop is the product's primary value and must be independently demonstrable as the minimum viable product.
 
-**Independent Test**: Start from the agreed known-bad scenario and run the complete flow without manually editing the candidate change. The story succeeds when the original failure is reproduced, the candidate change is applied only to an isolated copy, the same scenario is replayed, and the final result accurately reports whether the change was verified.
+**Independent Test**: Open the prepared local workspace and start the agreed known-bad scenario
+through chat without manually entering verification configuration or editing the candidate change.
+The story succeeds when the same workspace shows the reproduced failure, agent activity, evidence,
+isolated candidate application, replay, and accurate final result.
 
 **Acceptance Scenarios**:
 
-1. **Given** the agreed scenario is in its known-bad state, **When** the developer starts a FlowProof run, **Then** FlowProof reproduces the failure and records evidence from that run.
-2. **Given** the failure evidence exists, **When** FlowProof produces a candidate change, **Then** the candidate's factual claims are connected to evidence from the same run.
-3. **Given** a candidate change is ready, **When** FlowProof evaluates it, **Then** FlowProof applies it only to an isolated copy and leaves the developer's original working copy unchanged.
-4. **Given** the candidate change was applied successfully, **When** FlowProof replays the same scenario, **Then** it labels the result `Verified Fix` only if every agreed verification condition passes.
-5. **Given** the run is finalized, **When** the developer reviews the result, **Then** the result connects the failure evidence, evidence-grounded diagnosis, candidate change, replay outcome, and final status without requiring a separate review workspace.
-6. **Given** the run is finalized as `Verified Fix`, **When** FlowProof hands the result to the developer, **Then** it provides the verified diff and supporting result without committing or changing the developer's original working copy.
+1. **Given** FlowProof is opened for the prepared scenario, **When** the workspace becomes ready,
+   **Then** it shows the live application on the left and chat, agent activity, evidence, and gate
+   status on the right.
+2. **Given** the workspace is ready, **When** the developer sends the natural-language start
+   request, **Then** FlowProof starts the fixed scenario without asking for file paths, expected
+   values, or structured verification rules.
+3. **Given** the agreed scenario is in its known-bad state, **When** the run starts, **Then** the
+   visible application reproduces the failure and FlowProof records evidence from that run.
+4. **Given** the run advances, **When** FlowProof changes phase or captures evidence, **Then** the
+   right panel shows the ordered activity and available Evidence IDs without exposing secrets.
+5. **Given** the failure evidence exists, **When** FlowProof produces a candidate change, **Then**
+   the candidate's factual claims are connected to evidence from the same run.
+6. **Given** a candidate change is ready, **When** FlowProof evaluates it, **Then** FlowProof applies
+   it only to an isolated copy and leaves the developer's original working copy unchanged.
+7. **Given** the candidate change was applied successfully, **When** FlowProof replays the same
+   scenario, **Then** the left application shows the replay and the result becomes `Verified Fix`
+   only if every agreed verification condition passes.
+8. **Given** the run is finalized, **When** the developer reviews the result, **Then** the same
+   workspace connects the chat request, failure evidence, diagnosis, candidate change, replay,
+   gate outcomes, and final status.
+9. **Given** the run is finalized as `Verified Fix`, **When** FlowProof hands the result to the
+   developer, **Then** it provides the verified diff and an exportable Proof Trail without
+   committing or changing the developer's original working copy.
 
 ---
 
@@ -67,7 +90,9 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 
 **Why this priority**: A separate failure demonstration proves that FlowProof is a verification system rather than a tool that always approves its own suggestions.
 
-**Independent Test**: Run one predefined failure case in which at least one required verification gate cannot pass. The story succeeds when the final result remains `Unverified`, the failed gate is visible, and the original working copy remains unchanged.
+**Independent Test**: Start the predefined Failure case from the local workspace. The story
+succeeds when the right panel stops before unsafe application, shows the failed gate and supporting
+context, the final result remains `Unverified`, and the original working copy remains unchanged.
 
 **Acceptance Scenarios**:
 
@@ -84,6 +109,10 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 - If a candidate change targets content outside the permitted source boundary, application is rejected and the result remains `Unverified`.
 - If candidate application succeeds but either the filtered data check or any Canvas chart check fails, the result remains `Unverified`.
 - If sanitization removes information required to evaluate a gate safely, the system reports that gate as unevaluable rather than exposing the sensitive value or granting `Verified Fix`.
+- If the workspace event stream disconnects, the run continues safely and the workspace restores
+  ordered activity and final state after reconnection without inventing missing events.
+- If the embedded prepared application cannot load, the run does not call the model or apply a
+  patch and reports the startup gate as unevaluable.
 
 ## Requirements *(mandatory)*
 
@@ -102,6 +131,14 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 - **FR-011**: The completed result MUST connect the failure evidence, evidence-grounded diagnosis, candidate diff, replay evidence, gate outcomes, and final status in one review flow.
 - **FR-012**: The system MUST omit or redact secrets, credentials, cookies, authorization headers, and unnecessary sensitive request or response data from captured evidence and model inputs.
 - **FR-013**: The system MUST NOT automatically commit, push, open or merge a pull request, deploy, or modify the developer's original working copy.
+- **FR-014**: The system MUST provide a local split-view workspace that presents the prepared web
+  application and the FlowProof agent in the same browser window.
+- **FR-015**: The agent panel MUST provide chat input and show ordered run activity, available
+  Evidence IDs, candidate status, verification gates, and the final result as the run progresses.
+- **FR-016**: A chat request MAY express the developer's goal but MUST NOT replace or modify the
+  fixed scenario, verification oracle, permitted source boundary, or deterministic final gates.
+- **FR-017**: The completed Proof Trail MUST remain reviewable inside the workspace and MUST be
+  exportable as a self-contained local result.
 
 ### Key Entities
 
@@ -110,6 +147,10 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 - **Evidence Bundle**: The run-scoped collection of failure and replay evidence used for diagnosis and verification.
 - **Candidate Change**: The proposed diff, its cited Evidence IDs, its permitted target scope, and its isolated application outcome.
 - **Verification Result**: The final `Verified Fix` or `Unverified` status, each gate outcome, and any failed or unevaluable reason.
+- **Workspace Session**: The local split-view context that owns the selected prepared case, chat,
+  visible target application, and current run.
+- **Run Activity Event**: One ordered, sanitized update that connects agent progress, evidence,
+  candidate status, gate changes, or finalization to a run.
 
 ## Success Criteria *(mandatory)*
 
@@ -123,6 +164,12 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 - **SC-006**: Every factual claim in the final diagnosis and candidate rationale references an Evidence ID that exists in the same run's Evidence Bundle.
 - **SC-007**: After both demo cases finish, the developer's original working-copy contents and Git history are unchanged.
 - **SC-008**: Seeded secret markers used for validation do not appear in captured evidence, model inputs, or the completed result.
+- **SC-009**: A developer can start either prepared case and review its final result without leaving
+  the primary split-view workspace.
+- **SC-010**: For every phase reached by a run, the workspace displays the phase in order and shows
+  every emitted Evidence ID and gate update associated with that phase.
+- **SC-011**: Closing and reopening the activity stream during a prepared run does not change the
+  final result and restores the ordered activity already emitted for that run.
 
 ## Assumptions
 
@@ -130,6 +177,8 @@ An indie or solo full-stack developer runs a deliberately failing evaluation cas
 - The expected dataset and chart result remain immutable throughout a run.
 - Initial project dependencies are installed before measuring the five-minute demo completion target.
 - The developer is authorized to inspect and evaluate the selected project locally.
+- The prepared demo application permits embedding inside the local FlowProof workspace.
+- The chat request is synthetic demo input and is sanitized before persistence or model use.
 
 ## Scope Boundaries
 
@@ -141,17 +190,28 @@ This specification intentionally defines only the hackathon MVP feature slice. B
 - The P1 verified-fix flow and P2 unverified-fix flow both use controlled cases derived from this single defect.
 - Candidate changes are applied and replayed only in an isolated project copy.
 - A completed run provides the candidate diff, evidence, replay outcome, and final status for the developer to review.
+- One local, single-user split-view workspace shows the prepared target application and agent panel.
+- Chat starts one fixed Hero or Failure case and does not redefine its oracle or source boundary.
+- A self-contained Proof Trail can be exported after the run.
 
 ### MVP Out of Scope
 
 - Automatically modifying the developer's original working copy.
 - Automatically creating a commit, pushing a branch, opening or merging a pull request, or deploying a change.
+- Installing a browser extension or supporting arbitrary third-party sites.
+- General-purpose browser tabs, arbitrary URL navigation, accounts, cloud synchronization, or
+  multi-user collaboration.
+- Allowing chat to create new scenarios, redefine expected behavior, or expand the permitted source
+  boundary during a run.
 
 ### Future Expansion
 
 - User-supplied or arbitrary visual web defects are intentionally deferred until after the MVP.
 - Additional defect types may be added later without changing the MVP requirement that every fix be grounded in failure evidence and verified by replaying the same scenario.
 - Optional Git integration may later preserve an approved verified change as a local commit or remote collaboration artifact.
+- A Chrome Side Panel may later pair the same FlowProof engine with the developer's existing tab;
+  an owned desktop browser may be considered when reproducible browser isolation is more important
+  than extension integration.
 - Each expansion should be introduced as a separate numbered feature specification with its own user scenarios, requirements, and success criteria.
 - A future generalized version may obtain its verification oracle from existing test assertions, fixtures, contracts, or an explicitly approved known-good baseline. When no trustworthy oracle exists, the user must define or approve the expected behavior before `Verified Fix` can be granted.
 - A future generalized version should discover the candidate source scope automatically from failure evidence and project relationships while applying safe default exclusions. It should ask for user approval only when the verification oracle is missing or the candidate scope remains materially ambiguous.

@@ -32,5 +32,8 @@
 ## Notes
 
 - The problem, primary user, P1/P2 scenarios, MVP scope, verification semantics, functional requirements, and success criteria were jointly agreed with the product owner on 2026-10-27.
+- The local split-view workspace, chat-driven start flow, live activity visibility, and exportable
+  Proof Trail were approved by the product owner and revalidated against this checklist on
+  2026-10-27.
 - The five-minute target is limited to the prepared hackathon demo environment and excludes initial dependency installation.
 - Frameworks, model selection, isolation mechanism, and other technical design decisions remain for the Plan phase.
