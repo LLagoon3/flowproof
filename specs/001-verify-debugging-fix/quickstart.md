@@ -23,11 +23,12 @@ Reference [the data model](./data-model.md), [the CLI contract](./contracts/cli.
 ```bash
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
-cp .env.example .env
+test -f .env || cp .env.example .env
 ```
 
-Set `MODEL_API_KEY` in `.env`. Never commit `.env` or paste the key into logs, reports, fixtures, or
-issues.
+The guard keeps an existing `.env` and its key. Set `MODEL_API_KEY` in `.env` before the live Hero
+run or the protocol smoke; the deterministic commands below and the Failure case need no key. Never
+commit `.env` or paste the key into logs, reports, fixtures, or issues.
 
 The root `pnpm flowproof` script loads this ignored file with Node.js 24
 `--env-file-if-exists=.env`. An already exported environment variable takes precedence, so no
@@ -39,11 +40,21 @@ additional environment-loader package is required.
 pnpm test
 pnpm test:contract
 pnpm test:integration
+pnpm typecheck
+pnpm build
 ```
+
+`pnpm test` runs the unit, contract, integration, and UI projects; `pnpm test:contract` and
+`pnpm test:integration` rerun one project. The live Meta smoke is excluded from all three. Some
+integration tests launch the Studio in the pinned headed Chromium against temporary clones, so they
+need the display, and their output includes a launch object and a `RUN_INTERRUPTED` diagnostic from
+the lifecycle tests.
 
 Expected outcome:
 
-- Every JSON fixture validates against its contract.
+- Every test passes, and `pnpm typecheck` and `pnpm build` succeed. The build writes only ignored
+  `dist/` outputs.
+- Every valid JSON fixture validates against its contract, and every invalid fixture is rejected.
 - Studio event fixtures preserve ordered, sanitized activity while connected.
 - Sanitizer tests remove all seeded secret markers.
 - Invalid Evidence IDs and unsafe patches are rejected.
@@ -61,17 +72,27 @@ pnpm flowproof studio --scenario canvas-filter-failure-invalid-citation
 
 Expected outcome:
 
+- The script compiles the engine, then prints
+  `{"mode":"studio","origin":"http://127.0.0.1:<port>","session_id":"<uuid>"}` once the browser is
+  ready.
 - Headed Chromium opens one FlowProof Studio page with the prepared application on the left and
-  Chat, Agent Activity, Evidence, Gates, and Proof Trail views on the right.
-- Submit the prefilled request or an equivalent goal. The request cannot change the committed
-  scenario, oracle, permitted source path, commands, or gates.
+  Chat, Agent Activity, Evidence, Gates, and Proof Trail views on the right. The Failure case is
+  preselected and its default request is prefilled.
+- Select **Start run** to submit the prefilled request or an equivalent goal of up to 500
+  characters. The request cannot change the committed scenario, oracle, permitted source path,
+  commands, or gates.
 - The known-bad chart failure is reproduced and the required failure evidence is captured.
-- The report labels the provider response as an injected evaluation fixture.
-- The nonexistent Evidence ID fails `citations_valid` before patch application.
+- Agent Activity and the Proof Trail's diagnosis provenance label the diagnosis as an injected
+  evaluation fixture, not a Meta Model API response, without displaying the fixture content.
+- The nonexistent Evidence ID fails `citations_valid` with `CITATION_UNKNOWN_EVIDENCE_ID` before
+  patch application. `patch_applied`, `dataset_matches`, and `canvas_matches` are unevaluable, and
+  no candidate diff or replay evidence is written.
 - The final status is `Unverified`; the failed gate and collected evidence remain visible in the
   right panel without leaving the Studio.
 - The original repository's tracked files, index, checked-out branch, `HEAD`, and Git history are
   unchanged; only ignored sanitized run artifacts may be added.
+- Close the Studio window or press Ctrl+C to end the session. Doing so while a run is reproducing,
+  diagnosing, applying, or replaying finalizes it as `Unverified` and exits with code `2`.
 
 ## Open the Studio for the live Hero case
 
@@ -104,11 +125,15 @@ Review the completed run directly in the right panel:
 1. reproduction actions and failure evidence;
 2. expected versus observed dataset;
 3. failure screenshot, when failure capture completed;
-4. evidence-linked diagnosis;
+4. diagnosis provenance and the Evidence IDs accepted by `citations_valid`;
 5. candidate diff and patch-guard outcome;
 6. replay screenshot, when replay completed;
-7. every gate outcome; and
+7. every gate outcome and phase timing; and
 8. final `Verified Fix` or `Unverified` status.
+
+The Studio does not display the diagnosis text or injected fixture content. The strict-schema
+diagnosis and every other sanitized artifact for the phases reached remain under the ignored
+`.flowproof/runs/<run-id>/` directory.
 
 The MVP keeps the Proof Trail inside the active Studio. Portable HTML export and a headless CLI are
 tracked as follow-up work rather than duplicate implementation surfaces.
@@ -119,11 +144,14 @@ tracked as follow-up work rather than duplicate implementation surfaces.
 pnpm test:e2e
 ```
 
-The deterministic suite covers the Studio, target frame, browser-close cleanup, and provider
-fixtures. Its Hero path feeds a recorded schema-valid response only through the in-process
-`startStudio({ testTransport })` test entry and does not call Meta; no CLI flag, environment
-variable, scenario field, or API body can select that transport, and the committed Hero scenario
-remains configured for the live Meta provider. Run the credential-gated protocol smoke separately:
+The headed deterministic suite runs serially against temporary clones with `MODEL_API_KEY` unset in
+the process environment. It covers the recorded Hero path, the Failure fixture, closing the Studio
+while reproducing, diagnosing, and replaying, SIGINT while applying, a target-frame load failure,
+and seeded secret markers. Its Hero path feeds a recorded schema-valid response only through the
+in-process `startStudio({ testTransport })` test entry and does not call Meta; no CLI flag,
+environment variable, scenario field, or API body can select that transport, and the committed Hero
+scenario remains configured for the live Meta provider. Run the credential-gated protocol smoke
+separately:
 
 ```bash
 pnpm test:meta-smoke
