@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowproof.local/contracts/evidence-bundle.schema.json",
+  "title": "FlowProof Evidence Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "scenario_id",
+    "phase",
+    "items",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "phase": { "enum": ["failure", "replay"] },
+    "items": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/evidenceItem" }
+    },
+    "manifest_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "phase": { "const": "failure" } } },
+      "then": {
+        "properties": {
+          "items": {
+            "minItems": 7,
+            "maxItems": 7,
+            "contains": { "properties": { "type": { "const": "source" } } },
+            "minContains": 1,
+            "maxContains": 1
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "items": {
+          "allOf": [
+            {
+              "contains": { "properties": { "type": { "const": "actions" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "type": { "const": "dataset" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "type": { "const": "chart" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "type": { "const": "screenshot" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "type": { "const": "console" } } },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": { "properties": { "type": { "const": "network" } } },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "run_id",
+        "phase",
+        "type",
+        "captured_at",
+        "artifact_path",
+        "sha256",
+        "summary",
+        "provenance",
+        "redactions"
+      ],
+      "properties": {
+        "evidence_id": {
+          "type": "string",
+          "pattern": "^ev_(?:failure|replay)_(?:actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$"
+        },
+        "run_id": { "type": "string", "format": "uuid" },
+        "phase": { "enum": ["failure", "replay"] },
+        "type": {
+          "enum": ["actions", "dataset", "chart", "screenshot", "console", "network", "source"]
+        },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "artifact_path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mechanism", "origin", "trusted", "source_path"],
+          "properties": {
+            "mechanism": { "type": "string", "minLength": 1 },
+            "origin": { "enum": ["scenario", "browser", "repository"] },
+            "trusted": { "type": "boolean" },
+            "source_path": {
+              "oneOf": [
+                { "$ref": "#/$defs/relativePath" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        "redactions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["category", "count"],
+            "properties": {
+              "category": {
+                "enum": ["credential", "header", "query", "cookie", "body", "path"]
+              },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-flowproof-invariants": [
+    "Every item run_id and phase equals the owning bundle.",
+    "Evidence IDs are unique within the bundle.",
+    "Sanitization precedes persistence, hashing, and transmission."
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowproof.local/contracts/scenario.schema.json",
+  "title": "FlowProof Predefined Scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scenario_id",
+    "case",
+    "app",
+    "actions",
+    "oracle",
+    "permitted_source_paths",
+    "provider",
+    "timeouts"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "case": {
+      "enum": ["hero", "failure-invalid-citation"]
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "url", "start_command"],
+      "properties": {
+        "root": { "$ref": "#/$defs/repoPath" },
+        "url": {
+          "type": "string",
+          "pattern": "^http://(?:127\\.0\\.0\\.1|localhost):[0-9]+(?:/.*)?$"
+        },
+        "start_command": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action_id", "type", "selector", "value"],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "type": { "const": "select" },
+          "selector": { "type": "string", "minLength": 1 },
+          "value": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_path",
+        "chart_path",
+        "screenshot_path",
+        "max_diff_pixel_ratio"
+      ],
+      "properties": {
+        "dataset_path": { "$ref": "#/$defs/repoPath" },
+        "chart_path": { "$ref": "#/$defs/repoPath" },
+        "screenshot_path": { "$ref": "#/$defs/repoPath" },
+        "max_diff_pixel_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.01
+        }
+      }
+    },
+    "permitted_source_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/repoPath" }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "fixture_path", "injected_fault_label"],
+      "properties": {
+        "mode": { "enum": ["meta", "fixture"] },
+        "fixture_path": {
+          "oneOf": [
+            { "$ref": "#/$defs/repoPath" },
+            { "type": "null" }
+          ]
+        },
+        "injected_fault_label": {
+          "type": ["string", "null"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "meta" } } },
+          "then": {
+            "properties": {
+              "fixture_path": { "type": "null" },
+              "injected_fault_label": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "fixture" } } },
+          "then": {
+            "properties": {
+              "fixture_path": { "$ref": "#/$defs/repoPath" },
+              "injected_fault_label": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_ms", "model_ms", "replay_ms", "total_ms"],
+      "properties": {
+        "capture_ms": { "type": "integer", "minimum": 1, "maximum": 45000 },
+        "model_ms": { "type": "integer", "minimum": 1, "maximum": 90000 },
+        "replay_ms": { "type": "integer", "minimum": 1, "maximum": 120000 },
+        "total_ms": { "type": "integer", "minimum": 1, "maximum": 300000 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "case": { "const": "hero" } } },
+      "then": { "properties": { "provider": { "properties": { "mode": { "const": "meta" } } } } }
+    },
+    {
+      "if": { "properties": { "case": { "const": "failure-invalid-citation" } } },
+      "then": { "properties": { "provider": { "properties": { "mode": { "const": "fixture" } } } } }
+    }
+  ],
+  "$defs": {
+    "repoPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    }
+  },
+  "x-flowproof-invariants": [
+    "The tracked working tree is clean before a run.",
+    "Oracle and fixture paths do not overlap permitted_source_paths.",
+    "Failure and replay use the identical actions array."
+  ]
+}

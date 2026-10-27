@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowproof.local/contracts/run-result.schema.json",
+  "title": "FlowProof Run Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "scenario_id",
+    "case",
+    "started_at",
+    "completed_at",
+    "original_head",
+    "original_status_digest",
+    "phase_durations_ms",
+    "provider",
+    "status",
+    "gates",
+    "failed_gate_ids",
+    "diagnosis_path",
+    "candidate_diff_path",
+    "failure_screenshot_path",
+    "replay_screenshot_path",
+    "visual_diff_path",
+    "report_path",
+    "total_duration_ms"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "run_id": { "type": "string", "format": "uuid" },
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "case": { "enum": ["hero", "failure-invalid-citation"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "original_head": { "$ref": "#/$defs/gitOid" },
+    "original_status_digest": { "$ref": "#/$defs/sha256" },
+    "phase_durations_ms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture", "model", "apply", "replay", "report"],
+      "properties": {
+        "capture": { "$ref": "#/$defs/milliseconds" },
+        "model": { "$ref": "#/$defs/milliseconds" },
+        "apply": { "$ref": "#/$defs/milliseconds" },
+        "replay": { "$ref": "#/$defs/milliseconds" },
+        "report": { "$ref": "#/$defs/milliseconds" }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "model", "injected_fault_label"],
+      "properties": {
+        "mode": { "enum": ["meta", "fixture"] },
+        "model": { "type": ["string", "null"] },
+        "injected_fault_label": { "type": ["string", "null"] }
+      }
+    },
+    "status": { "enum": ["Verified Fix", "Unverified"] },
+    "gates": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": { "$ref": "#/$defs/gateOutcome" },
+      "allOf": [
+        {
+          "contains": { "properties": { "gate_id": { "const": "failure_reproduced" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "evidence_complete" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "citations_valid" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "patch_scope_valid" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "patch_applied" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "dataset_matches" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "canvas_matches" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": { "properties": { "gate_id": { "const": "secret_scan_clean" } } },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": { "gate_id": { "const": "original_worktree_unchanged" } }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "failed_gate_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/gateId" }
+    },
+    "diagnosis_path": { "$ref": "#/$defs/nullablePath" },
+    "candidate_diff_path": { "$ref": "#/$defs/nullablePath" },
+    "failure_screenshot_path": { "$ref": "#/$defs/relativePath" },
+    "replay_screenshot_path": { "$ref": "#/$defs/nullablePath" },
+    "visual_diff_path": { "$ref": "#/$defs/nullablePath" },
+    "report_path": { "$ref": "#/$defs/relativePath" },
+    "total_duration_ms": { "$ref": "#/$defs/milliseconds" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "Verified Fix" } } },
+      "then": {
+        "properties": {
+          "failed_gate_ids": { "maxItems": 0 },
+          "gates": {
+            "contains": { "properties": { "status": { "const": "pass" } } },
+            "minContains": 9,
+            "maxContains": 9
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "Unverified" } } },
+      "then": {
+        "properties": {
+          "failed_gate_ids": { "minItems": 1 },
+          "gates": {
+            "contains": {
+              "properties": { "status": { "enum": ["fail", "unevaluable"] } }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "provider": { "properties": { "mode": { "const": "meta" } } } } },
+      "then": {
+        "properties": {
+          "provider": {
+            "properties": {
+              "model": { "const": "muse-spark-1.3" },
+              "injected_fault_label": { "type": "null" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "provider": { "properties": { "mode": { "const": "fixture" } } } }
+      },
+      "then": {
+        "properties": {
+          "provider": {
+            "properties": {
+              "model": { "type": "null" },
+              "injected_fault_label": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "milliseconds": { "type": "integer", "minimum": 0 },
+    "gitOid": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "nullablePath": {
+      "oneOf": [
+        { "$ref": "#/$defs/relativePath" },
+        { "type": "null" }
+      ]
+    },
+    "gateId": {
+      "enum": [
+        "failure_reproduced",
+        "evidence_complete",
+        "citations_valid",
+        "patch_scope_valid",
+        "patch_applied",
+        "dataset_matches",
+        "canvas_matches",
+        "secret_scan_clean",
+        "original_worktree_unchanged"
+      ]
+    },
+    "gateOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_id", "status", "evidence_ids", "reason_code", "message", "metrics"],
+      "properties": {
+        "gate_id": { "$ref": "#/$defs/gateId" },
+        "status": { "enum": ["pass", "fail", "unevaluable"] },
+        "evidence_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^ev_(?:failure|replay)_(?:actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$"
+          }
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "integer", "boolean", "null"]
+          }
+        }
+      }
+    }
+  },
+  "x-flowproof-invariants": [
+    "failed_gate_ids contains every gate with fail or unevaluable status and no passing gate.",
+    "Every gate Evidence ID exists in an Evidence Bundle from the same run."
+  ]
+}
