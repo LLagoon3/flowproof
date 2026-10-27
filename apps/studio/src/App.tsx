@@ -4,17 +4,19 @@ import type { ChangeEvent } from 'react'
 import { createStudioClient, toStudioError } from './api.js'
 import type { RunEventSubscription, StudioClient, StudioError } from './api.js'
 import { AgentPanel } from './components/AgentPanel.js'
+import { ProofTrail } from './components/ProofTrail.js'
 import { TargetPane } from './components/TargetPane.js'
 import { canStartRun, initialStudioState, runEventHandlers, studioReducer } from './state.js'
 import type { StudioState } from './state.js'
 
-// The split Studio workspace: the prepared application framed on the left, the agent pane on the
-// right, and the prepared-case selector above them. `studioReducer` alone decides what the session
-// may do; the effects below only keep network work in step with its state. Each request owns an
-// AbortController that its effect aborts on change or unmount, and an aborted request never
-// dispatches, so a stale or post-unmount response cannot change the visible session. The live
-// stream is advisory and the result poll is authoritative: they run independently, so a stream
-// that disconnects or is rejected leaves the poll running. Errors shown are client-authored by code.
+// The split Studio workspace: the prepared application framed on the left, the agent pane and the
+// finalized run's Proof Trail on the right, and the prepared-case selector above them.
+// `studioReducer` alone decides what the session may do; the effects below only keep network work
+// in step with its state. Each request owns an AbortController that its effect aborts on change or
+// unmount, and an aborted request never dispatches, so a stale or post-unmount response cannot
+// change the visible session. The live stream is advisory and the result poll is authoritative:
+// they run independently, so a stream that disconnects or is rejected leaves the poll running.
+// Errors shown are client-authored by code.
 
 export interface AppProps {
   /** The same-origin Studio client; one is created when omitted. */
@@ -161,7 +163,10 @@ export function App({ client: providedClient }: AppProps) {
       </header>
       <main className="studio__workspace">
         <TargetPane />
-        <AgentPanel state={state} requestText={requestText} onRequestTextChange={changeRequestText} onStartRun={startRun} />
+        <div className="studio__side">
+          <AgentPanel state={state} requestText={requestText} onRequestTextChange={changeRequestText} onStartRun={startRun} />
+          <ProofTrail run={state.run} client={client} />
+        </div>
       </main>
     </div>
   )

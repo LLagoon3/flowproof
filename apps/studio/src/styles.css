@@ -185,13 +185,23 @@ code {
 
 /* Agent pane */
 
-.agent-panel {
+/* The right column scrolls as one: the agent pane, then the Proof Trail. */
+
+.studio__side {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--gap);
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+}
+
+.agent-panel {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
   padding: 0.75rem 1rem 1rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -475,6 +485,225 @@ code {
   color: var(--color-warn);
 }
 
+/* Proof Trail */
+
+.proof-trail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.proof-trail__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.proof-trail__section {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.proof-trail__heading {
+  margin: 0;
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.proof-trail__empty,
+.proof-trail__note,
+.proof-trail__absent {
+  margin: 0;
+  color: var(--color-muted);
+}
+
+.proof-trail__error {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--color-fail);
+  border-radius: 0.25rem;
+  color: var(--color-fail);
+  background: var(--color-fail-surface);
+}
+
+.proof-trail__status {
+  padding: 0.5rem 0.75rem;
+  border-top: 0;
+  border-radius: 0.375rem;
+}
+
+.proof-trail__status[data-status='verified'] {
+  color: var(--color-pass);
+  background: var(--color-pass-surface);
+}
+
+.proof-trail__status[data-status='unverified'] {
+  color: var(--color-fail);
+  background: var(--color-fail-surface);
+}
+
+.proof-trail__status .proof-trail__note {
+  color: inherit;
+}
+
+.proof-trail__verdict {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.proof-trail__provider,
+.proof-trail__fixture-kind,
+.proof-trail__fixture-label {
+  margin: 0;
+}
+
+.proof-trail__fixture {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--color-warn);
+  border-radius: 0.25rem;
+  color: var(--color-warn);
+  background: var(--color-warn-surface);
+}
+
+.proof-trail__figure {
+  margin: 0;
+}
+
+.proof-trail__screenshot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+}
+
+.proof-trail__caption {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.proof-trail__list,
+.proof-trail__gates,
+.proof-gate__evidence {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proof-trail__list,
+.proof-trail__gates {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.proof-trail__item {
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.proof-trail__details > summary {
+  cursor: pointer;
+}
+
+.proof-trail__json,
+.proof-trail__diff {
+  max-height: 20rem;
+  margin: 0.25rem 0 0;
+  padding: 0.5rem;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre;
+  background: var(--color-subtle);
+}
+
+.proof-gate {
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+}
+
+.proof-gate__head,
+.proof-gate__message,
+.proof-gate__metrics {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.proof-gate__name {
+  font-weight: 600;
+}
+
+.proof-gate[data-status='pass'] .proof-gate__status {
+  font-weight: 600;
+  color: var(--color-pass);
+}
+
+.proof-gate[data-status='fail'] .proof-gate__status {
+  font-weight: 600;
+  color: var(--color-fail);
+}
+
+.proof-gate[data-status='unevaluable'] .proof-gate__status {
+  font-weight: 600;
+  color: var(--color-warn);
+}
+
+.proof-gate__evidence,
+.proof-gate__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.proof-gate__metrics {
+  color: var(--color-muted);
+}
+
+.proof-trail__timing {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+}
+
+.proof-trail__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.proof-trail__row dt {
+  color: var(--color-muted);
+}
+
+.proof-trail__row dd {
+  margin: 0;
+  text-align: right;
+}
+
+.proof-trail__total {
+  font-weight: 600;
+}
+
 /* Narrow screens: stack the panes and let the page scroll instead of the agent pane. */
 
 @media (max-width: 60rem) {
@@ -491,7 +720,7 @@ code {
     min-height: max(30rem, 70vh);
   }
 
-  .agent-panel {
+  .studio__side {
     overflow-y: visible;
   }
 }

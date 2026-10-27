@@ -45,7 +45,7 @@ const EVENT_LABELS: Readonly<Record<StudioEventType, string>> = {
   agent_message: 'Agent',
 }
 
-const GATE_LABELS: Readonly<Record<GateId, string>> = {
+export const GATE_LABELS: Readonly<Record<GateId, string>> = {
   failure_reproduced: 'Failure reproduced',
   evidence_complete: 'Evidence complete',
   citations_valid: 'Citations valid',
@@ -57,7 +57,7 @@ const GATE_LABELS: Readonly<Record<GateId, string>> = {
   original_worktree_unchanged: 'Original worktree unchanged',
 }
 
-const GATE_STATUS_LABELS: Readonly<Record<GateStatus | 'pending', string>> = {
+export const GATE_STATUS_LABELS: Readonly<Record<GateStatus | 'pending', string>> = {
   pending: 'Pending',
   pass: 'Pass',
   fail: 'Fail',

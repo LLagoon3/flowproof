@@ -1,13 +1,17 @@
-import { GATE_IDS, eventOrderViolation, isValidRequestText, studioError } from './api.js'
+import { EVIDENCE_TYPES, GATE_IDS, evidenceIdParts, eventOrderViolation, isValidRequestText, studioError } from './api.js'
 import type {
+  EvidencePhase,
+  EvidenceType,
   GateId,
   GateOutcome,
   GateStatus,
   GateSummary,
+  PhaseDurations,
   RunEventHandlers,
   RunResult,
   RunStart,
   RunState,
+  RunStatus,
   ScenarioSummary,
   StudioError,
   StudioEvent,
@@ -244,4 +248,78 @@ export function selectGateRows(run: RunView | null): readonly GateRow[] {
     const outcome = run?.status === 'finalized' ? (run.result.gates.find((gate) => gate.gate_id === gateId) ?? null) : null
     return { gateId, status: summary?.status ?? 'pending', reasonCode: summary?.reason_code ?? null, outcome }
   })
+}
+
+export interface ProofTrailEvidence {
+  readonly evidenceId: string
+  readonly type: EvidenceType
+}
+
+export interface ProofTrailCapture {
+  readonly phase: EvidencePhase
+  /** This phase's Evidence IDs that the session received or a final gate cites, in contract type order. */
+  readonly evidence: readonly ProofTrailEvidence[]
+  /** The phase screenshot the result records; null when the run never took one. */
+  readonly screenshotPath: string | null
+  /** The screenshot's Evidence ID; null unless the session received it. */
+  readonly screenshotEvidenceId: string | null
+}
+
+/** Who produced the diagnosis: the live Meta model or a clearly labeled injected fixture. */
+export type ProofTrailProvenance =
+  | { readonly kind: 'meta'; readonly model: string }
+  | { readonly kind: 'fixture'; readonly label: string }
+
+export interface ProofTrailView {
+  readonly runId: string
+  readonly status: RunStatus
+  readonly failedGateIds: readonly GateId[]
+  readonly provenance: ProofTrailProvenance
+  readonly failure: ProofTrailCapture
+  readonly replay: ProofTrailCapture
+  /** True when the result records a validated candidate diff. */
+  readonly candidateDiff: boolean
+  /** All nine final outcomes in contract order. */
+  readonly gates: readonly GateOutcome[]
+  readonly durations: PhaseDurations
+  readonly totalDurationMs: number
+}
+
+function captureOf(phase: EvidencePhase, evidenceIds: ReadonlySet<string>, screenshotPath: string | null): ProofTrailCapture {
+  const evidence: ProofTrailEvidence[] = []
+  for (const evidenceId of evidenceIds) {
+    const parts = evidenceIdParts(evidenceId)
+    if (parts !== null && parts.phase === phase) evidence.push({ evidenceId, type: parts.type })
+  }
+  evidence.sort((a, b) => EVIDENCE_TYPES.indexOf(a.type) - EVIDENCE_TYPES.indexOf(b.type) || a.evidenceId.localeCompare(b.evidenceId))
+  // A screenshot ID counts only when the result also records that the screenshot was persisted.
+  const screenshot = screenshotPath === null ? undefined : evidence.find((item) => item.type === 'screenshot')
+  return { phase, evidence, screenshotPath, screenshotEvidenceId: screenshot?.evidenceId ?? null }
+}
+
+/**
+ * The in-workspace Proof Trail of a finalized run, built only from its authoritative result and the
+ * Evidence IDs the session already holds: those announced live and those the final gates cite. Phases
+ * the run never reached have no evidence, screenshot, or diff; nothing is inferred from artifact paths.
+ */
+export function selectProofTrail(run: RunView | null): ProofTrailView | null {
+  if (run === null || run.status !== 'finalized') return null
+  const { result } = run
+  const known = new Set([...run.evidenceIds, ...result.gates.flatMap((gate) => gate.evidence_ids)])
+  const gates = GATE_IDS.map((gateId) => result.gates.find((gate) => gate.gate_id === gateId)).filter((gate) => gate !== undefined)
+  return {
+    runId: run.runId,
+    status: result.status,
+    failedGateIds: result.failed_gate_ids,
+    provenance:
+      result.provider.mode === 'fixture'
+        ? { kind: 'fixture', label: result.provider.injected_fault_label ?? '' }
+        : { kind: 'meta', model: result.provider.model ?? '' },
+    failure: captureOf('failure', known, result.failure_screenshot_path),
+    replay: captureOf('replay', known, result.replay_screenshot_path),
+    candidateDiff: result.candidate_diff_path !== null,
+    gates,
+    durations: result.phase_durations_ms,
+    totalDurationMs: result.total_duration_ms,
+  }
 }

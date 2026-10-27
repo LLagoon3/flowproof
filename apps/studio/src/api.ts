@@ -1,8 +1,11 @@
 import type {
+  EvidencePhase,
+  EvidenceType,
   GateId,
   GateOutcome,
   GateStatus,
   GateSummary,
+  PhaseDurations,
   RunResult,
   RunState,
   RunStatus,
@@ -18,10 +21,13 @@ import type {
 // echo a response body, a server message, or a rejected value.
 
 export type {
+  EvidencePhase,
+  EvidenceType,
   GateId,
   GateOutcome,
   GateStatus,
   GateSummary,
+  PhaseDurations,
   RunResult,
   RunState,
   RunStatus,
@@ -59,6 +65,8 @@ export const RUN_STATES = [
   'finalized',
 ] as const satisfies readonly RunState[]
 export const RUN_STATUSES = ['Verified Fix', 'Unverified'] as const satisfies readonly RunStatus[]
+export const EVIDENCE_PHASES = ['failure', 'replay'] as const satisfies readonly EvidencePhase[]
+export const EVIDENCE_TYPES = ['actions', 'dataset', 'chart', 'screenshot', 'console', 'network', 'source'] as const satisfies readonly EvidenceType[]
 export const STUDIO_EVENT_TYPES = [
   'chat_received',
   'phase_started',
@@ -164,7 +172,7 @@ const RELATIVE_PATH_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+$/
 const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const GIT_OID_PATTERN = /^[a-f0-9]{40}$/
-const EVIDENCE_ID_PATTERN = /^ev_(?:failure|replay)_(?:actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$/
+const EVIDENCE_ID_PATTERN = /^ev_(failure|replay)_(actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$/
 const EVENT_ID_PATTERN = /^[0-9a-fA-F-]{36}:[1-9][0-9]*$/
 const TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/
 const MAX_TITLE_LENGTH = 200
@@ -383,6 +391,12 @@ function assertRunId(runId: string): void {
   if (!isUuid(runId)) throw new StudioClientError('REQUEST_INVALID')
 }
 
+/** The phase and type a well-formed Evidence ID names; null for anything else. */
+export function evidenceIdParts(id: unknown): { readonly phase: EvidencePhase; readonly type: EvidenceType } | null {
+  const match = typeof id === 'string' ? EVIDENCE_ID_PATTERN.exec(id) : null
+  return match === null ? null : { phase: match[1] as EvidencePhase, type: match[2] as EvidenceType }
+}
+
 /** The closed same-origin route for one registered Evidence ID of a run, for example a screenshot. */
 export function evidenceUrl(runId: string, evidenceId: string): string {
   assertRunId(runId)
@@ -435,6 +449,8 @@ export interface StudioClient {
   pollResult(runId: string, options?: { readonly intervalMs?: number; readonly signal?: AbortSignal }): Promise<RunResult>
   /** The validated candidate diff text, or null when the run has none. */
   readCandidateDiff(runId: string, signal?: AbortSignal): Promise<string | null>
+  /** One sanitized JSON evidence artifact of the run; screenshots are shown through `evidenceUrl` instead. */
+  readEvidence(runId: string, evidenceId: string, signal?: AbortSignal): Promise<unknown>
   /** Attaches to the live event stream of one run. Missed events are never replayed. */
   openRunEvents(runId: string, handlers: RunEventHandlers): RunEventSubscription
 }
@@ -571,6 +587,14 @@ export function createStudioClient(options: StudioClientOptions = {}): StudioCli
       const diff = mediaType(response) === 'text/plain' ? await response.text() : ''
       if (!diff.startsWith(DIFF_PREFIX)) throw new StudioClientError('RESPONSE_INVALID', 200)
       return diff
+    },
+
+    async readEvidence(runId: string, evidenceId: string, signal?: AbortSignal): Promise<unknown> {
+      const path = evidenceUrl(runId, evidenceId)
+      if (evidenceIdParts(evidenceId)?.type === 'screenshot') throw new StudioClientError('REQUEST_INVALID')
+      const response = await getJson(path, signal)
+      if (response.status !== 200) throw await rejection(response)
+      return frozenCopy(await readJson(response))
     },
 
     openRunEvents(runId: string, handlers: RunEventHandlers): RunEventSubscription {
