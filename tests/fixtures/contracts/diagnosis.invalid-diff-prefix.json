@@ -1,0 +1,29 @@
+{
+  "summary": "The region filter matches substrings instead of exact values.",
+  "root_cause": "filterByRegion uses String.prototype.includes, so prefix regions also match.",
+  "claims": [
+    {
+      "text": "The observed dataset contains eight rows instead of four.",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ]
+    },
+    {
+      "text": "The rendered chart shows duplicated quarter labels.",
+      "evidence_ids": [
+        "ev_failure_chart_001",
+        "ev_failure_screenshot_001"
+      ]
+    }
+  ],
+  "candidate": {
+    "target_paths": [
+      "apps/demo-chart/src/filterData.ts"
+    ],
+    "evidence_ids": [
+      "ev_failure_dataset_001",
+      "ev_failure_source_001"
+    ],
+    "unified_diff": "--- a/apps/demo-chart/src/filterData.ts\n"
+  }
+}

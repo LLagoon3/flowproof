@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+  "scenario_id": "canvas-filter-hero",
+  "phase": "replay",
+  "items": [
+    {
+      "evidence_id": "ev_replay_actions_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "replay",
+      "type": "actions",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/replay/actions.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "summary": "Sanitized actions evidence captured during replay.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_replay_dataset_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "replay",
+      "type": "dataset",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/replay/dataset.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "summary": "Sanitized dataset evidence captured during replay.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_replay_chart_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "replay",
+      "type": "chart",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/replay/chart.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "summary": "Sanitized chart evidence captured during replay.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_replay_screenshot_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "replay",
+      "type": "screenshot",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/replay/screenshot.json",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "summary": "Sanitized screenshot evidence captured during replay.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_replay_console_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "replay",
+      "type": "console",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/replay/console.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "summary": "Sanitized console evidence captured during replay.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_replay_network_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "replay",
+      "type": "network",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/replay/network.json",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Sanitized network evidence captured during replay.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": [
+        {
+          "category": "query",
+          "count": 2
+        }
+      ]
+    }
+  ],
+  "manifest_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+}
