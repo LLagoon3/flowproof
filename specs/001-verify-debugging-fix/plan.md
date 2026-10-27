@@ -266,7 +266,7 @@ specs/001-verify-debugging-fix/
 │   ├── scenario.schema.json
 │   ├── studio-api.md
 │   └── studio-event.schema.json
-└── tasks.md                 # created by the next Spec Kit phase
+└── tasks.md                 # dependency-ordered implementation work
 ```
 
 ### Source Code (repository root)

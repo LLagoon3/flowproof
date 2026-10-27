@@ -160,7 +160,7 @@ artifacts for phases not reached.
 **Purpose**: Complete normative lifecycle, security, documentation, and live verification without
 adding another product surface.
 
-- [ ] T061 [P] Write browser/page-close and interrupt end-to-end skeletons for close during `reproducing`, `diagnosing`, and `replaying` plus SIGINT during `applying`, asserting `Unverified`, interruption gate, stage-aware omission, FlowProof-owned remove/prune, exit `2`, and restored worktree snapshots in `tests/e2e/browser-close.spec.ts`
+- [ ] T061 [P] Write browser/page-close and interrupt end-to-end skeletons for close during `reproducing`, `diagnosing`, and `replaying` plus SIGINT during `applying`, asserting `Unverified`, the affected required gate failed or unevaluable, stage-aware omission, FlowProof-owned remove/prune, exit `2`, and restored worktree snapshots in `tests/e2e/browser-close.spec.ts`
 - [ ] T062 [P] Write the target-frame load-failure skeleton asserting no model call, no patch, null `failure_screenshot_path`, no failure bundle, `failure_reproduced` and dependents failed or unevaluable, contract-valid `result.json`, and cleanup in `tests/e2e/target-load-failure.spec.ts`
 - [ ] T063 [P] Write seeded-marker end-to-end coverage across artifacts, captured Meta request body, chat/events, UI, diagnostics, and final result in `tests/e2e/secret-safety.spec.ts`
 - [ ] T064 Implement page/browser-close detection and interrupt handling with safe finalization, FlowProof-owned worktree remove/prune, snapshot comparison, and exit `2` in `packages/flowproof/src/studio/launch.ts`, `packages/flowproof/src/run.ts`, and `packages/flowproof/src/cli.ts`
@@ -181,7 +181,7 @@ adding another product surface.
 - **Phase 1**: none.
 - **Phase 2**: depends on Phase 1 and blocks both stories.
 - **Phase 3**: depends on Phase 2. Slice 3A must finish at T049 before Slice 3B.
-- **Phase 4**: depends on T035, T042-T044, T049, and T052; it remains independently runnable through its registered case.
+- **Phase 4**: T055-T057 may be prepared after T049; completing the Failure UI and checkpoint also depends on T052. The story remains independently runnable through its registered case.
 - **Phase 5**: test skeletons T061-T063 may be written after T049; implementations and final runs depend on both story checkpoints.
 
 ### Critical dependency path
@@ -192,7 +192,7 @@ T001 -> T002 -> T006 -> T007 -> T016 -> T017 -> T025
   -> T035/T036/T037/T038/T039/T040/T041
   -> T042 -> T043 -> T044 -> T045 -> T046 -> T047 -> T048 -> T049
   -> T050 -> T051 -> T052 -> T053 -> T054
-  -> T055 -> T056 -> T057 -> T058 -> T059 -> T060
+  -> T055/T056 -> T057 -> T058 -> T059 -> T060
   -> T061/T062/T063 -> T064/T065/T066 -> T068 -> T069 -> T070 -> T071
 ```
 
