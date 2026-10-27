@@ -15,10 +15,11 @@ import type { RepositorySnapshot, TempDirectory } from './repoFixture.js'
 
 // The in-process Studio harness for deterministic end-to-end runs. It launches the real Studio
 // through `startStudio` from `packages/flowproof/src/studio/launch.ts` (T047): the same build,
-// servers, launch cookie, and headed Chromium as the CLI, with only the model transport
-// replaced by the recorded test transport. The harness runs against a temporary clone, keeps
-// MODEL_API_KEY unset, gives the engine a private TMPDIR, blocks every non-loopback HTTP request
-// from this process, and reports anything the Studio leaves behind after it closes.
+// servers, launch cookie, and headed Chromium as the CLI, with only the Hero model transport
+// replaced by the recorded test transport; a fixture-provider case keeps its committed labeled
+// fixture. The harness runs against a temporary clone, keeps MODEL_API_KEY unset, gives the
+// engine a private TMPDIR, blocks every non-loopback HTTP request from this process, and reports
+// anything the Studio leaves behind after it closes.
 
 export interface StartStudioOptions {
   readonly repoRoot: string
@@ -58,7 +59,8 @@ export interface StudioHarness {
   readonly baseline: RepositorySnapshot
   readonly studio: StudioInstance
   readonly page: Page
-  readonly transport: RecordedTransport
+  /** The recorded Hero transport; null when the case keeps its committed fixture provider. */
+  readonly transport: RecordedTransport | null
   /** Non-loopback HTTP requests this process attempted (and the harness refused). */
   readonly blockedRequests: readonly string[]
   /** Navigations of the target frame to the demo origin since the Studio opened. */
@@ -89,7 +91,13 @@ function listening(port: number): Promise<boolean> {
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 
-export async function openStudioHarness(options: { readonly scenarioId: string }): Promise<StudioHarness> {
+export interface StudioHarnessOptions {
+  readonly scenarioId: string
+  /** Replaces the live Meta transport with the recorded one; `false` for a fixture-provider case. */
+  readonly recordedTransport?: boolean
+}
+
+export async function openStudioHarness(options: StudioHarnessOptions): Promise<StudioHarness> {
   // Fail before any side effect while the launcher does not exist yet.
   const { startStudio } = await loadPendingModule<LaunchModule>('packages/flowproof/src/studio/launch.ts', 'T047', ['startStudio'])
 
@@ -134,8 +142,12 @@ export async function openStudioHarness(options: { readonly scenarioId: string }
       globalThis.fetch = realFetch
     })
 
-    const transport = createRecordedTransport()
-    const studio = await startStudio({ repoRoot: clone.path, scenarioId: options.scenarioId, testTransport: transport })
+    const transport = options.recordedTransport === false ? null : createRecordedTransport()
+    const studio = await startStudio({
+      repoRoot: clone.path,
+      scenarioId: options.scenarioId,
+      ...(transport === null ? {} : { testTransport: transport }),
+    })
     let closed = false
     undo.push(async () => {
       if (!closed) await studio.close()

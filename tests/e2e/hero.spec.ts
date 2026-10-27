@@ -133,7 +133,7 @@ test('the recorded Hero run closes the loop to Verified Fix in the headed Studio
     expect(result.total_duration_ms).toBeLessThanOrEqual(timeouts.total_ms)
 
     // Exactly one recorded diagnosis; no live Meta or other external request from the engine.
-    expect(harness.transport.calls).toHaveLength(1)
+    expect(harness.transport?.calls).toHaveLength(1)
     expect(harness.blockedRequests).toEqual([])
 
     // The validated one-file candidate is the recorded diff for the permitted file only.
