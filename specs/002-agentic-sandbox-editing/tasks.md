@@ -23,9 +23,9 @@ description: "Implementation tasks for the isolated agent editing runtime"
 
 **Purpose**: Create the credential-free deterministic runtime used by every automated story test.
 
-- [ ] T001 Create the non-root deterministic editing-agent image and fixed `/run/flowproof/task.json` entrypoint in `tests/fixtures/editing-agent/Dockerfile` and `tests/fixtures/editing-agent/agent.mjs`
-- [ ] T002 [P] Create the synthetic three-file project and declared project command used by the fixture agent in `tests/fixtures/editing-agent/project/`
-- [ ] T003 Add Docker image build, immutable image-ID resolution, private temporary-root, container-residue, and process-residue helpers in `tests/support/editingRuntime.ts`
+- [X] T001 Create the non-root deterministic editing-agent image and fixed `/run/flowproof/task.json` entrypoint in `tests/fixtures/editing-agent/Dockerfile` and `tests/fixtures/editing-agent/agent.mjs`
+- [X] T002 [P] Create the synthetic three-file project and declared project command used by the fixture agent in `tests/fixtures/editing-agent/project/`
+- [X] T003 Add Docker image build, immutable image-ID resolution, private temporary-root, container-residue, and process-residue helpers in `tests/support/editingRuntime.ts`
 
 **Checkpoint**: The fixture can be built locally without provider credentials, but no production runtime path exists yet.
 
@@ -37,14 +37,14 @@ description: "Implementation tasks for the isolated agent editing runtime"
 
 **Critical**: No user-story implementation begins until this phase is complete.
 
-- [ ] T004 Write failing request, runtime-profile, result-shape, and no-candidate-field contract tests in `tests/contract/editing-session-contract.test.ts`; prove `declaredProjectCommands` is bounded task context rather than an allowlist, every omitted resource field resolves to the documented default, exact minima/maxima pass, narrowed profile bounds stay ordered inside global bounds, and below-minimum, above-maximum, non-finite, fractional-integer, non-whole-second stop-grace, or string-coerced values fail before side effects
-- [ ] T005 Implement immutable editing request, session handle, v1 resource-bound constants/default resolution, runtime profile, execution outcome, and cleanup result types and validation in `packages/flowproof/src/editing/contracts.ts`; preserve the exact enums `completed|failed|timed_out|cancelled|startup_failed` and `complete|recovered|failed`, require bounded non-empty task text and command-context arrays, allow profiles only to narrow the global limits, and reject raw image, Docker flag, mount, network, shell, credential, and invalid limit input
-- [ ] T006 Write failing registry tests for stable profile IDs, immutable `name@sha256:...` or `sha256:...` image references, non-empty direct argv, literal `/workspace`, a fixed non-secret environment allowlist, and ordered profile min/default/max limits that may narrow but never widen the global v1 bounds in `tests/unit/editing-runtime-profile.test.ts`
-- [ ] T007 Implement trusted in-process profile registration and resolution, including profile-bound validation and resolved request defaults, without inherited host environment or credential seams in `packages/flowproof/src/editing/runtimeProfile.ts`
-- [ ] T008 Add regression coverage for shell-free Git execution and complete original-repository snapshot comparison before extracting shared code in `tests/integration/worktree.test.ts`
-- [ ] T009 Extract the bounded Git runner, disabled hooks/global config, tracked-file hashing, and complete repository snapshot/compare primitives into `packages/flowproof/src/git/repositoryState.ts`, then reuse them from `packages/flowproof/src/worktree/session.ts`
-- [ ] T010 Write failing Docker argv and capability-preflight tests covering immutable images, exact labels, non-root user, read-only root, `cap-drop=ALL`, `no-new-privileges`, default seccomp, optional LSM observation, exact resolved default/minimum/maximum resource argv, equal memory-swap and memory limits, bounded tmpfs, bridge-only networking, no published ports, and rejection of caller-controlled flags or mounts in `tests/unit/editing-docker-cli.test.ts`
-- [ ] T011 Implement bounded shell-free `docker create`, `start --attach`, `stop`, `inspect`, and exact-ID `rm -f` operations using only validated resolved limits, plus capability preflight, in `packages/flowproof/src/editing/dockerCli.ts`
+- [X] T004 Write failing request, runtime-profile, result-shape, and no-candidate-field contract tests in `tests/contract/editing-session-contract.test.ts`; prove `declaredProjectCommands` is bounded task context rather than an allowlist, every omitted resource field resolves to the documented default, exact minima/maxima pass, narrowed profile bounds stay ordered inside global bounds, and below-minimum, above-maximum, non-finite, fractional-integer, non-whole-second stop-grace, or string-coerced values fail before side effects
+- [X] T005 Implement immutable editing request, session handle, v1 resource-bound constants/default resolution, runtime profile, execution outcome, and cleanup result types and validation in `packages/flowproof/src/editing/contracts.ts`; preserve the exact enums `completed|failed|timed_out|cancelled|startup_failed` and `complete|recovered|failed`, require bounded non-empty task text and command-context arrays, allow profiles only to narrow the global limits, and reject raw image, Docker flag, mount, network, shell, credential, and invalid limit input
+- [X] T006 Write failing registry tests for stable profile IDs, immutable `name@sha256:...` or `sha256:...` image references, non-empty direct argv, literal `/workspace`, a fixed non-secret environment allowlist, and ordered profile min/default/max limits that may narrow but never widen the global v1 bounds in `tests/unit/editing-runtime-profile.test.ts`
+- [X] T007 Implement trusted in-process profile registration and resolution, including profile-bound validation and resolved request defaults, without inherited host environment or credential seams in `packages/flowproof/src/editing/runtimeProfile.ts`
+- [X] T008 Add regression coverage for shell-free Git execution and complete original-repository snapshot comparison before extracting shared code in `tests/integration/worktree.test.ts`
+- [X] T009 Extract the bounded Git runner, disabled hooks/global config, tracked-file hashing, and complete repository snapshot/compare primitives into `packages/flowproof/src/git/repositoryState.ts`, then reuse them from `packages/flowproof/src/worktree/session.ts`
+- [X] T010 Write failing Docker argv and capability-preflight tests covering immutable images, exact labels, non-root user, read-only root, `cap-drop=ALL`, `no-new-privileges`, default seccomp, optional LSM observation, exact resolved default/minimum/maximum resource argv, equal memory-swap and memory limits, bounded tmpfs, bridge-only networking, no published ports, and rejection of caller-controlled flags or mounts in `tests/unit/editing-docker-cli.test.ts`
+- [X] T011 Implement bounded shell-free `docker create`, `start --attach`, `stop`, `inspect`, and exact-ID `rm -f` operations using only validated resolved limits, plus capability preflight, in `packages/flowproof/src/editing/dockerCli.ts`
 
 **Checkpoint**: Trusted inputs and adapters are independently tested; no session lifecycle is wired yet.
 
@@ -58,14 +58,14 @@ description: "Implementation tasks for the isolated agent editing runtime"
 
 ### Tests for User Story 1
 
-- [ ] T012 [US1] Write the failing exact-revision, fixture-self-verified three-file edit, task-document, declared-command, public-fetch, and original-repository-integrity success scenario in `tests/integration/editing-session.test.ts`
-- [ ] T013 [US1] Add failing standalone-clone tests for `--no-hardlinks`, detached exact commit, removed remote, absent alternates/source paths, fixed read-only task document, and exact created-path cleanup manifest in `tests/integration/editing-session.test.ts`
+- [X] T012 [US1] Write the failing exact-revision, fixture-self-verified three-file edit, task-document, declared-command, public-fetch, and original-repository-integrity success scenario in `tests/integration/editing-session.test.ts`
+- [X] T013 [US1] Add failing standalone-clone tests for `--no-hardlinks`, detached exact commit, removed remote, absent alternates/source paths, fixed read-only task document, and exact created-path cleanup manifest in `tests/integration/editing-session.test.ts`
 
 ### Implementation for User Story 1
 
-- [ ] T014 [US1] Implement OS-temporary standalone clone preparation, exact detached checkout, remote/alternate/source-path scrubbing, bounded `task.json`, and manifest-scoped workspace disposal in `packages/flowproof/src/editing/workspace.ts`
-- [ ] T015 [US1] Implement `startEditingSession()` and the success-path lifecycle from request validation through container attachment, cleanup, integrity comparison, and one final result promise in `packages/flowproof/src/editing/session.ts`; do not enumerate, open, or analyze agent-authored workspace contents or expose a pre-cleanup inspection hook
-- [ ] T016 [US1] Complete the success fixture assertions for self-verified three-file edits, immutable runtime summary, no original/home/Docker-socket mount, no provider credential, no workspace-content metadata in the result, and zero owned residue in `tests/integration/editing-session.test.ts`
+- [X] T014 [US1] Implement OS-temporary standalone clone preparation, exact detached checkout, remote/alternate/source-path scrubbing, bounded `task.json`, and manifest-scoped workspace disposal in `packages/flowproof/src/editing/workspace.ts`
+- [X] T015 [US1] Implement `startEditingSession()` and the success-path lifecycle from request validation through container attachment, cleanup, integrity comparison, and one final result promise in `packages/flowproof/src/editing/session.ts`; do not enumerate, open, or analyze agent-authored workspace contents or expose a pre-cleanup inspection hook
+- [X] T016 [US1] Complete the success fixture assertions for self-verified three-file edits, immutable runtime summary, no original/home/Docker-socket mount, no provider credential, no workspace-content metadata in the result, and zero owned residue in `tests/integration/editing-session.test.ts`
 
 **Checkpoint**: User Story 1 works independently and satisfies SC-001, SC-004, SC-006, and the successful portion of SC-003.
 
@@ -79,15 +79,15 @@ description: "Implementation tasks for the isolated agent editing runtime"
 
 ### Tests for User Story 2
 
-- [ ] T017 [US2] Write failing first-terminal-cause, late-cancel, repeated-cancel, repeated-finalization, and legal lifecycle-transition tests in `tests/unit/editing-session-state.test.ts`
-- [ ] T018 [US2] Write failing Docker-backed cases for non-zero exit, startup failure, timeout, explicit cancellation, cancellation/completion race, child processes, repeated cleanup, and transient cleanup interruption in `tests/integration/editing-session-cleanup.test.ts`
-- [ ] T019 [US2] Write failing unit cases for persistent cleanup failure preserving the execution outcome while reporting the exact remaining `container|task_document|workspace|original_repository` category in `tests/unit/editing-session-state.test.ts`
+- [X] T017 [US2] Write failing first-terminal-cause, late-cancel, repeated-cancel, repeated-finalization, and legal lifecycle-transition tests in `tests/unit/editing-session-state.test.ts`
+- [X] T018 [US2] Write failing Docker-backed cases for non-zero exit, startup failure, timeout, explicit cancellation, cancellation/completion race, child processes, repeated cleanup, and transient cleanup interruption in `tests/integration/editing-session-cleanup.test.ts`
+- [X] T019 [US2] Write failing unit cases for persistent cleanup failure preserving the execution outcome while reporting the exact remaining `container|task_document|workspace|original_repository` category in `tests/unit/editing-session-state.test.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Implement atomic first-terminal-cause selection, bounded timeout, idempotent `cancel()`, graceful stop, force removal, and shared finalization across pre-start, running, exited, cleaning, and completed states in `packages/flowproof/src/editing/session.ts`
-- [ ] T021 [US2] Implement exact-ID/container and created-path cleanup with bounded retry, `complete|recovered|failed` reporting, independent execution and cleanup outcomes, and protection for unrelated resources in `packages/flowproof/src/editing/session.ts` and `packages/flowproof/src/editing/workspace.ts`
-- [ ] T022 [US2] Complete Docker-backed assertions that every acceptance case removes owned containers, task documents, workspaces, and child processes while preserving the full original-repository snapshot and unrelated workspaces/containers in `tests/integration/editing-session-cleanup.test.ts`
+- [X] T020 [US2] Implement atomic first-terminal-cause selection, bounded timeout, idempotent `cancel()`, graceful stop, force removal, and shared finalization across pre-start, running, exited, cleaning, and completed states in `packages/flowproof/src/editing/session.ts`
+- [X] T021 [US2] Implement exact-ID/container and created-path cleanup with bounded retry, `complete|recovered|failed` reporting, independent execution and cleanup outcomes, and protection for unrelated resources in `packages/flowproof/src/editing/session.ts` and `packages/flowproof/src/editing/workspace.ts`
+- [X] T022 [US2] Complete Docker-backed assertions that every acceptance case removes owned containers, task documents, workspaces, and child processes while preserving the full original-repository snapshot and unrelated workspaces/containers in `tests/integration/editing-session-cleanup.test.ts`
 
 **Checkpoint**: User Story 2 works independently after the foundation and satisfies SC-002, SC-003, and SC-004; persistent cleanup failure remains an explicit non-acceptance unit case.
 
@@ -101,10 +101,10 @@ description: "Implementation tasks for the isolated agent editing runtime"
 
 ### Tests for User Story 3
 
-- [ ] T023 [US3] Extend result contract tests for exactly-once resolution, nullable exit code/signal, bounded duration/diagnostic, immutable runtime summary, cleanup proof, and absence of workspace path, file metadata, diff, file contents, transcript, raw output, host path, candidate, replay, gate, or verification fields in `tests/contract/editing-session-contract.test.ts`
-- [ ] T024 [P] [US3] Write failing diagnostic tests for fixed-size stdout/stderr capture, seeded credential markers, sensitive environment assignments, URL credentials/queries, and absolute session/source paths in `tests/unit/editing-session-state.test.ts`
-- [ ] T025 [US3] Implement bounded output capture, existing `sanitizeText` reuse, session/source path placeholders, stable coded Docker/Git failure messages, immutable result assembly, and exactly-once resolution in `packages/flowproof/src/editing/session.ts`
-- [ ] T026 [US3] Complete cross-outcome assertions that diagnostics contain zero seeded secrets or sensitive host paths and successful completion never creates candidate, replay, gate, or `Verified Fix` state in `tests/integration/editing-session-cleanup.test.ts`
+- [X] T023 [US3] Extend result contract tests for exactly-once resolution, nullable exit code/signal, bounded duration/diagnostic, immutable runtime summary, cleanup proof, and absence of workspace path, file metadata, diff, file contents, transcript, raw output, host path, candidate, replay, gate, or verification fields in `tests/contract/editing-session-contract.test.ts`
+- [X] T024 [P] [US3] Write failing diagnostic tests for fixed-size stdout/stderr capture, seeded credential markers, sensitive environment assignments, URL credentials/queries, and absolute session/source paths in `tests/unit/editing-session-state.test.ts`
+- [X] T025 [US3] Implement bounded output capture, existing `sanitizeText` reuse, session/source path placeholders, stable coded Docker/Git failure messages, immutable result assembly, and exactly-once resolution in `packages/flowproof/src/editing/session.ts`
+- [X] T026 [US3] Complete cross-outcome assertions that diagnostics contain zero seeded secrets or sensitive host paths and successful completion never creates candidate, replay, gate, or `Verified Fix` state in `tests/integration/editing-session-cleanup.test.ts`
 
 **Checkpoint**: User Story 3 works independently after the foundation and satisfies SC-005 plus the result-contract portions of FR-007, FR-008, and FR-011.
 
@@ -114,9 +114,9 @@ description: "Implementation tasks for the isolated agent editing runtime"
 
 **Purpose**: Prove the complete one-PR slice and guard the unchanged production Hero/Failure path.
 
-- [ ] T027 [P] Add a regression assertion that the editing runtime is not imported or invoked by the production Hero/Failure flow in `tests/integration/provider-seam.test.ts`
-- [ ] T028 Run the focused contract/unit/integration commands and the fixture residue checks from `specs/002-agentic-sandbox-editing/quickstart.md`, fixing only defects within the approved feature files
-- [ ] T029 Run `pnpm typecheck`, `pnpm build`, `pnpm test`, `pnpm exec playwright test --pass-with-no-tests`, and `git diff --check`, then record the actual pass/fail evidence by checking only the completed tasks in `specs/002-agentic-sandbox-editing/tasks.md`
+- [X] T027 [P] Add a regression assertion that the editing runtime is not imported or invoked by the production Hero/Failure flow in `tests/integration/provider-seam.test.ts`
+- [X] T028 Run the focused contract/unit/integration commands and the fixture residue checks from `specs/002-agentic-sandbox-editing/quickstart.md`, fixing only defects within the approved feature files
+- [X] T029 Run `pnpm typecheck`, `pnpm build`, `pnpm test`, `pnpm exec playwright test --pass-with-no-tests`, and `git diff --check`, then record the actual pass/fail evidence by checking only the completed tasks in `specs/002-agentic-sandbox-editing/tasks.md`
 
 **Checkpoint**: All requirements and success criteria are evidenced; no implementation task or human-only gate remains.
 

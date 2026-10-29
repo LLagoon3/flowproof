@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -214,6 +214,64 @@ describe('test transport selection seam', () => {
     expect(parseScenario(forged).ok).toBe(false)
     expect(() => selectTransport(forged)).toThrow(TransportSelectionError)
     expect(() => selectTransport(forged, { testTransport: createRecordedTransport() })).toThrow(TransportSelectionError)
+  })
+})
+
+// T027 (Spec 002, SC-007): the isolated editing runtime is a standalone engine service. Until a
+// later feature migrates them explicitly, the production Hero and Failure flows keep their
+// current candidate-generation and verification path and never import or invoke it.
+describe('editing runtime stays disconnected from the production Hero/Failure flow', () => {
+  const ENGINE_SOURCE = path.join(REPO_ROOT, 'packages/flowproof/src')
+  const IMPORT_SPECIFIER = /(?:\bimport|\bexport)\s[^'"`;]*?\bfrom\s+['"]([^'"]+)['"]|\bimport\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g
+
+  /** Relative modules reachable from `entries` through static, re-export, side-effect, and dynamic imports. */
+  async function reachableModules(entries: readonly string[]): Promise<string[]> {
+    const seen = new Set<string>()
+    const queue = entries.map((entry) => path.join(ENGINE_SOURCE, entry))
+    while (queue.length > 0) {
+      const file = queue.pop() as string
+      if (seen.has(file)) continue
+      seen.add(file)
+      for (const match of (await readFile(file, 'utf8')).matchAll(IMPORT_SPECIFIER)) {
+        const specifier = match[1] ?? match[2] ?? match[3] ?? ''
+        if (specifier.startsWith('.')) queue.push(path.resolve(path.dirname(file), specifier).replace(/\.js$/, '.ts'))
+      }
+    }
+    return [...seen].map((file) => path.relative(ENGINE_SOURCE, file)).sort()
+  }
+
+  it('is unreachable from the CLI, run, and Studio entry points', async () => {
+    const reached = await reachableModules(['cli.ts', 'run.ts', 'studio/launch.ts', 'studio/server.ts'])
+
+    // The walk really covers the Hero/Failure path, including the shared Git snapshot helper.
+    for (const module of ['run.ts', 'model/transport.ts', 'worktree/session.ts', 'git/repositoryState.ts', 'verify/gates.ts']) {
+      expect(reached).toContain(module)
+    }
+    expect(reached.filter((module) => module.startsWith('editing/'))).toEqual([])
+  })
+
+  it('is not referenced by any production module outside the editing runtime or by the Studio app', async () => {
+    const offenders: string[] = []
+    const scan = async (directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const target = path.join(directory, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name !== 'node_modules' && entry.name !== 'dist' && target !== path.join(ENGINE_SOURCE, 'editing')) await scan(target)
+        } else if (/\.(?:ts|tsx)$/.test(entry.name) && /editing\/(?:session|workspace|dockerCli|runtimeProfile|contracts)(?:\.js)?['"]/.test(await readFile(target, 'utf8'))) {
+          offenders.push(path.relative(REPO_ROOT, target))
+        }
+      }
+    }
+    await scan(ENGINE_SOURCE)
+    await scan(path.join(REPO_ROOT, 'apps'))
+
+    expect(offenders).toEqual([])
+  })
+
+  it('keeps the committed Hero and Failure scenarios on their existing providers', async () => {
+    expect((await heroScenario()).provider.mode).toBe('meta')
+    const failure = (await loadScenario('canvas-filter-failure-invalid-citation', { repoRoot: REPO_ROOT })).scenario
+    expect(failure.provider.mode).toBe('fixture')
   })
 })
 

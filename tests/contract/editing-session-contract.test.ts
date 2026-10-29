@@ -18,7 +18,20 @@ import {
   resolveSessionLimits,
   validateLimitBounds,
 } from '../../packages/flowproof/src/editing/contracts.js'
-import type { EditingSessionResult, LimitField } from '../../packages/flowproof/src/editing/contracts.js'
+import type { EditingSessionHandle, EditingSessionResult, LimitField } from '../../packages/flowproof/src/editing/contracts.js'
+import type { DockerAdapter } from '../../packages/flowproof/src/editing/dockerCli.js'
+import { startEditingSession } from '../../packages/flowproof/src/editing/session.js'
+import type { SessionWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
+import {
+  FAKE_IMAGE_ID,
+  FAKE_REPOSITORY_ROOT,
+  FAKE_SESSION_ROOT,
+  fakeDocker,
+  fakeProfiles,
+  fakeRequest,
+  fakeWorkspace,
+} from '../support/editingFakes.js'
+import type { FakeDockerOptions, FakeWorkspaceOptions } from '../support/editingFakes.js'
 
 // T004: the in-process editing-session request, limit, runtime-profile bound, and result
 // contract of specs/002-agentic-sandbox-editing/contracts/editing-session.md. Validation is pure
@@ -384,5 +397,139 @@ describe('editing session result', () => {
     'containerId',
   ])('rejects a result carrying %s', (field) => {
     expect(parseEditingSessionResult({ ...validResult(), [field]: field === 'verified' ? true : 'x' }).ok).toBe(false)
+  })
+})
+
+// T023 (US3): the result every terminal session returns. Fake adapters drive each outcome
+// deterministically; every result has the same frozen field set, bounded duration and
+// diagnostic, an immutable runtime summary, and cleanup proof, and it carries no workspace path,
+// file metadata, diff, contents, transcript, raw output, host path, or candidate/verification state.
+
+const profiles = fakeProfiles()
+
+function launch(
+  docker: DockerAdapter,
+  workspace: SessionWorkspace,
+  overrides: Record<string, unknown> = {},
+  clock?: () => number,
+): EditingSessionHandle {
+  return startEditingSession(fakeRequest(overrides), {
+    profiles,
+    docker,
+    workspaces: { open: () => workspace },
+    ...(clock === undefined ? {} : { clock }),
+  })
+}
+
+function expectDeepFrozen(value: unknown): void {
+  if (typeof value !== 'object' || value === null) return
+  expect(Object.isFrozen(value)).toBe(true)
+  for (const child of Object.values(value)) expectDeepFrozen(child)
+}
+
+const FORBIDDEN_RESULT_TEXT = [FAKE_SESSION_ROOT, 'flowproof-editing-Fake01', FAKE_REPOSITORY_ROOT, 'Error response from daemon', 'sk-abcdefghijklmnopqrstuv']
+
+interface OutcomeCase {
+  readonly docker?: FakeDockerOptions
+  readonly workspace?: FakeWorkspaceOptions
+  readonly limits?: Record<string, number>
+  readonly cancel?: boolean
+  readonly expected: Record<string, unknown>
+}
+
+const OUTCOME_CASES: Record<string, OutcomeCase> = {
+  completed: { docker: { exitImmediately: 0 }, expected: { executionOutcome: 'completed', exitCode: 0, signal: null } },
+  failed: { docker: { exitImmediately: 9 }, expected: { executionOutcome: 'failed', exitCode: 9, signal: null } },
+  timed_out: {
+    docker: { stopExitCode: 137 },
+    limits: { wallClockMs: 1_000, stopGraceMs: 1_000 },
+    expected: { executionOutcome: 'timed_out', exitCode: 137, signal: 'SIGKILL' },
+  },
+  cancelled: { cancel: true, expected: { executionOutcome: 'cancelled', exitCode: 143, signal: 'SIGTERM' } },
+  startup_failed: { docker: { createFails: true }, expected: { executionOutcome: 'startup_failed', exitCode: null, signal: null } },
+  'completed with recovered cleanup': {
+    docker: { exitImmediately: 0, failRemovals: 1 },
+    expected: { executionOutcome: 'completed', cleanup: expect.objectContaining({ status: 'recovered' }) },
+  },
+  'completed with failed cleanup': {
+    docker: { exitImmediately: 0, failRemovals: 'always' },
+    expected: { executionOutcome: 'completed', cleanup: expect.objectContaining({ status: 'failed', remainingOwnedResources: ['container'] }) },
+  },
+}
+
+describe('editing session result contract', () => {
+  it.each(Object.entries(OUTCOME_CASES))('returns the stable, bounded, sanitized result shape when %s', async (_label, setup) => {
+    const docker = fakeDocker({ ...setup.docker, stdout: [`working in ${FAKE_SESSION_ROOT}/workspace for ${FAKE_REPOSITORY_ROOT}\n`] })
+    const handle = launch(docker, fakeWorkspace(setup.workspace), setup.limits ? { limits: setup.limits } : {})
+    if (setup.cancel) {
+      await docker.started
+      await handle.cancel()
+    }
+
+    const result = await handle.result
+
+    expect(result).toMatchObject(setup.expected)
+    expect(Object.keys(result)).toEqual([...EDITING_SESSION_RESULT_FIELDS])
+    expect(Object.keys(result.cleanup)).toEqual([...CLEANUP_RESULT_FIELDS])
+    expect(parseEditingSessionResult(result)).toMatchObject({ ok: true })
+    expectDeepFrozen(result)
+    expect(result.sessionId).toBe(handle.id)
+    expect(Number.isSafeInteger(result.durationMs) && result.durationMs >= 0).toBe(true)
+    expect(Buffer.byteLength(result.diagnostic, 'utf8')).toBeLessThanOrEqual(65_536)
+    expect(result.runtime).toEqual({ profileId: 'fixture-editing-agent', imageReference: FAKE_IMAGE_ID, isolation: { rootless: false, lsm: null } })
+    const serialized = JSON.stringify(result)
+    for (const forbidden of FORBIDDEN_RESULT_TEXT) expect(serialized).not.toContain(forbidden)
+  })
+
+  it('reports no runtime isolation when startup fails before preflight', async () => {
+    const result = await launch(fakeDocker(), fakeWorkspace({ resolveFails: 'REVISION_UNAVAILABLE' })).result
+    expect(result.runtime.isolation).toBeNull()
+    expect(result).toMatchObject({ executionOutcome: 'startup_failed', exitCode: null, signal: null })
+  })
+
+  it('resolves exactly once and finalizes once for every concurrent caller', async () => {
+    const docker = fakeDocker()
+    const workspace = fakeWorkspace()
+    const handle = launch(docker, workspace)
+    const settled: EditingSessionResult[] = []
+    void handle.result.then((value) => settled.push(value))
+    await docker.started
+
+    await Promise.all([handle.cancel(), handle.cancel(), handle.result.then(() => handle.cancel())])
+    const result = await handle.result
+
+    expect(settled).toEqual([result])
+    expect(await Promise.all([handle.result, handle.result])).toEqual([result, result])
+    expect(workspace.calls.filter((call) => call === 'dispose')).toHaveLength(1)
+    expect(workspace.calls.filter((call) => call === 'verifyOriginal')).toHaveLength(1)
+  })
+
+  it('measures the bounded duration with the injected monotonic clock', async () => {
+    const readings = [1_000, 3_500.4]
+    const clock = (): number => readings.shift() ?? 3_500.4
+    const result = await launch(fakeDocker({ exitImmediately: 0 }), fakeWorkspace(), {}, clock).result
+    expect(result.durationMs).toBe(2_500)
+  })
+
+  it('bounds the whole diagnostic, summary included, to the diagnostic limit', async () => {
+    const flood = Array.from({ length: 20_000 }, (_, index) => `line ${index} ${'z'.repeat(40)}\n`).join('')
+    const docker = fakeDocker({ exitImmediately: 0, stdout: [flood], stderr: [flood] })
+    const result = await launch(docker, fakeWorkspace(), { limits: { diagnosticBytes: 4_096 } }).result
+
+    expect(Buffer.byteLength(result.diagnostic, 'utf8')).toBeLessThanOrEqual(4_096)
+    expect(result.diagnostic.startsWith('completed:')).toBe(true)
+  })
+
+  it.each([
+    ['an unknown profile', { runtimeProfileId: 'codex' }, 'EDITING_PROFILE_UNKNOWN'],
+    ['an out-of-range limit', { limits: { pids: 4_096 } }, 'EDITING_REQUEST_INVALID'],
+    ['an image override', { image: 'node:latest' }, 'EDITING_REQUEST_INVALID'],
+    ['a credential in the task', { task: 'token=abcdefghijklmnop' }, 'EDITING_REQUEST_INVALID'],
+  ])('rejects %s synchronously before any adapter call', (_label, overrides, code) => {
+    const docker = fakeDocker()
+    const workspace = fakeWorkspace()
+    expectCode(() => launch(docker, workspace, overrides), code)
+    expect(docker.calls).toEqual([])
+    expect(workspace.calls).toEqual([])
   })
 })

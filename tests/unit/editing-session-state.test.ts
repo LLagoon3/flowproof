@@ -2,188 +2,18 @@ import { describe, expect, it } from 'vitest'
 
 import { parseEditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
 import type { EditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
-import type { AttachOutput, ContainerSpec, ContainerState, DockerAdapter } from '../../packages/flowproof/src/editing/dockerCli.js'
-import { createRuntimeProfileRegistry } from '../../packages/flowproof/src/editing/runtimeProfile.js'
+import type { DockerAdapter } from '../../packages/flowproof/src/editing/dockerCli.js'
 import { LIFECYCLE_TRANSITIONS, LifecycleError, createSessionLifecycle, startEditingSession } from '../../packages/flowproof/src/editing/session.js'
 import type { LifecyclePhase } from '../../packages/flowproof/src/editing/session.js'
-import type { OriginalIntegrity, PreparedWorkspace, SessionWorkspace, WorkspaceDisposal } from '../../packages/flowproof/src/editing/workspace.js'
+import type { SessionWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
+import { fakeDocker, fakeProfiles, fakeRequest, fakeWorkspace, tick } from '../support/editingFakes.js'
 
 // T017/T019 (US2): the lifecycle state machine, first-terminal-cause selection, idempotent
 // cancellation and finalization, and cleanup that preserves the execution outcome while naming
 // every remaining owned resource. Fake adapters make every race deterministic.
 
-const IMAGE_ID = `sha256:${'a'.repeat(64)}`
-const REVISION = 'b'.repeat(40)
-const CONTAINER_ID = 'c'.repeat(64)
-
-const profiles = createRuntimeProfileRegistry([
-  {
-    id: 'fixture-editing-agent',
-    imageReference: IMAGE_ID,
-    argv: ['node', '/opt/flowproof-agent/agent.mjs', '/run/flowproof/task.json'],
-    environment: {},
-    workingDirectory: '/workspace',
-  },
-])
-
-const request = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
-  repositoryRoot: '/srv/projects/example',
-  revision: REVISION,
-  task: 'Edit three files.',
-  runtimeProfileId: 'fixture-editing-agent',
-  declaredProjectCommands: [],
-  limits: { wallClockMs: 60_000, stopGraceMs: 1_000 },
-  ...overrides,
-})
-
-interface Deferred<T> {
-  readonly promise: Promise<T>
-  resolve(value: T): void
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((settle) => {
-    resolve = settle
-  })
-  return { promise, resolve }
-}
-
-const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
-interface FakeDockerOptions {
-  /** Exit code the container reports when stopped; null makes stop hang without effect. */
-  readonly stopExitCode?: number | null
-  /** Number of initial removals that fail, or `always`. */
-  readonly failRemovals?: number | 'always'
-  readonly createFails?: boolean
-  readonly supported?: boolean
-  /** The container never starts its process. */
-  readonly startError?: boolean
-}
-
-interface FakeDocker extends DockerAdapter {
-  readonly calls: string[]
-  readonly output: AttachOutput[]
-  readonly started: Promise<void>
-  /** Ends the container process with `code`. */
-  exit(code: number): void
-  killedClients: number
-}
-
-function fakeDocker(options: FakeDockerOptions = {}): FakeDocker {
-  const calls: string[] = []
-  const output: AttachOutput[] = []
-  const started = deferred<void>()
-  let exited: Deferred<{ readonly code: number | null }> | null = null
-  let exitCode: number | null = null
-  let created = false
-  let removed = false
-  let removalFailures = 0
-  const finish = (code: number): void => {
-    if (exitCode !== null) return
-    exitCode = code
-    exited?.resolve({ code })
-  }
-  const docker: FakeDocker = {
-    calls,
-    output,
-    started: started.promise,
-    killedClients: 0,
-    exit: finish,
-    async preflight() {
-      calls.push('preflight')
-      return { supported: options.supported ?? true, missing: options.supported === false ? ['seccomp'] : [], isolation: { rootless: false, lsm: null } }
-    },
-    async create(_spec: ContainerSpec) {
-      calls.push('create')
-      if (options.createFails) throw Object.assign(new Error('create failed'), { code: 'DOCKER_CREATE_FAILED' })
-      created = true
-      return CONTAINER_ID
-    },
-    start(_id: string, attach: AttachOutput) {
-      calls.push('start')
-      output.push(attach)
-      exited = deferred()
-      if (options.startError) exited.resolve({ code: 127 })
-      started.resolve()
-      return {
-        exited: exited.promise,
-        kill: () => {
-          docker.killedClients += 1
-        },
-      }
-    },
-    async stop(_id: string, graceSeconds: number) {
-      calls.push(`stop:${graceSeconds}`)
-      const code = options.stopExitCode === undefined ? 143 : options.stopExitCode
-      if (code === null) return new Promise<void>(() => undefined)
-      finish(code)
-    },
-    async inspect(): Promise<ContainerState | null> {
-      calls.push('inspect')
-      if (!created || removed) return null
-      if (options.startError) return { running: false, exitCode: 127, oomKilled: false, started: false, startError: true }
-      return { running: exitCode === null, exitCode, oomKilled: false, started: true, startError: false }
-    },
-    async exists() {
-      calls.push('exists')
-      return created && !removed
-    },
-    async findByName() {
-      calls.push('findByName')
-      return null
-    },
-    async remove() {
-      calls.push('remove')
-      if (options.failRemovals === 'always' || removalFailures < (options.failRemovals ?? 0)) {
-        removalFailures += 1
-        throw Object.assign(new Error('busy'), { code: 'DOCKER_REMOVE_FAILED' })
-      }
-      // Removing a running container ends its process like a SIGKILL.
-      finish(137)
-      removed = true
-    },
-  }
-  return docker
-}
-
-interface FakeWorkspaceOptions {
-  readonly resolveFails?: string
-  readonly disposal?: WorkspaceDisposal
-  readonly integrity?: OriginalIntegrity
-}
-
-interface FakeWorkspace extends SessionWorkspace {
-  readonly calls: string[]
-}
-
-function fakeWorkspace(options: FakeWorkspaceOptions = {}): FakeWorkspace {
-  const calls: string[] = []
-  return {
-    calls,
-    async resolve() {
-      calls.push('resolve')
-      if (options.resolveFails) throw Object.assign(new Error('resolve failed'), { code: options.resolveFails })
-    },
-    async create(): Promise<PreparedWorkspace> {
-      calls.push('create')
-      return { workspacePath: '/tmp/flowproof-editing-Fake01/workspace', taskDocumentPath: '/tmp/flowproof-editing-Fake01/task.json', baselineCommit: REVISION }
-    },
-    get createdPaths() {
-      return []
-    },
-    pathPlaceholders: () => [],
-    async dispose() {
-      calls.push('dispose')
-      return options.disposal ?? { taskDocumentRemoved: true, workspaceRemoved: true, sessionRootRemoved: true }
-    },
-    async verifyOriginal() {
-      calls.push('verifyOriginal')
-      return options.integrity ?? { verified: true, unchanged: true, mismatches: [] }
-    },
-  }
-}
+const profiles = fakeProfiles()
+const request = fakeRequest
 
 function start(docker: DockerAdapter, workspace: SessionWorkspace, overrides: Record<string, unknown> = {}) {
   return startEditingSession(request(overrides), { profiles, docker, workspaces: { open: () => workspace } })
@@ -504,5 +334,112 @@ describe('persistent cleanup failure', () => {
       cleanup: { status: 'recovered', reasonCode: 'CLEANUP_RETRIED', remainingOwnedResources: [], containerRemoved: true },
     })
     expectValid(result)
+  })
+})
+
+// T024 (US3): fixed-size capture and sanitized diagnostics. Output is untrusted: it is kept in a
+// bounded tail per stream, cut only at line boundaries, stripped of host paths, and sanitized
+// before it can reach the result.
+
+describe('bounded sanitized diagnostics', () => {
+  async function diagnosticFor(options: Parameters<typeof fakeDocker>[0], overrides: Record<string, unknown> = {}): Promise<string> {
+    const result = await start(fakeDocker({ exitImmediately: 0, ...options }), fakeWorkspace(), overrides).result
+    expectValid(result)
+    return result.diagnostic
+  }
+
+  it('keeps a fixed-size tail of stdout and stderr cut at line boundaries', async () => {
+    const lines = (stream: string): string =>
+      Array.from({ length: 5_000 }, (_, index) => `${stream} line ${String(index).padStart(5, '0')} ${'q'.repeat(30)}\n`).join('')
+    const diagnostic = await diagnosticFor({ stdout: [lines('out'), 'out final marker\n'], stderr: [lines('err'), 'err final marker\n'] }, { limits: { diagnosticBytes: 8_192 } })
+
+    expect(Buffer.byteLength(diagnostic, 'utf8')).toBeLessThanOrEqual(8_192)
+    expect(diagnostic).toContain('out final marker')
+    expect(diagnostic).toContain('err final marker')
+    expect(diagnostic).not.toContain('line 00000')
+    // Every retained output line is complete; the cut never leaves a fragment.
+    for (const line of diagnostic.split('\n').filter((entry) => /^(out|err) line/.test(entry))) {
+      expect(line).toMatch(/^(out|err) line \d{5} q{30}$/)
+    }
+  })
+
+  it('never leaves a fragment of a secret that straddles the retained tail start', async () => {
+    const line = `${'x'.repeat(57)} api_key=fpseededtailsecret000001\n`
+    const output = Array.from({ length: 3_000 }, () => line)
+    // Odd chunk sizes move the cut to arbitrary byte offsets inside the secret.
+    const chunks = output.join('').match(/[\s\S]{1,997}/g) ?? []
+    const diagnostic = await diagnosticFor({ stdout: chunks }, { limits: { diagnosticBytes: 4_096 } })
+
+    expect(diagnostic).not.toMatch(/secret0000|tailsecret|seededtail|000001/)
+    expect(diagnostic).toContain('api_key=[REDACTED]')
+  })
+
+  it('drops a private-key body whose BEGIN line fell outside the retained tail', async () => {
+    const body = Array.from({ length: 400 }, (_, index) => `FPSEEDEDKEYBODY${String(index).padStart(4, '0')}abcdefghijklmnopqrstuvwxyz`).join('\n')
+    const diagnostic = await diagnosticFor(
+      { stdout: [`-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----\n`, 'after the key\n'] },
+      { limits: { diagnosticBytes: 4_096 } },
+    )
+
+    expect(diagnostic).not.toContain('FPSEEDEDKEYBODY')
+    expect(diagnostic).toContain('after the key')
+  })
+
+  it.each([
+    ['a provider key', 'MODEL_API_KEY=sk-fpseededproviderkey00000001', 'fpseededproviderkey'],
+    ['a bearer token', 'Authorization: Bearer FPSEEDEDBEARER0000000001', 'FPSEEDEDBEARER'],
+    ['a GitHub token', 'pushing with ghp_FPSEEDEDGITHUB000000000000001', 'FPSEEDEDGITHUB'],
+    ['an AWS key', 'aws AKIAFPSEEDEDAWS00001 configured', 'AKIAFPSEEDEDAWS00001'],
+    ['a quoted password', ['pass', 'word: "', 'FPSEEDED', 'PASSWORD0001"'].join(''), 'FPSEEDEDPASSWORD'],
+    ['an exported token', 'export GITHUB_TOKEN=FPSEEDEDEXPORTED0001', 'FPSEEDEDEXPORTED'],
+    ['a database password assignment', ['DB_', 'PASSWORD=', 'FPSEEDED', 'DBPASS0001 psql'].join(''), 'FPSEEDEDDBPASS'],
+    ['URL credentials', 'cloning https://fpuser:FPSEEDEDURLPASS01@git.example.com/repo.git', 'FPSEEDEDURLPASS01'],
+    ['a URL query secret', 'GET https://api.example.com/v1/items?token=FPSEEDEDQUERY01&x=1', 'FPSEEDEDQUERY01'],
+  ])('redacts %s from either stream', async (_label, line, secret) => {
+    for (const stream of ['stdout', 'stderr'] as const) {
+      const diagnostic = await diagnosticFor({ [stream]: [`before\n${line}\nafter\n`] })
+      expect(diagnostic).not.toContain(secret)
+      expect(diagnostic).toContain('after')
+    }
+  })
+
+  it('replaces absolute session and source paths with stable placeholders', async () => {
+    const diagnostic = await diagnosticFor({
+      stdout: [
+        'cwd /tmp/flowproof-editing-Fake01/workspace/src\n',
+        'mount root /flowproof-editing-Fake01/workspace\n',
+        'origin /srv/projects/example/.git\n',
+      ],
+    })
+
+    expect(diagnostic).not.toContain('/tmp/flowproof-editing-Fake01')
+    expect(diagnostic).not.toContain('flowproof-editing-Fake01')
+    expect(diagnostic).not.toContain('/srv/projects/example')
+    expect(diagnostic).toContain('cwd <session-root>/workspace/src')
+    expect(diagnostic).toContain('origin <source-repository>/.git')
+  })
+
+  it('uses stable coded messages for Docker and Git failures instead of their output', async () => {
+    const created = await start(fakeDocker({ createFails: true }), fakeWorkspace()).result
+    expect(created.diagnostic).toBe('startup_failed: the session container could not be created.')
+
+    const resolved = await start(fakeDocker(), fakeWorkspace({ resolveFails: 'REVISION_UNAVAILABLE' })).result
+    expect(resolved.diagnostic).toBe('startup_failed: the selected revision is not a commit in the repository.')
+  })
+
+  it('includes a bounded, sanitized cancellation reason', async () => {
+    const docker = fakeDocker()
+    const handle = start(docker, fakeWorkspace())
+    await docker.started
+
+    await handle.cancel(`stop now\nplease token=FPSEEDEDREASON0001 in /srv/projects/example ${'r'.repeat(1_000)}`)
+    const { diagnostic } = await handle.result
+
+    const summary = diagnostic.split('\n')[0] ?? ''
+    expect(summary).toMatch(/^cancelled: /)
+    expect(summary).toContain('stop now please')
+    expect(summary.length).toBeLessThanOrEqual(400)
+    expect(diagnostic).not.toContain('FPSEEDEDREASON0001')
+    expect(diagnostic).not.toContain('/srv/projects/example')
   })
 })

@@ -18,7 +18,7 @@ import { containerName, createDockerCli } from './dockerCli.js'
 import type { AttachedContainer, ContainerState, DockerAdapter } from './dockerCli.js'
 import type { RuntimeProfileRegistry } from './runtimeProfile.js'
 import { createWorkspaceManager } from './workspace.js'
-import type { OriginalIntegrity, SessionWorkspace, WorkspaceDisposal, WorkspaceManager } from './workspace.js'
+import type { OriginalIntegrity, PathPlaceholder, SessionWorkspace, WorkspaceDisposal, WorkspaceManager } from './workspace.js'
 
 // The editing-session lifecycle owner. It validates the request synchronously, then prepares the
 // standalone clone, creates and attaches the constrained container, and finalizes exactly once.
@@ -206,6 +206,148 @@ const SIGNAL_NAMES = new Map(Object.entries(constants.signals).map(([name, numbe
 /** Container exit codes above 128 conventionally report the terminating signal. */
 const signalOf = (exitCode: number | null): string | null => (exitCode !== null && exitCode > 128 ? (SIGNAL_NAMES.get(exitCode - 128) ?? null) : null)
 
+/** Longer cancellation reasons are omitted whole rather than cut, so no partial secret survives. */
+const MAX_CANCEL_REASON_INPUT = 2_048
+const MAX_CANCEL_REASON_DISPLAY = 200
+
+interface TailBuffer {
+  push(chunk: Buffer): void
+  /** The retained tail as text; after truncation it starts at the first complete line. */
+  text(): string
+}
+
+/** Keeps the last `limit` bytes of one output stream. */
+function createTailBuffer(limit: number): TailBuffer {
+  let chunks: Buffer[] = []
+  let size = 0
+  let truncated = false
+  return {
+    push(chunk: Buffer): void {
+      if (chunk.length >= limit) {
+        chunks = [Buffer.from(chunk.subarray(chunk.length - limit))]
+        size = limit
+        truncated = true
+        return
+      }
+      chunks.push(Buffer.from(chunk))
+      size += chunk.length
+      while (size > limit) {
+        const first = chunks[0] as Buffer
+        const excess = size - limit
+        if (first.length <= excess) {
+          chunks.shift()
+          size -= first.length
+        } else {
+          chunks[0] = first.subarray(excess)
+          size -= excess
+        }
+        truncated = true
+      }
+    },
+    text(): string {
+      const text = Buffer.concat(chunks).toString('utf8')
+      return truncated ? dropPartialFirstLine(text) : text
+    },
+  }
+}
+
+/** A cut can split a line, and with it a secret the sanitizer would no longer recognize. */
+const dropPartialFirstLine = (text: string): string => {
+  const newline = text.indexOf('\n')
+  return newline === -1 ? '' : text.slice(newline + 1)
+}
+
+const KEY_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/
+const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----[^\n]*\n?/
+
+/**
+ * The sanitizer redacts complete private-key blocks only. A retained tail can hold a key body
+ * whose BEGIN line was cut away, or output can end inside a key; both fragments are dropped.
+ */
+function dropPartialPrivateKeys(text: string): string {
+  let current = text
+  const end = KEY_END.exec(current)
+  const begin = KEY_BEGIN.exec(current)
+  if (end !== null && (begin === null || begin.index > end.index)) current = current.slice(end.index + end[0].length)
+  const openBegin = KEY_BEGIN.exec(current)
+  if (openBegin !== null && !KEY_END.test(current.slice(openBegin.index))) current = current.slice(0, openBegin.index)
+  return current
+}
+
+function replacePaths(text: string, placeholders: readonly PathPlaceholder[]): string {
+  let current = text
+  for (const { value, placeholder } of placeholders) if (value !== '') current = current.split(value).join(placeholder)
+  return current
+}
+
+/** Untrusted text made safe for a result: host paths replaced, then secrets redacted. */
+const safeText = (text: string, placeholders: readonly PathPlaceholder[]): string => sanitizeText(replacePaths(text, placeholders)).value
+
+/** The last complete lines of `text` that fit in `budget` UTF-8 bytes. */
+function tailWithin(text: string, budget: number): string {
+  if (Buffer.byteLength(text, 'utf8') <= budget) return text
+  if (budget <= 0) return ''
+  const bytes = Buffer.from(text, 'utf8')
+  return dropPartialFirstLine(bytes.subarray(bytes.length - budget).toString('utf8'))
+}
+
+function sanitizeReason(reason: unknown, placeholders: readonly PathPlaceholder[]): string | null {
+  if (typeof reason !== 'string' || reason.trim() === '') return null
+  if (reason.length > MAX_CANCEL_REASON_INPUT) return '[omitted: too long]'
+  const single = reason.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+  const safe = safeText(single, placeholders)
+  return safe.length <= MAX_CANCEL_REASON_DISPLAY ? safe : `${safe.slice(0, MAX_CANCEL_REASON_DISPLAY).replace(/[\ud800-\udbff]$/, '')}…`
+}
+
+/**
+ * The bounded diagnostic: one fixed summary line, then the sanitized tail of each stream. The whole
+ * text never exceeds `limit` bytes; each stream keeps at most half of what remains.
+ */
+function composeDiagnostic(input: {
+  readonly summary: string
+  readonly stdout: string
+  readonly stderr: string
+  readonly placeholders: readonly PathPlaceholder[]
+  readonly limit: number
+}): string {
+  const sections = [
+    ['stdout', input.stdout],
+    ['stderr', input.stderr],
+  ] as const
+  const rendered = sections
+    .map(([name, raw]) => [name, safeText(dropPartialPrivateKeys(raw), input.placeholders).replace(/\n+$/, '')] as const)
+    .filter(([, text]) => text !== '')
+  const headers = rendered.reduce((total, [name]) => total + Buffer.byteLength(`\n${name}:\n`, 'utf8'), 0)
+  const budget = Math.floor((input.limit - Buffer.byteLength(input.summary, 'utf8') - headers) / Math.max(1, rendered.length))
+  let diagnostic = input.summary
+  for (const [name, text] of rendered) {
+    const tail = tailWithin(text, budget)
+    if (tail !== '') diagnostic += `\n${name}:\n${tail}`
+  }
+  return Buffer.byteLength(diagnostic, 'utf8') <= input.limit ? diagnostic : input.summary
+}
+
+function describeOutcome(input: {
+  readonly outcome: ExecutionOutcome
+  readonly exitCode: number | null
+  readonly startupCode: StartupCode | null
+  readonly oomKilled: boolean
+  readonly wallClockMs: number
+  readonly reason: string | null
+}): string {
+  const exit = `exit code ${input.exitCode ?? 'unknown'}`
+  switch (input.outcome) {
+    case 'startup_failed':
+      return `startup_failed: ${STARTUP_MESSAGES[input.startupCode ?? 'SESSION_INTERNAL_ERROR']}.`
+    case 'timed_out':
+      return `timed_out: the agent exceeded its ${input.wallClockMs / 1_000}-second wall-clock limit and was stopped (${exit}).`
+    case 'cancelled':
+      return `cancelled: the session was cancelled${input.reason === null ? '' : ` (reason: ${input.reason})`} and the agent was stopped (${exit}).`
+    default:
+      return `${input.outcome}: the agent exited with code ${input.exitCode ?? 'unknown'}.${input.oomKilled ? ' The container reached its memory limit.' : ''}`
+  }
+}
+
 // ---------------------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------------------
@@ -218,24 +360,26 @@ export function startEditingSession(request: unknown, dependencies: EditingSessi
   const clock = dependencies.clock ?? (() => performance.now())
   const id = randomUUID()
   const lifecycle = createSessionLifecycle()
+  // Only the winning cancellation's reason is kept; it is sanitized during finalization.
+  const cancellation: { reason: unknown } = { reason: undefined }
   // A won timeout or cancellation resolves `lifecycle.terminal`, which the running session awaits.
-  const requestStop = (cause: 'timed_out' | 'cancelled'): void => {
-    lifecycle.selectTerminal(cause)
+  const requestStop = (cause: 'timed_out' | 'cancelled', reason?: unknown): void => {
+    if (lifecycle.selectTerminal(cause) && cause === 'cancelled') cancellation.reason = reason
   }
 
   const { signal } = resolved.request
-  const onAbort = (): void => requestStop('cancelled')
-  if (signal?.aborted) requestStop('cancelled')
+  const onAbort = (): void => requestStop('cancelled', 'the request signal was aborted')
+  if (signal?.aborted) onAbort()
   else signal?.addEventListener('abort', onAbort, { once: true })
 
-  const result = runSession({ id, resolved, docker, workspace: workspaces.open(), clock, lifecycle, requestStop }).finally(() =>
+  const result = runSession({ id, resolved, docker, workspace: workspaces.open(), clock, lifecycle, requestStop, cancellation }).finally(() =>
     signal?.removeEventListener('abort', onAbort),
   )
   return Object.freeze({
     id,
     result,
-    cancel: async (): Promise<void> => {
-      requestStop('cancelled')
+    cancel: async (reason?: string): Promise<void> => {
+      requestStop('cancelled', reason)
       await result
     },
   })
@@ -249,10 +393,11 @@ interface SessionContext {
   readonly clock: () => number
   readonly lifecycle: SessionLifecycle
   readonly requestStop: (cause: 'timed_out' | 'cancelled') => void
+  readonly cancellation: { readonly reason: unknown }
 }
 
 async function runSession(context: SessionContext): Promise<EditingSessionResult> {
-  const { id, resolved, docker, workspace, clock, lifecycle, requestStop } = context
+  const { id, resolved, docker, workspace, clock, lifecycle, requestStop, cancellation } = context
   const { request, profile, limits } = resolved
   const startedAt = clock()
   let isolation: IsolationObservation | null = null
@@ -261,15 +406,9 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
   let attached: AttachedContainer | null = null
   let startupCode: StartupCode | null = null
   let finalState: ContainerState | null = null
-  const captured: Buffer[] = []
-  let capturedBytes = 0
-  const capture = (chunk: Buffer): void => {
-    const room = limits.diagnosticBytes - capturedBytes
-    if (room <= 0) return
-    const kept = chunk.subarray(0, room)
-    captured.push(kept)
-    capturedBytes += kept.length
-  }
+  // Raw output stays in memory, bounded per stream, and leaves only through composeDiagnostic.
+  const stdout = createTailBuffer(Math.floor(limits.diagnosticBytes / 2))
+  const stderr = createTailBuffer(Math.floor(limits.diagnosticBytes / 2))
   const ended = (): boolean => lifecycle.terminalCause !== null
   let timer: NodeJS.Timeout | undefined
 
@@ -301,7 +440,7 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
     }
     if (containerId !== null && !ended()) {
       lifecycle.transition('running')
-      const running = docker.start(containerId, { onStdout: capture, onStderr: capture })
+      const running = docker.start(containerId, { onStdout: (chunk) => stdout.push(chunk), onStderr: (chunk) => stderr.push(chunk) })
       attached = running
       timer = setTimeout(() => requestStop('timed_out'), limits.wallClockMs)
       void running.exited.then(() => lifecycle.selectTerminal('exited'))
@@ -373,19 +512,28 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
   }
   lifecycle.transition('finished')
 
-  const summary =
-    outcome === 'startup_failed'
-      ? `startup_failed: ${STARTUP_MESSAGES[startupCode ?? 'SESSION_INTERNAL_ERROR']}.`
-      : `${outcome}: the agent exited with code ${exitCode ?? 'unknown'}.`
-  const output = sanitizeText(Buffer.concat(captured).toString('utf8')).value
+  // ---- Immutable result: fixed summary, bounded sanitized output, no path or raw tool text.
+  const placeholders = workspace.pathPlaceholders()
+  const summary = describeOutcome({
+    outcome,
+    exitCode,
+    startupCode,
+    oomKilled: finalState?.oomKilled === true,
+    wallClockMs: limits.wallClockMs,
+    reason: outcome === 'cancelled' ? sanitizeReason(cancellation.reason, placeholders) : null,
+  })
   return Object.freeze({
     sessionId: id,
     executionOutcome: outcome,
     exitCode,
     signal: outcome === 'startup_failed' ? null : signalOf(exitCode),
     durationMs: Math.max(0, Math.round(clock() - startedAt)),
-    diagnostic: output === '' ? summary : `${summary}\n${output}`,
+    diagnostic: composeDiagnostic({ summary, stdout: stdout.text(), stderr: stderr.text(), placeholders, limit: limits.diagnosticBytes }),
     cleanup,
-    runtime: Object.freeze({ profileId: profile.id, imageReference: profile.imageReference, isolation }),
+    runtime: Object.freeze({
+      profileId: profile.id,
+      imageReference: profile.imageReference,
+      isolation: isolation === null ? null : Object.freeze({ rootless: isolation.rootless, lsm: isolation.lsm }),
+    }),
   })
 }

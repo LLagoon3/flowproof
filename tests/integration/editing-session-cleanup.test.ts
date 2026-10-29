@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { parseEditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
 import type { EditingSessionHandle, EditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
@@ -103,7 +104,8 @@ async function fixture(inner: DockerAdapter = createDockerCli()): Promise<Fixtur
  * remains; the original repository matches its complete snapshot; unrelated containers,
  * worktrees, and temporary entries survive untouched.
  */
-async function expectContained(fx: Fixture, sessionId: string): Promise<void> {
+async function expectContained(fx: Fixture, sessionId: string, result: EditingSessionResult): Promise<void> {
+  expectSafeResult(fx, result)
   expect(await snapshotRepository(fx.repo.path)).toEqual(fx.before)
   expect(await sessionResidue({ sessionId, tmpRoot: fx.tmp.path, needles: [...fx.docker.created, fx.marker] })).toEqual({
     ...NO_RESIDUE,
@@ -132,6 +134,38 @@ function expectValid(result: EditingSessionResult): void {
   expect(parseEditingSessionResult(result)).toMatchObject({ ok: true })
 }
 
+// A host secret the container must never inherit and no diagnostic may contain.
+const HOST_SECRET = `sk-fpseededhostsecret${randomBytes(6).toString('hex')}`
+const savedHostKey = process.env.MODEL_API_KEY
+
+beforeAll(() => {
+  process.env.MODEL_API_KEY = HOST_SECRET
+})
+
+afterAll(() => {
+  if (savedHostKey === undefined) delete process.env.MODEL_API_KEY
+  else process.env.MODEL_API_KEY = savedHostKey
+})
+
+/**
+ * SC-005 and FR-011 for every outcome: zero seeded secrets, host secrets, or host paths in the
+ * diagnostic, and no candidate, replay, gate, or verification state anywhere in the result.
+ */
+function expectSafeResult(fx: Fixture, result: EditingSessionResult): void {
+  expect(Object.keys(result)).toEqual(['sessionId', 'executionOutcome', 'exitCode', 'signal', 'durationMs', 'diagnostic', 'cleanup', 'runtime'])
+  const serialized = JSON.stringify(result)
+  expect(serialized).not.toMatch(/fpseeded/i)
+  expect(serialized).not.toContain(HOST_SECRET)
+  for (const hostPath of [fx.tmp.path, fx.repo.path, path.dirname(fx.repo.path)]) expect(serialized).not.toContain(hostPath)
+  expect(serialized).not.toMatch(/flowproof-editing-[A-Za-z0-9]{6}(?![A-Za-z0-9])/)
+  expect(result.diagnostic).not.toContain('Verified Fix')
+  // The exact nested field sets: nothing else, such as a diff, file list, or verdict, exists.
+  expect(Object.keys(result.cleanup)).toEqual(['status', 'containerRemoved', 'workspaceRemoved', 'originalRepositoryUnchanged', 'reasonCode', 'remainingOwnedResources'])
+  expect(Object.keys(result.runtime)).toEqual(['profileId', 'imageReference', 'isolation'])
+  if (result.runtime.isolation !== null) expect(Object.keys(result.runtime.isolation)).toEqual(['rootless', 'lsm'])
+  expect(existsSync(path.join(fx.repo.path, '.flowproof'))).toBe(false)
+}
+
 const COMPLETE = { status: 'complete', containerRemoved: true, workspaceRemoved: true, originalRepositoryUnchanged: true, reasonCode: null, remainingOwnedResources: [] }
 
 describe('editing session termination', () => {
@@ -145,7 +179,7 @@ describe('editing session termination', () => {
       expect(result).toMatchObject({ executionOutcome: 'failed', exitCode: 7, signal: null, cleanup: COMPLETE })
       expect(result.diagnostic).toContain('FIXTURE failing on purpose')
       expectValid(result)
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -162,7 +196,7 @@ describe('editing session termination', () => {
       expect(fx.docker.created).toEqual([])
       expectValid(result)
       // Partial initialization: the clone and task document existed and are gone.
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -177,7 +211,7 @@ describe('editing session termination', () => {
       expect(result).toMatchObject({ executionOutcome: 'startup_failed', cleanup: COMPLETE })
       expect(result.runtime.isolation).toBeNull()
       expect(fx.docker.created).toEqual([])
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -197,7 +231,7 @@ describe('editing session termination', () => {
       expect(elapsed).toBeLessThan(3_000 + 1_000 + 20_000)
       expect(result.diagnostic).toContain('FIXTURE ready')
       expectValid(result)
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -220,7 +254,7 @@ describe('editing session termination', () => {
 
       expect(result).toMatchObject({ executionOutcome: 'cancelled', exitCode: 143, signal: 'SIGTERM', cleanup: COMPLETE })
       expectValid(result)
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -237,7 +271,7 @@ describe('editing session termination', () => {
       const result = await handle.result
 
       expect(result).toMatchObject({ executionOutcome: 'cancelled', cleanup: COMPLETE })
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -259,7 +293,7 @@ describe('editing session termination', () => {
       expect(result.cleanup).toMatchObject(COMPLETE)
       expect(await handle.result).toBe(result)
       expectValid(result)
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -274,7 +308,7 @@ describe('editing session termination', () => {
       expect(result).toMatchObject({ executionOutcome: 'completed', exitCode: 0, cleanup: COMPLETE })
       expect(result.diagnostic).toContain('FIXTURE orphans spawned')
       // The descendants carry the marker in their argv; none survives the container.
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -292,7 +326,7 @@ describe('editing session termination', () => {
       expect(await handle.result).toBe(result)
       expect(result).toMatchObject({ executionOutcome: 'completed', cleanup: COMPLETE })
       expect(fx.docker.created).toHaveLength(1)
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
@@ -325,7 +359,64 @@ describe('editing session termination', () => {
       })
       expectValid(result)
       // Recovered means the same no-residue invariant as complete.
-      await expectContained(fx, handle.id)
+      await expectContained(fx, handle.id, result)
+    },
+    DOCKER_TEST_TIMEOUT,
+  )
+})
+
+describe('safe session outcome', () => {
+  it.each([
+    ['completed', 0],
+    ['failed', 5],
+  ] as const)(
+    'keeps seeded credentials, host secrets, and host paths out of a %s diagnostic',
+    async (outcome, code) => {
+      const fx = await fixture()
+      const handle = launch(fx, `scenario=secrets code=${code}`)
+      const result = await handle.result
+
+      expect(result).toMatchObject({ executionOutcome: outcome, exitCode: code, cleanup: COMPLETE })
+      // The fixture really printed the markers, its environment, and its mount table.
+      expect(result.diagnostic).toContain('MODEL_API_KEY=[REDACTED]')
+      expect(result.diagnostic).toContain('Authorization: [REDACTED]')
+      expect(result.diagnostic).toContain('environment {')
+      expect(result.diagnostic).toMatch(/mounts .*\/workspace/)
+      expect(result.diagnostic).toContain('<session-root>')
+      expectValid(result)
+      await expectContained(fx, handle.id, result)
+    },
+    DOCKER_TEST_TIMEOUT,
+  )
+
+  it(
+    'bounds a flooding agent to the diagnostic limit without a partial secret',
+    async () => {
+      const fx = await fixture()
+      const handle = launch(fx, 'scenario=flood lines=6000', { limits: { diagnosticBytes: 4_096 } })
+      const result = await handle.result
+
+      expect(result).toMatchObject({ executionOutcome: 'completed', exitCode: 0, cleanup: COMPLETE })
+      expect(Buffer.byteLength(result.diagnostic, 'utf8')).toBeLessThanOrEqual(4_096)
+      expect(result.diagnostic).toContain('FIXTURE flood done')
+      expect(result.diagnostic).toContain('api_key=[REDACTED]')
+      await expectContained(fx, handle.id, result)
+    },
+    DOCKER_TEST_TIMEOUT,
+  )
+
+  it(
+    'reports successful completion without any candidate, replay, gate, or Verified Fix state',
+    async () => {
+      const fx = await fixture()
+      const handle = launch(fx, `scenario=success expect_head=${fx.repo.head}`, { declaredProjectCommands: ['node scripts/check.mjs'] })
+      const result = await handle.result
+
+      expect(result.executionOutcome).toBe('completed')
+      expect(result.diagnostic).toContain('FIXTURE self_verified=true')
+      expect(result.diagnostic).not.toContain('Verified Fix')
+      // Agent completion admits nothing: the original repository is exactly as before.
+      await expectContained(fx, handle.id, result)
     },
     DOCKER_TEST_TIMEOUT,
   )
