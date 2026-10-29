@@ -12,23 +12,29 @@ revision.
 | `task` | string | Non-empty, bounded UTF-8 text; treated as untrusted agent input |
 | `runtimeProfileId` | string | Must resolve in the in-process trusted registry |
 | `declaredProjectCommands` | string array | Bounded task context written to the task document; not an enforced OS command allowlist and never interpolated into a host shell |
-| `limits` | Session Limits | Every value must fall within configured minimum and maximum bounds |
+| `limits` | Session Limits | Omitted values resolve to v1 defaults; explicit values must fall within the v1 bounds |
 
 The request contains no raw Docker flags, image reference, mount source, network name, shell string,
 or credential value.
 
 ## Session Limits
 
-Finite resources selected by the trusted caller within repository-defined bounds.
+Finite resources selected by the trusted caller within repository-defined bounds. Validation fills
+each omitted field with its default before creating any session resource, and the resolved object is
+immutable. A runtime profile may narrow these bounds but cannot exceed them.
 
-| Field | Meaning |
-| --- | --- |
-| `wallClockMs` | Overall agent execution deadline |
-| `stopGraceMs` | Graceful stop interval before force removal |
-| `memoryBytes` | Hard container memory and memory-plus-swap limit |
-| `cpuCount` | Fractional CPU quota |
-| `pids` | Maximum container process count |
-| `diagnosticBytes` | Maximum captured stdout plus stderr before sanitization |
+| Field | Minimum | Default | Maximum | Meaning |
+| --- | ---: | ---: | ---: | --- |
+| `wallClockMs` | 1,000 | 120,000 | 900,000 | Overall agent execution deadline |
+| `stopGraceMs` | 1,000 | 5,000 | 30,000 | Graceful stop interval before force removal |
+| `memoryBytes` | 268,435,456 (256 MiB) | 1,073,741,824 (1 GiB) | 4,294,967,296 (4 GiB) | Hard container memory and memory-plus-swap limit |
+| `cpuCount` | 0.25 | 1 | 4 | Fractional CPU quota |
+| `pids` | 32 | 256 | 1,024 | Maximum container process count |
+| `diagnosticBytes` | 4,096 (4 KiB) | 65,536 (64 KiB) | 1,048,576 (1 MiB) | Maximum captured stdout plus stderr before sanitization |
+
+All fields except `cpuCount` are integers. `stopGraceMs` is also a multiple of 1,000 so it maps
+losslessly to Docker's whole-second stop timeout. Numeric strings are not coerced. Profile-specific
+minimum, default, and maximum values must remain ordered and inside the global v1 bounds.
 
 ## Agent Runtime Profile
 

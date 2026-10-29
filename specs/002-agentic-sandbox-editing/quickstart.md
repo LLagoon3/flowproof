@@ -50,6 +50,11 @@ pnpm exec vitest run \
 Expected outcomes:
 
 - invalid requests fail before any clone or container side effect;
+- omitted limits resolve to 120-second wall clock, 5-second stop grace, 1-GiB memory, 1 CPU,
+  256 PIDs, and 64-KiB diagnostics;
+- exact v1 minima and maxima pass while below-minimum, above-maximum, non-finite,
+  fractional-integer, non-whole-second stop-grace, and string-coerced values fail before side
+  effects;
 - legal lifecycle transitions and first-terminal-cause races are deterministic;
 - Docker argv contains every required restriction and rejects image, mount, network, shell, and
   resource-limit injection;

@@ -27,7 +27,24 @@ Required values:
 - bounded non-empty `task`
 - registered `runtimeProfileId`
 - bounded `declaredProjectCommands` used as task context, not an enforced OS command allowlist
-- validated wall-clock, stop-grace, memory, CPU, PID, and diagnostic limits
+- optional wall-clock, stop-grace, memory, CPU, PID, and diagnostic overrides that resolve against
+  the v1 bounds below
+
+| Limit | Minimum | Default | Maximum |
+| --- | ---: | ---: | ---: |
+| `wallClockMs` | 1,000 | 120,000 | 900,000 |
+| `stopGraceMs` | 1,000 | 5,000 | 30,000 |
+| `memoryBytes` | 268,435,456 (256 MiB) | 1,073,741,824 (1 GiB) | 4,294,967,296 (4 GiB) |
+| `cpuCount` | 0.25 | 1 | 4 |
+| `pids` | 32 | 256 | 1,024 |
+| `diagnosticBytes` | 4,096 (4 KiB) | 65,536 (64 KiB) | 1,048,576 (1 MiB) |
+
+Validation fills omitted fields with the defaults before creating any session resource. Explicit
+values below the minimum, above the maximum, non-finite, or of the wrong numeric kind are rejected.
+`wallClockMs`, `stopGraceMs`, `memoryBytes`, `pids`, and `diagnosticBytes` must be integers;
+`stopGraceMs` must also be a multiple of 1,000, and `cpuCount` may be fractional. Numeric strings are
+never coerced. Runtime-profile minimum, default, and maximum values must remain ordered, may narrow
+these ranges, and cannot widen them.
 
 Rejected values and behavior:
 
@@ -49,7 +66,7 @@ The profile registry is supplied by trusted code. Each profile fixes:
 - immutable OCI digest or local image ID; mutable tags are rejected
 - direct argv and `/workspace` working directory
 - non-secret environment allowlist with no inherited host environment or credential
-- minimum/default/maximum resource limits
+- optional profile-specific resource limits that stay within and may only narrow the v1 bounds
 
 The fixed argv reads `/run/flowproof/task.json`. The declarations inside that document guide the
 agent; they do not create a command broker or operating-system allowlist.

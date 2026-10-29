@@ -134,6 +134,25 @@ The implementation performs capability preflight against the local Docker daemon
 `startup_failed` before agent execution if required isolation flags, including seccomp, are
 unsupported. AppArmor/LSM availability is observed and recorded but is not a preflight blocker.
 
+### Resource-limit contract
+
+The trusted caller may omit individual limits and receive the v1 defaults. Explicit values must be
+within these global bounds; a registered runtime profile may narrow but never widen them.
+
+| Limit | Minimum | Default | Maximum |
+| --- | ---: | ---: | ---: |
+| Wall clock | 1 second | 120 seconds | 15 minutes |
+| Stop grace | 1 second | 5 seconds | 30 seconds |
+| Memory and memory-plus-swap | 256 MiB | 1 GiB | 4 GiB |
+| CPU quota | 0.25 CPU | 1 CPU | 4 CPUs |
+| Process count | 32 | 256 | 1,024 |
+| Captured diagnostic bytes | 4 KiB | 64 KiB | 1 MiB |
+
+All values except the CPU quota are integers in the request's base unit. Validation rejects
+non-finite values, fractional integer fields, coercion from strings, and values outside the resolved
+profile range before clone or container creation. Stop-grace milliseconds must be a multiple of
+1,000 so the value maps losslessly to Docker's whole-second timeout.
+
 ### Cancellation and race handling
 
 - `startEditingSession` returns a handle with an immutable session ID, a result promise, and an

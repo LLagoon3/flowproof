@@ -38,3 +38,5 @@
   integration are reserved for later specifications.
 - The caller receives the terminal result only after cleanup has completed or reported its final
   state; this feature exposes no pre-cleanup workspace-inspection contract.
+- Planning defines declared project commands as agent task context rather than an enforced command
+  allowlist and fixes concrete v1 min/default/max resource limits for implementation and testing.

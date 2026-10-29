@@ -184,7 +184,27 @@ would replace.
   indefinite residue.
 - Computing a Git diff now would pull candidate admission and verification concerns into this PR.
 
-## Decision 10: Treat rootless Docker as recommended hardening, not a claim
+## Decision 10: Fix conservative v1 resource bounds
+
+**Decision**: Use global min/default/max values of 1/120/900 seconds for wall-clock execution,
+1/5/30 seconds for stop grace, 256 MiB/1 GiB/4 GiB for memory and memory-plus-swap, 0.25/1/4 CPUs,
+32/256/1,024 processes, and 4 KiB/64 KiB/1 MiB for captured diagnostics. A runtime profile may
+narrow but never widen these bounds.
+
+**Rationale**: The 120-second default directly matches SC-001. One CPU, 1 GiB, and 256 processes are
+ample for the deterministic Node.js fixture without granting an unbounded host share. The maxima
+leave room for realistic local coding tasks while staying below half of the prepared 12-CPU,
+approximately 30-GiB development host. The minima reject values too small for a useful agent run,
+and the diagnostic cap prevents result amplification.
+
+**Alternatives considered**:
+
+- Profile-specific ranges without global hard caps leave caller validation and tests ambiguous.
+- Deriving maxima dynamically from host capacity makes identical requests behave differently across
+  machines and weakens reproducibility.
+- Unlimited time, memory, processes, or diagnostics contradict the bounded-runtime requirement.
+
+## Decision 11: Treat rootless Docker as recommended hardening, not a claim
 
 **Decision**: Support a local Docker Engine and record whether rootless mode is active during
 preflight. Require all container-level restrictions regardless. Document rootful operation as a

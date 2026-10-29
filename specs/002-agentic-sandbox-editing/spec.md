@@ -44,9 +44,9 @@ while the developer's original repository remains unchanged.
 replace model-authored patches in later features.
 
 **Independent Test**: Run a deterministic fixture agent that reads the prepared project, changes at
-least three files, runs an approved project command, and exits successfully. The story succeeds when
-all expected edits exist in the disposable copy during the session and no original-repository state
-changes.
+least three files, runs a declared synthetic project command, and exits successfully. The story
+succeeds when all expected edits exist in the disposable copy during the session and no
+original-repository state changes.
 
 **Acceptance Scenarios**:
 
@@ -131,7 +131,8 @@ secret markers, and never reports candidate or verification success.
 - **FR-002**: The editing session MUST NOT grant the agent write access to the developer's original
   repository, personal home directory, host credentials, or privileged host-control interfaces.
 - **FR-003**: The agent MUST be able to inspect and change multiple files within the disposable
-  project copy and run the project commands authorized for the editing task.
+  project copy and run task-related project commands. Any declared project-command list supplied
+  with the task is context for the agent, not an enforced operating-system allowlist.
 - **FR-004**: The session MUST permit access to general external technical resources when allowed by
   the user's and project's policies; it MUST NOT restrict external access solely to model-provider
   endpoints.
@@ -153,8 +154,8 @@ secret markers, and never reports candidate or verification success.
 
 ### Key Entities
 
-- **Editing Session Request**: The selected repository revision, editing task, authorized project
-  commands, and bounded runtime limits supplied by the trusted caller.
+- **Editing Session Request**: The selected repository revision, editing task, declared
+  project-command context, and bounded runtime limits supplied by the trusted caller.
 - **Disposable Editing Workspace**: The run-scoped project copy in which the agent may inspect,
   execute, and edit without changing the developer's original repository.
 - **Editing Session**: The lifecycle that owns workspace preparation, agent execution, cancellation,
@@ -166,9 +167,9 @@ secret markers, and never reports candidate or verification success.
 
 ### Measurable Outcomes
 
-- **SC-001**: A prepared fixture agent can inspect the project, change at least three files, run an
-  authorized project command, and return a successful session outcome within two minutes, excluding
-  initial dependency installation.
+- **SC-001**: A prepared fixture agent can inspect the project, change at least three files, run a
+  declared synthetic project command, and return a successful session outcome within two minutes,
+  excluding initial dependency installation.
 - **SC-002**: Across prepared success, unsuccessful-exit, startup-failure, timeout, cancellation,
   and interrupted-cleanup cases, 100% of sessions produce the expected terminal outcome and bounded
   cleanup status.
@@ -201,7 +202,7 @@ secret markers, and never reports candidate or verification success.
 
 - Disposable editing-workspace creation, readiness, and disposal.
 - Coding-agent startup, execution, cancellation, timeout, process cleanup, and terminal outcomes.
-- Multi-file editing and authorized project commands inside the disposable copy.
+- Multi-file editing and task-related project commands inside the disposable copy.
 - General external technical research subject to ordinary user and project policy.
 - Protection of the original repository and host credentials from accidental modification or
   exposure.
