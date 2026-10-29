@@ -2,7 +2,6 @@ import { BarController, BarElement, CategoryScale, Chart, LinearScale } from 'ch
 
 import { INITIAL_REGION, REGION_OPTIONS, salesRows } from './data.js'
 import type { SalesRow } from './data.js'
-import { filterByRegion } from './filterData.js'
 import { installTestProbe } from './testProbe.js'
 
 // Fixed Canvas size and disabled animation keep failure and replay renders comparable.
@@ -42,10 +41,24 @@ canvas.height = CANVAS_HEIGHT
 
 app.append(heading, label, canvas)
 
-let rows: readonly SalesRow[] = filterByRegion(salesRows, select.value)
+let chart: Chart<'bar', number[], string> | null = null
+let rows: readonly SalesRow[] = []
 let renderCount = 0
 
-const chart = new Chart<'bar', number[], string>(canvas, {
+// The trusted probe is installed before the permitted filter module is loaded. A static import
+// would evaluate that module first and let its top-level code claim the probe global. The probe
+// reports not ready until the first render below.
+installTestProbe(window, {
+  chart: () => chart,
+  rows: () => rows,
+  selectedRegion: () => select.value,
+  renderCount: () => renderCount,
+})
+
+const { filterByRegion } = await import('./filterData.js')
+
+rows = filterByRegion(salesRows, select.value)
+const revenueChart = new Chart<'bar', number[], string>(canvas, {
   type: 'bar',
   data: {
     labels: rows.map((row) => row.quarter),
@@ -57,20 +70,14 @@ const chart = new Chart<'bar', number[], string>(canvas, {
     devicePixelRatio: 1,
   },
 })
+chart = revenueChart
 renderCount = 1
-
-installTestProbe(window, {
-  chart: () => chart,
-  rows: () => rows,
-  selectedRegion: () => select.value,
-  renderCount: () => renderCount,
-})
 
 select.addEventListener('change', () => {
   rows = filterByRegion(salesRows, select.value)
-  chart.data.labels = rows.map((row) => row.quarter)
-  const [dataset] = chart.data.datasets
+  revenueChart.data.labels = rows.map((row) => row.quarter)
+  const [dataset] = revenueChart.data.datasets
   if (dataset) dataset.data = rows.map((row) => row.revenue)
-  chart.update()
+  revenueChart.update()
   renderCount += 1
 })
