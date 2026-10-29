@@ -18,8 +18,9 @@ export const CONTAINER_HOME = '/home/agent'
 export const TMPFS_BYTES = 134_217_728
 
 const COMMAND_TIMEOUT_MS = 30_000
-// The CLI's own stop call may take the grace period plus daemon latency.
-const STOP_MARGIN_MS = 15_000
+// The CLI must settle before the session's wider stop boundary expires, so a timed-out
+// `docker stop` process cannot outlive the result. The session allows one additional second.
+const STOP_MARGIN_MS = 1_000
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{64}$/
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -274,10 +275,15 @@ export function createDockerCommandRunner(options: { readonly executable?: strin
   return Object.freeze({
     run(args: readonly string[], { timeoutMs }: { readonly timeoutMs: number }) {
       return new Promise<{ readonly code: number | null; readonly stdout: string }>((resolve) => {
-        execFile(executable, [...args], { encoding: 'utf8', env, timeout: timeoutMs, maxBuffer: MAX_COMMAND_OUTPUT_BYTES }, (error, stdout) => {
-          if (error === null) resolve({ code: 0, stdout })
-          else resolve({ code: typeof error.code === 'number' ? error.code : null, stdout: '' })
-        })
+        execFile(
+          executable,
+          [...args],
+          { encoding: 'utf8', env, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: MAX_COMMAND_OUTPUT_BYTES },
+          (error, stdout) => {
+            if (error === null) resolve({ code: 0, stdout })
+            else resolve({ code: typeof error.code === 'number' ? error.code : null, stdout: '' })
+          },
+        )
       })
     },
     attach(args: readonly string[], output: AttachOutput): AttachedContainer {

@@ -16,6 +16,7 @@ import type {
 export const FAKE_IMAGE_ID = `sha256:${'a'.repeat(64)}`
 export const FAKE_REVISION = 'b'.repeat(40)
 export const FAKE_CONTAINER_ID = 'c'.repeat(64)
+export const FAKE_UNRELATED_CONTAINER_ID = 'd'.repeat(64)
 export const FAKE_REPOSITORY_ROOT = '/srv/projects/example'
 export const FAKE_SESSION_ROOT = '/tmp/flowproof-editing-Fake01'
 
@@ -69,6 +70,12 @@ export interface FakeDockerOptions {
   readonly stderr?: readonly (string | Buffer)[]
   /** Exit immediately after printing, with this code. */
   readonly exitImmediately?: number
+  /** The attach client exits without changing the still-running container state. */
+  readonly attachClientExitImmediately?: number | null
+  /** Docker's placeholder exit code while that container remains running. */
+  readonly runningExitCode?: number | null
+  /** An unrelated container already owns the generated session name. */
+  readonly generatedNameOccupied?: boolean
 }
 
 export interface FakeDocker extends DockerAdapter {
@@ -119,6 +126,7 @@ export function fakeDocker(options: FakeDockerOptions = {}): FakeDocker {
       for (const value of options.stdout ?? []) attach.onStdout(chunk(value))
       for (const value of options.stderr ?? []) attach.onStderr(chunk(value))
       if (options.startError) exited.resolve({ code: 127 })
+      if (options.attachClientExitImmediately !== undefined) exited.resolve({ code: options.attachClientExitImmediately })
       if (options.exitImmediately !== undefined) finish(options.exitImmediately)
       started.resolve()
       return {
@@ -138,7 +146,13 @@ export function fakeDocker(options: FakeDockerOptions = {}): FakeDocker {
       calls.push('inspect')
       if (!created || removed) return null
       if (options.startError) return { running: false, exitCode: 127, oomKilled: false, started: false, startError: true }
-      return { running: exitCode === null, exitCode, oomKilled: false, started: true, startError: false }
+      return {
+        running: exitCode === null,
+        exitCode: exitCode === null ? (options.runningExitCode ?? null) : exitCode,
+        oomKilled: false,
+        started: true,
+        startError: false,
+      }
     },
     async exists() {
       calls.push('exists')
@@ -146,7 +160,7 @@ export function fakeDocker(options: FakeDockerOptions = {}): FakeDocker {
     },
     async findByName() {
       calls.push('findByName')
-      return null
+      return options.generatedNameOccupied ? FAKE_UNRELATED_CONTAINER_ID : null
     },
     async remove() {
       calls.push('remove')

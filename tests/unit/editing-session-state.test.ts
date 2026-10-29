@@ -224,6 +224,24 @@ describe('terminal-cause races', () => {
     expect(await handle.result).toBe(result)
     expect(Object.isFrozen(result)).toBe(true)
   })
+
+  it('treats an attach-client exit while the container is still running as an interrupted failure', async () => {
+    const docker = fakeDocker({ attachClientExitImmediately: 0, runningExitCode: 0 })
+
+    const result = await start(docker, fakeWorkspace()).result
+
+    expect(result).toMatchObject({ executionOutcome: 'failed', exitCode: null, signal: null, cleanup: { status: 'complete' } })
+    expect(result.diagnostic).toBe('failed: the runtime attachment ended before the agent container stopped.')
+    expect(docker.calls).toContain('remove')
+    expectValid(result)
+  })
+
+  it('does not infer a signal when the agent deliberately exits with a signal-shaped code', async () => {
+    const result = await start(fakeDocker({ exitImmediately: 143 }), fakeWorkspace()).result
+
+    expect(result).toMatchObject({ executionOutcome: 'failed', exitCode: 143, signal: null })
+    expectValid(result)
+  })
 })
 
 describe('startup failures', () => {
@@ -243,6 +261,18 @@ describe('startup failures', () => {
     for (const call of expectedCalls) expect(docker.calls).toContain(call)
     if (!('docker' in setup)) expect(docker.calls).toEqual([])
     expect(workspace.calls).toContain('dispose')
+    expectValid(result)
+  })
+
+  it('never adopts or removes an unrelated container that already owns the generated name', async () => {
+    const docker = fakeDocker({ generatedNameOccupied: true })
+
+    const result = await start(docker, fakeWorkspace()).result
+
+    expect(result).toMatchObject({ executionOutcome: 'startup_failed', cleanup: { status: 'complete', containerRemoved: true } })
+    expect(docker.calls).toContain('findByName')
+    expect(docker.calls).not.toContain('create')
+    expect(docker.calls).not.toContain('remove')
     expectValid(result)
   })
 })

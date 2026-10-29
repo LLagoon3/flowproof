@@ -203,8 +203,14 @@ const startupCodeOf = (error: unknown): StartupCode => {
 
 const SIGNAL_NAMES = new Map(Object.entries(constants.signals).map(([name, number]) => [number, name]))
 
-/** Container exit codes above 128 conventionally report the terminating signal. */
-const signalOf = (exitCode: number | null): string | null => (exitCode !== null && exitCode > 128 ? (SIGNAL_NAMES.get(exitCode - 128) ?? null) : null)
+/**
+ * Reports a signal only when FlowProof initiated termination or Docker observed an OOM kill.
+ * An agent may deliberately exit with a code such as 143, which is not itself proof of SIGTERM.
+ */
+const signalOf = (outcome: ExecutionOutcome, exitCode: number | null, oomKilled: boolean): string | null => {
+  if (exitCode === null || (!oomKilled && outcome !== 'timed_out' && outcome !== 'cancelled')) return null
+  return exitCode > 128 ? (SIGNAL_NAMES.get(exitCode - 128) ?? null) : null
+}
 
 /** Longer cancellation reasons are omitted whole rather than cut, so no partial secret survives. */
 const MAX_CANCEL_REASON_INPUT = 2_048
@@ -332,6 +338,7 @@ function describeOutcome(input: {
   readonly exitCode: number | null
   readonly startupCode: StartupCode | null
   readonly oomKilled: boolean
+  readonly runtimeInterrupted: boolean
   readonly wallClockMs: number
   readonly reason: string | null
 }): string {
@@ -343,6 +350,9 @@ function describeOutcome(input: {
       return `timed_out: the agent exceeded its ${input.wallClockMs / 1_000}-second wall-clock limit and was stopped (${exit}).`
     case 'cancelled':
       return `cancelled: the session was cancelled${input.reason === null ? '' : ` (reason: ${input.reason})`} and the agent was stopped (${exit}).`
+    case 'failed':
+      if (input.runtimeInterrupted) return 'failed: the runtime attachment ended before the agent container stopped.'
+      return `failed: the agent exited with code ${input.exitCode ?? 'unknown'}.${input.oomKilled ? ' The container reached its memory limit.' : ''}`
     default:
       return `${input.outcome}: the agent exited with code ${input.exitCode ?? 'unknown'}.${input.oomKilled ? ' The container reached its memory limit.' : ''}`
   }
@@ -406,6 +416,7 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
   let attached: AttachedContainer | null = null
   let startupCode: StartupCode | null = null
   let finalState: ContainerState | null = null
+  let runtimeInterrupted = false
   // Raw output stays in memory, bounded per stream, and leaves only through composeDiagnostic.
   const stdout = createTailBuffer(Math.floor(limits.diagnosticBytes / 2))
   const stderr = createTailBuffer(Math.floor(limits.diagnosticBytes / 2))
@@ -427,16 +438,25 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
     const prepared = ended() ? null : await workspace.create(createTaskDocument(request))
     if (prepared !== null && !ended()) {
       lifecycle.transition('starting')
-      createAttempted = true
-      containerId = await docker.create({
-        sessionId: id,
-        profile,
-        limits,
-        user: { uid, gid },
-        workspacePath: prepared.workspacePath,
-        taskDocumentPath: prepared.taskDocumentPath,
-        lsm: isolation?.lsm ?? null,
+      // Establish absence before create. If create subsequently fails after the daemon made the
+      // container, cleanup may safely recover the newly appeared exact name. A pre-existing name
+      // is never adopted or removed as session-owned state.
+      const existing = await docker.findByName(containerName(id)).catch(() => {
+        throw new StartupFailure('DOCKER_CREATE_FAILED')
       })
+      if (existing !== null) throw new StartupFailure('DOCKER_CREATE_FAILED')
+      if (!ended()) {
+        createAttempted = true
+        containerId = await docker.create({
+          sessionId: id,
+          profile,
+          limits,
+          user: { uid, gid },
+          workspacePath: prepared.workspacePath,
+          taskDocumentPath: prepared.taskDocumentPath,
+          lsm: isolation?.lsm ?? null,
+        })
+      }
     }
     if (containerId !== null && !ended()) {
       lifecycle.transition('running')
@@ -499,7 +519,12 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
   let outcome: ExecutionOutcome
   let exitCode: number | null = null
   if (cause === 'exited') {
-    if (finalState !== null && (!finalState.started || finalState.startError)) {
+    if (finalState?.running === true) {
+      // The attach client ended but the agent container did not. Treat this controller/runtime
+      // interruption as a failure and never reuse Docker's placeholder running-state exit code.
+      outcome = 'failed'
+      runtimeInterrupted = true
+    } else if (finalState !== null && (!finalState.started || finalState.startError)) {
       outcome = 'startup_failed'
       startupCode = 'DOCKER_START_FAILED'
     } else {
@@ -519,6 +544,7 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
     exitCode,
     startupCode,
     oomKilled: finalState?.oomKilled === true,
+    runtimeInterrupted,
     wallClockMs: limits.wallClockMs,
     reason: outcome === 'cancelled' ? sanitizeReason(cancellation.reason, placeholders) : null,
   })
@@ -526,7 +552,7 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
     sessionId: id,
     executionOutcome: outcome,
     exitCode,
-    signal: outcome === 'startup_failed' ? null : signalOf(exitCode),
+    signal: outcome === 'startup_failed' ? null : signalOf(outcome, exitCode, finalState?.oomKilled === true),
     durationMs: Math.max(0, Math.round(clock() - startedAt)),
     diagnostic: composeDiagnostic({ summary, stdout: stdout.text(), stderr: stderr.text(), placeholders, limit: limits.diagnosticBytes }),
     cleanup,
