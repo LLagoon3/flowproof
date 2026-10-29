@@ -19,18 +19,22 @@ import type { TrustedProbeMethod } from '../studio/targetApp.js'
 // with the committed scenario action, reads the dataset, chart series, and Canvas size from the
 // trusted probe, takes a fixed-size Canvas screenshot, and drains the console and target-origin
 // network observations recorded since the previous phase. The failure phase also reads the one
-// permitted source file from the original HEAD. Everything is sanitized before it is persisted,
-// and Evidence IDs are issued and registered only for persisted sanitized artifacts. Network
-// evidence keeps metadata only: no headers, cookies, bodies, query strings, or other origins.
+// permitted source file from the original HEAD. Page-controlled strings are bounded before they
+// are sanitized, everything is sanitized before it is persisted, and Evidence IDs are issued and
+// registered only for persisted sanitized artifacts. Network evidence keeps metadata only: no
+// headers, cookies, bodies, query strings, or other origins.
 
 const MAX_CONSOLE_ENTRIES = 200
 const MAX_NETWORK_REQUESTS = 500
 const MAX_PROBE_ITEMS = 1000
+const MAX_PROBE_ROW_FIELDS = 32
+/** The longest string the trusted probe may report: a region, dataset cell, or chart label. */
+export const MAX_PROBE_STRING_LENGTH = 256
 const NETWORK_SETTLE_MS = 2_000
 const POLL_MS = 50
 const GIT_TIMEOUT_MS = 10_000
 const CANVAS_SELECTOR = 'canvas'
-const ROW_KEY = /^[a-z][a-z0-9_]*$/
+const ROW_KEY = /^[a-z][a-z0-9_]{0,63}$/
 
 export type CaptureErrorCode =
   | 'CAPTURE_INPUT_INVALID'
@@ -140,8 +144,10 @@ function mergeRedactions(...lists: ReadonlyArray<readonly Redaction[]>): Redacti
 }
 
 // ---------------------------------------------------------------------------------------
-// Trusted probe reads (untrusted values, validated by shape)
+// Trusted probe reads (untrusted values, validated by shape and size before sanitization)
 // ---------------------------------------------------------------------------------------
+
+const probeString = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_PROBE_STRING_LENGTH
 
 async function probe(frame: Frame, method: TrustedProbeMethod): Promise<unknown> {
   let reply
@@ -157,7 +163,7 @@ async function probe(frame: Frame, method: TrustedProbeMethod): Promise<unknown>
 const probeInvalid = (): CaptureError => new CaptureError('CAPTURE_PROBE_INVALID', 'The trusted probe returned an unexpected shape.')
 
 function readState(value: unknown): ProbeState {
-  if (!isPlainObject(value) || typeof value.ready !== 'boolean' || typeof value.selected_region !== 'string') throw probeInvalid()
+  if (!isPlainObject(value) || typeof value.ready !== 'boolean' || !probeString(value.selected_region)) throw probeInvalid()
   if (!Number.isInteger(value.render_count) || (value.render_count as number) < 0) throw probeInvalid()
   return { ready: value.ready, selected_region: value.selected_region, render_count: value.render_count as number }
 }
@@ -167,8 +173,9 @@ function readDataset(value: unknown): ObservedRow[] {
   return value.map((row: unknown) => {
     if (!isPlainObject(row)) throw probeInvalid()
     const entries = Object.entries(row)
-    const scalar = (cell: unknown): boolean => typeof cell === 'string' || (typeof cell === 'number' && Number.isFinite(cell))
-    if (entries.length === 0 || !entries.every(([key, cell]) => ROW_KEY.test(key) && scalar(cell))) throw probeInvalid()
+    const scalar = (cell: unknown): boolean => probeString(cell) || (typeof cell === 'number' && Number.isFinite(cell))
+    if (entries.length === 0 || entries.length > MAX_PROBE_ROW_FIELDS) throw probeInvalid()
+    if (!entries.every(([key, cell]) => ROW_KEY.test(key) && scalar(cell))) throw probeInvalid()
     return Object.fromEntries(entries) as ObservedRow
   })
 }
@@ -182,7 +189,7 @@ function readChart(value: unknown): ChartObservation {
     (barCount as number) <= MAX_PROBE_ITEMS &&
     Array.isArray(labels) &&
     labels.length <= MAX_PROBE_ITEMS &&
-    labels.every((label) => typeof label === 'string') &&
+    labels.every(probeString) &&
     Array.isArray(values) &&
     values.length <= MAX_PROBE_ITEMS &&
     values.every((item) => typeof item === 'number' && Number.isFinite(item))

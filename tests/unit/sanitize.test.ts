@@ -1,7 +1,11 @@
+import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 
 import {
+  CONSOLE_TEXT_OMITTED,
   MAX_CHAT_TEXT_LENGTH,
+  MAX_CONSOLE_TEXT_LENGTH,
+  MAX_NETWORK_URL_LENGTH,
   REDACTED,
   sanitizeArtifact,
   sanitizeChatText,
@@ -95,6 +99,43 @@ describe('sanitizeText', () => {
     const credential = result.redactions.find((redaction) => redaction.category === 'credential')
     expect(credential?.count).toBe(2)
   })
+
+  it('scans long runs of name characters and separator whitespace in linear time', () => {
+    const length = 200_000
+    const inputs = [
+      'a.'.repeat(length),
+      'a-'.repeat(length),
+      `password=${' '.repeat(length)},`,
+      `authorization:${' '.repeat(length)},`,
+      `Bearer${' '.repeat(length)},`,
+      `Cookie:${'\n'.repeat(length)}`,
+    ]
+    // A watchdog, not a timing assertion: these scans take milliseconds when linear and many
+    // minutes when every interior boundary or whitespace split rescans the rest of the run.
+    const results = vm.runInNewContext('inputs.map((text) => sanitizeText(text))', { inputs, sanitizeText }, { timeout: 10_000 }) as unknown
+
+    expect(results).toEqual(inputs.map((value) => ({ value, redactions: [] })))
+  })
+
+  it('redacts a secret name that ends a run of name characters or follows long whitespace', () => {
+    const run = 'a.'.repeat(1_000)
+    const spaces = ' '.repeat(1_000)
+    const samples = [
+      [`${run}api_key=abcdefghijklmnop`, `${run}api_key=${REDACTED}`],
+      ['--db.password=hunter22 next', `--db.password=${REDACTED} next`],
+      [`x-api-key:${spaces}"alpha beta"`, `x-api-key:${spaces}"${REDACTED}"`],
+      [`password=${spaces}hunter22`, `password=${spaces}${REDACTED}`],
+      [`Authorization:${spaces}Bearer abcdefghijkl`, `Authorization:${spaces}${REDACTED}`],
+      [`Cookie:\n\n${spaces}session=abc`, `Cookie:\n\n${spaces}${REDACTED}`],
+    ] as const
+
+    for (const [sample, expected] of samples) {
+      const once = sanitizeText(sample)
+      expect(once.value, sample.slice(0, 40)).toBe(expected)
+      expect(once.redactions.reduce((total, redaction) => total + redaction.count, 0), sample.slice(0, 40)).toBe(1)
+      expect(sanitizeText(once.value), sample.slice(0, 40)).toEqual({ value: once.value, redactions: [] })
+    }
+  })
 })
 
 describe('sanitizeHeaders', () => {
@@ -163,6 +204,21 @@ describe('sanitizeNetworkObservation', () => {
     expect(categories).toContain('header')
     expect(categories).toContain('body')
   })
+
+  it('reduces an over-long request URL to placeholders instead of parsing and keeping it', () => {
+    const origin = 'http://localhost:43119'
+    const long = sanitizeNetworkObservation({
+      method: 'GET',
+      url: `${origin}/${'a'.repeat(MAX_NETWORK_URL_LENGTH)}/api_key=${SEEDED}`,
+      status: 404,
+    })
+
+    expect(long.value).toMatchObject({ origin: REDACTED, path: REDACTED, status: 404 })
+    expect(long.redactions).toEqual([{ category: 'path', count: 1 }])
+    expect(JSON.stringify(long.value)).not.toContain(SEEDED)
+    const path = `/${'a'.repeat(MAX_NETWORK_URL_LENGTH - origin.length - 1)}`
+    expect(sanitizeNetworkObservation({ method: 'GET', url: `${origin}${path}`, status: 200 }).value).toMatchObject({ origin, path })
+  })
 })
 
 describe('sanitizeConsoleEntries', () => {
@@ -184,6 +240,25 @@ describe('sanitizeConsoleEntries', () => {
 
     expect(result.value[0]?.text).toBe('GET http://localhost:43119/data.json failed')
     expect(result.redactions.map((redaction) => redaction.category)).toContain('query')
+  })
+
+  it('replaces over-long console text whole instead of scanning or cutting it', () => {
+    const secret = ` Bearer ${SEEDED}abcdefgh`
+    const result = sanitizeConsoleEntries([
+      { level: 'error', text: `${'x'.repeat(MAX_CONSOLE_TEXT_LENGTH)}${secret}` },
+      { level: 'error', text: `${'x'.repeat(MAX_CONSOLE_TEXT_LENGTH - secret.length)}${secret}` },
+      // Within the bound before redaction, past it after: replaced too, never cut.
+      { level: 'log', text: 'password=a '.repeat(Math.floor(MAX_CONSOLE_TEXT_LENGTH / 11)) },
+    ])
+
+    expect(result.value[0]).toEqual({ level: 'error', text: CONSOLE_TEXT_OMITTED })
+    expect(result.value[1]?.text).toBe(`${'x'.repeat(MAX_CONSOLE_TEXT_LENGTH - secret.length)} Bearer ${REDACTED}`)
+    expect(result.value[2]).toEqual({ level: 'log', text: CONSOLE_TEXT_OMITTED })
+    // The over-long entry was never scanned: only the in-bound entries' redactions are counted.
+    expect(result.redactions).toEqual([{ category: 'credential', count: 1 + Math.floor(MAX_CONSOLE_TEXT_LENGTH / 11) }])
+    expect(JSON.stringify(result.value)).not.toContain('FLOWPROOF')
+    expect(CONSOLE_TEXT_OMITTED.length).toBeLessThanOrEqual(MAX_CONSOLE_TEXT_LENGTH)
+    expect(sanitizeText(CONSOLE_TEXT_OMITTED)).toEqual({ value: CONSOLE_TEXT_OMITTED, redactions: [] })
   })
 })
 

@@ -10,6 +10,10 @@ export { MAX_CHAT_TEXT_LENGTH }
 
 export const REDACTED = '[REDACTED]'
 export const MAX_CONSOLE_TEXT_LENGTH = 2000
+/** Replaces console text that is too long to keep whole; such text is never scanned or cut. */
+export const CONSOLE_TEXT_OMITTED = `[OMITTED: console text longer than ${MAX_CONSOLE_TEXT_LENGTH} characters]`
+/** Longer request URLs are reduced to placeholders rather than parsed, scanned, and persisted. */
+export const MAX_NETWORK_URL_LENGTH = 2048
 
 export type JsonValue = string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue }
 
@@ -54,12 +58,22 @@ interface TextRule {
 }
 
 // Skips values that an earlier pass already redacted, keeping sanitization idempotent. The
-// optional whitespace stops a separator's `\s*` from backtracking around the placeholder.
+// optional whitespace lets the check see a placeholder past the separator's whitespace.
 const NOT_REDACTED = String.raw`(?!\s*["']?\[REDACTED\])`
+// A secret name is a whole run of name characters ending in a secret word, matched from the
+// run's start; `\b` also matches inside runs such as `a.b-c`.
+const NAME_START = String.raw`(?<![A-Za-z0-9_.-])`
 const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:api[_-]?key|secret[_-]?key|secret|password|passwd|token|access[_-]?key|private[_-]?key)`
 
 // Order matters: structured forms (headers, URLs, assignments) consume their values before
 // the bare token shapes run, so one secret is counted once.
+//
+// Long runs are scanned once, not once per possible start or split:
+// - A name, URL scheme, or URL that can start inside a run of its own characters is tried only
+//   at the run's first possible start. Every later start reaches the same end and fails alike.
+// - A separator's whitespace ends in `(?!\s)`: no value starts with whitespace, so a shorter
+//   split cannot match and would only rerun NOT_REDACTED over the rest of the run. Cookie
+//   values may start with whitespace, so that rule checks NOT_REDACTED once, before them.
 const TEXT_RULES: readonly TextRule[] = [
   {
     category: 'credential',
@@ -68,43 +82,46 @@ const TEXT_RULES: readonly TextRule[] = [
   },
   {
     category: 'cookie',
-    pattern: new RegExp(String.raw`\b(set-cookie|cookie)(\s*:\s*)${NOT_REDACTED}[^\r\n]+`, 'gi'),
+    pattern: new RegExp(String.raw`\b(set-cookie|cookie)(\s*:${NOT_REDACTED}\s*)[^\r\n]+`, 'gi'),
     replace: (_match, name, separator) => `${name}${separator}${REDACTED}`,
   },
   {
     category: 'credential',
     pattern: new RegExp(
-      String.raw`\b(proxy-authorization|authorization)(["']?\s*[:=]\s*["']?)${NOT_REDACTED}(?:(?:bearer|basic|digest|token)\s+)?[^\s,;'"]+`,
+      String.raw`\b(proxy-authorization|authorization)(["']?\s*[:=]\s*(?!\s)["']?)${NOT_REDACTED}(?:(?:bearer|basic|digest|token)\s+)?[^\s,;'"]+`,
       'gi',
     ),
     replace: (_match, name, separator) => `${name}${separator}${REDACTED}`,
   },
   {
     category: 'credential',
-    pattern: /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi,
+    pattern: /\b(?=[a-z])(?<!\b[a-z][a-z0-9+.-]*?)([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi,
     replace: (_match, scheme) => `${scheme}${REDACTED}@`,
   },
   {
     category: 'query',
-    pattern: /\b(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi,
+    pattern: /\b(?=https?:\/\/)(?<!\bhttps?:\/\/[^\s?#"'<>]*?)(https?:\/\/[^\s?#"'<>]+)[?#][^\s"'<>]*/gi,
     replace: (_match, base) => base ?? '',
   },
   {
     category: 'credential',
     pattern: new RegExp(
-      String.raw`\b(${SECRET_NAME})(["']?\s*[:=]\s*)(["'])${NOT_REDACTED}(?:\\.|(?!\3)[^\\\r\n])*\3`,
+      String.raw`${NAME_START}(${SECRET_NAME})(["']?\s*[:=]\s*(?!\s))(["'])${NOT_REDACTED}(?:\\.|(?!\3)[^\\\r\n])*\3`,
       'gi',
     ),
     replace: (_match, name, separator, quote) => `${name}${separator}${quote}${REDACTED}${quote}`,
   },
   {
     category: 'credential',
-    pattern: new RegExp(String.raw`\b(${SECRET_NAME})(["']?\s*[:=]\s*)(["']?)${NOT_REDACTED}([^\s"'\`,;&]+)\3`, 'gi'),
+    pattern: new RegExp(
+      String.raw`${NAME_START}(${SECRET_NAME})(["']?\s*[:=]\s*(?!\s))(["']?)${NOT_REDACTED}([^\s"'\`,;&]+)\3`,
+      'gi',
+    ),
     replace: (_match, name, separator, quote) => `${name}${separator}${quote}${REDACTED}${quote}`,
   },
   {
     category: 'credential',
-    pattern: new RegExp(String.raw`\b(bearer)\s+${NOT_REDACTED}[\w.~+/-]{8,}=*`, 'gi'),
+    pattern: new RegExp(String.raw`\b(bearer)\s+(?!\s)${NOT_REDACTED}[\w.~+/-]{8,}=*`, 'gi'),
     replace: (_match, scheme) => `${scheme} ${REDACTED}`,
   },
   { category: 'credential', pattern: /\bsk-[A-Za-z0-9_-]{16,}/g, replace: () => REDACTED },
@@ -248,6 +265,7 @@ export function sanitizeNetworkObservation(raw: RawNetworkObservation): Sanitize
   let origin = REDACTED
   let pathname = REDACTED
   try {
+    if (raw.url.length > MAX_NETWORK_URL_LENGTH) throw new Error('URL too long')
     const url = new URL(raw.url)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('unsupported scheme')
     origin = url.origin
@@ -286,17 +304,23 @@ export interface ConsoleEntry {
   readonly text: string
 }
 
-/** Keeps the level and redacted, bounded text of each console entry. */
+/**
+ * Keeps the level and redacted text of each console entry. Text longer than the bound, before or
+ * after redaction, is replaced whole by a placeholder: it is never scanned past the bound or cut,
+ * so a partial secret cannot survive.
+ */
 export function sanitizeConsoleEntries(
   entries: readonly { readonly level: string; readonly text: string }[],
 ): Sanitized<readonly ConsoleEntry[]> {
   const tally = new RedactionTally()
-  const value = entries.map((entry) =>
-    Object.freeze({
+  const value = entries.map((entry) => {
+    const raw = String(entry.text)
+    const redacted = raw.length <= MAX_CONSOLE_TEXT_LENGTH ? applyTextRules(raw, tally) : CONSOLE_TEXT_OMITTED
+    return Object.freeze({
       level: (CONSOLE_LEVELS as readonly string[]).includes(entry.level) ? (entry.level as ConsoleLevel) : 'log',
-      text: applyTextRules(String(entry.text), tally).slice(0, MAX_CONSOLE_TEXT_LENGTH),
-    }),
-  )
+      text: redacted.length <= MAX_CONSOLE_TEXT_LENGTH ? redacted : CONSOLE_TEXT_OMITTED,
+    })
+  })
   return Object.freeze({ value: Object.freeze(value), redactions: tally.toArray() })
 }
 

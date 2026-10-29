@@ -12,6 +12,7 @@ import { EVIDENCE_TYPES, parseEvidenceBundle } from '../../packages/flowproof/sr
 import type { EvidenceBundle, EvidenceItem, EvidencePhase } from '../../packages/flowproof/src/contracts/index.js'
 import { createEvidenceIdAllocator } from '../../packages/flowproof/src/evidence/ids.js'
 import type { EvidenceIdAllocator } from '../../packages/flowproof/src/evidence/ids.js'
+import { CONSOLE_TEXT_OMITTED } from '../../packages/flowproof/src/evidence/sanitize.js'
 import { canonicalJson, createRunArtifactStore, sha256Hex } from '../../packages/flowproof/src/evidence/store.js'
 import type { RunArtifactStore } from '../../packages/flowproof/src/evidence/store.js'
 import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
@@ -26,7 +27,9 @@ import type { TempDirectory } from '../support/repoFixture.js'
 // `packages/flowproof/src/capture/browserCapture.ts`. The trusted demo app is built into OS
 // temporary output and served on its committed fixed `localhost` port, framed like the Studio
 // target pane, and driven through Playwright. Seeded secrets are planted in console output and
-// in a request query string; none may reach a persisted artifact.
+// in a request query string; none may reach a persisted artifact. A routed fixture document then
+// reports probe values around the size bounds: oversized values are refused before anything is
+// persisted, and over-long console text is persisted only as a placeholder.
 
 export interface CapturedPhase {
   readonly phase: EvidencePhase
@@ -61,16 +64,19 @@ export interface BrowserCapture {
 export interface BrowserCaptureModule {
   /** Attaches phase-scoped console and network recording to the Studio page and its frames. */
   createBrowserCapture(page: Page): BrowserCapture
+  /** The longest string the trusted probe may report. */
+  readonly MAX_PROBE_STRING_LENGTH: number
 }
 
 const MODULE_PATH = 'packages/flowproof/src/capture/browserCapture.ts'
 const captureModule = (): Promise<BrowserCaptureModule> =>
-  loadPendingModule<BrowserCaptureModule>(MODULE_PATH, 'T037', ['createBrowserCapture'])
+  loadPendingModule<BrowserCaptureModule>(MODULE_PATH, 'T037', ['createBrowserCapture', 'MAX_PROBE_STRING_LENGTH'])
 
 const SEEDED_CONSOLE = 'sk-flowproofseededcapture00001'
 const SEEDED_QUERY = 'sk-flowproofseededcapture00002'
 const SEEDED_REPLAY = 'sk-flowproofseededcapture00003'
-const SEEDS = [SEEDED_CONSOLE, SEEDED_QUERY, SEEDED_REPLAY]
+const SEEDED_OVERSIZED = 'sk-flowproofseededcapture00004'
+const SEEDS = [SEEDED_CONSOLE, SEEDED_QUERY, SEEDED_REPLAY, SEEDED_OVERSIZED]
 const PERMITTED_SOURCE = 'apps/demo-chart/src/filterData.ts'
 const NETWORK_KEYS = ['duration_ms', 'method', 'mime_type', 'origin', 'path', 'status']
 const CAPTURE_TIMEOUT = 180_000
@@ -236,9 +242,9 @@ async function expectPersistedBundle(e: Environment, captured: CapturedPhase, ph
   expect(pngSize(shot)).toEqual(e.scenario.scenario.app.canvas)
 }
 
-async function expectNoSeededSecrets(e: Environment): Promise<void> {
-  for (const relative of await listTree(runRoot(e))) {
-    const bytes = await readFile(path.join(runRoot(e), relative)).catch(() => null)
+async function expectNoSeededSecrets(e: Environment, root = runRoot(e)): Promise<void> {
+  for (const relative of await listTree(root)) {
+    const bytes = await readFile(path.join(root, relative)).catch(() => null)
     if (bytes === null) continue
     for (const seed of SEEDS) expect(bytes.includes(seed), `${relative} leaks a seeded secret`).toBe(false)
   }
@@ -365,6 +371,152 @@ describe('browser capture against the built demo app', () => {
       for (const item of failure.bundle.items) expect(e.store.hasEvidence(item.evidence_id)).toBe(true)
       expect(replay.screenshotPath).not.toBe(failure.screenshotPath)
       await expectNoSeededSecrets(e)
+    },
+    CAPTURE_TIMEOUT,
+  )
+})
+
+interface ProbeFixture {
+  /** Reported as the selected region instead of the select's value. */
+  readonly region?: string
+  readonly rows?: unknown
+  readonly labels?: readonly unknown[]
+  /** Logged as a console error when the document loads. */
+  readonly consoleText?: string
+}
+
+interface FixtureCapture {
+  readonly runRoot: string
+  readonly captured: CapturedPhase | null
+  readonly error: unknown
+}
+
+/** A target document whose committed-contract probe reports the fixture's values. */
+const probeFixtureDocument = (fixture: ProbeFixture, canvas: { width: number; height: number }): string => `<!doctype html>
+<html><body>
+<select id="region-filter"><option value="South">South</option><option value="North">North</option></select>
+<canvas width="${canvas.width}" height="${canvas.height}"></canvas>
+<script>
+const fixture = ${JSON.stringify(fixture)}
+const select = document.getElementById('region-filter')
+let renders = 1
+select.addEventListener('change', () => { renders += 1 })
+const rows = fixture.rows ?? [{ region: 'North', quarter: 'Q1', revenue: 120 }]
+const labels = fixture.labels ?? ['Q1']
+const probe = Object.freeze({
+  version: 1,
+  isReady: () => true,
+  readState: () => ({ ready: true, selected_region: fixture.region ?? select.value, render_count: renders }),
+  readDataset: () => rows,
+  readChartSeries: () => ({ bar_count: labels.length, labels, values: labels.map(() => 1) }),
+  readCanvasSize: () => ({ width: ${canvas.width}, height: ${canvas.height} }),
+})
+Object.defineProperty(window, '__flowproofProbe', { value: probe, writable: false, configurable: false, enumerable: false })
+if (fixture.consoleText !== undefined) console.error(fixture.consoleText)
+</script>
+</body></html>`
+
+/** Captures one failure phase from a routed fixture document in a fresh page and run store. */
+async function captureProbeFixture(e: Environment, fixture: ProbeFixture): Promise<FixtureCapture> {
+  const capture = await captureModule()
+  const { url, viewport, canvas } = e.scenario.scenario.app
+  const page = await e.browser.newPage({
+    viewport: { width: viewport.width, height: viewport.height },
+    deviceScaleFactor: viewport.device_scale_factor,
+    locale: 'en-US',
+    timezoneId: 'UTC',
+  })
+  try {
+    const html = probeFixtureDocument(fixture, canvas)
+    await page.route(
+      (requested) => requested.origin === e.origin,
+      (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html }),
+    )
+    const recorder = capture.createBrowserCapture(page)
+    try {
+      await page.setContent(
+        `<!doctype html><html><body style="margin:0"><iframe id="target" src="${url}" width="${viewport.width}" height="${viewport.height}"></iframe></body></html>`,
+      )
+      const frame = await (await page.waitForSelector('#target')).contentFrame()
+      if (!frame) throw new Error('The fixture frame did not attach.')
+      await frame.waitForFunction(() => (window as { __flowproofProbe?: { isReady(): boolean } }).__flowproofProbe?.isReady() === true)
+      const runId = randomUUID()
+      const store = await createRunArtifactStore({ repoRoot: e.repo.path, runId })
+      const allocator = createEvidenceIdAllocator(runId)
+      const input = { phase: 'failure', frame, scenario: e.scenario, runId, store, allocator, sourceRoot: e.repo.path } as const
+      const fixtureRoot = path.join(e.repo.path, '.flowproof', 'runs', runId)
+      try {
+        return { runRoot: fixtureRoot, captured: await recorder.capturePhase(input), error: null }
+      } catch (error) {
+        return { runRoot: fixtureRoot, captured: null, error }
+      }
+    } finally {
+      recorder.dispose()
+    }
+  } finally {
+    await page.close()
+  }
+}
+
+describe('trusted probe value bounds', () => {
+  it(
+    'persists probe strings at the length bound',
+    async () => {
+      const e = await env()
+      const { MAX_PROBE_STRING_LENGTH: max } = await captureModule()
+      const rows = [{ region: 'r'.repeat(max), quarter: 'Q1', revenue: 120 }]
+      const labels = ['l'.repeat(max)]
+
+      const { runRoot: root, captured, error } = await captureProbeFixture(e, { rows, labels })
+
+      expect(error).toBeNull()
+      if (!captured) throw new Error('The fixture capture did not complete.')
+      const dataset = JSON.parse(await readFile(path.join(root, itemOf(captured.bundle, 'dataset').artifact_path), 'utf8')) as { observed: unknown }
+      const chart = JSON.parse(await readFile(path.join(root, itemOf(captured.bundle, 'chart').artifact_path), 'utf8')) as { observed: unknown }
+      expect(dataset.observed).toEqual(rows)
+      expect(chart.observed).toEqual({ bar_count: 1, labels, values: [1] })
+    },
+    CAPTURE_TIMEOUT,
+  )
+
+  it.each<readonly [string, (max: number) => ProbeFixture]>([
+    ['a selected region', (max) => ({ region: 'r'.repeat(max + 1) })],
+    ['a dataset cell', (max) => ({ rows: [{ region: 'r'.repeat(max + 1), quarter: 'Q1', revenue: 120 }] })],
+    ['a dataset key', (max) => ({ rows: [{ ['k'.repeat(max + 1)]: 120 }] })],
+    ['a dataset row of 500 fields', () => ({ rows: [Object.fromEntries(Array.from({ length: 500 }, (_, index) => [`field_${index}`, index]))] })],
+    ['a chart label', (max) => ({ labels: ['l'.repeat(max + 1)] })],
+  ])(
+    'refuses %s over the probe bounds before anything is persisted',
+    async (_label, fixtureFor) => {
+      const e = await env()
+      const { MAX_PROBE_STRING_LENGTH: max } = await captureModule()
+
+      const { runRoot: root, captured, error } = await captureProbeFixture(e, fixtureFor(max))
+
+      expect(captured).toBeNull()
+      expect(error).toMatchObject({ name: 'CaptureError', code: 'CAPTURE_PROBE_INVALID' })
+      expect(await listTree(path.join(root, 'evidence'))).toEqual([])
+    },
+    CAPTURE_TIMEOUT,
+  )
+
+  it(
+    'persists over-long console text as a whole placeholder, never cut',
+    async () => {
+      const e = await env()
+      const consoleText = `${'a.'.repeat(50_000)} Authorization: Bearer ${SEEDED_OVERSIZED}`
+
+      const { runRoot: root, captured, error } = await captureProbeFixture(e, { consoleText })
+
+      expect(error).toBeNull()
+      if (!captured) throw new Error('The fixture capture did not complete.')
+      const consoleItem = itemOf(captured.bundle, 'console')
+      const persisted = JSON.parse(await readFile(path.join(root, consoleItem.artifact_path), 'utf8')) as {
+        entries: Array<{ level: string; text: string }>
+      }
+      expect(persisted.entries).toContainEqual({ level: 'error', text: CONSOLE_TEXT_OMITTED })
+      expect(persisted.entries.every((entry) => !entry.text.startsWith('a.a.'))).toBe(true)
+      await expectNoSeededSecrets(e, root)
     },
     CAPTURE_TIMEOUT,
   )
