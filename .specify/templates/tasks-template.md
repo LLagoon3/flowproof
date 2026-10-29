@@ -160,6 +160,25 @@ Examples of foundational tasks (adjust based on your project):
 
 ---
 
+## Delivery Slices
+
+<!--
+  Replace the sample rows. Each slice is one phase or named checkpoint above and gets one
+  implementation pull request by default; the owner may approve batching small adjacent
+  slices. Run $speckit-implement for one slice's task range, then stop for owner
+  authorization. See CONTRIBUTING.md "Delivery slices".
+-->
+
+| Order | Phase or checkpoint | Tasks | Validation |
+| --- | --- | --- | --- |
+| 1 | Foundation ready (Phases 1-2) | T001-T009 | `pnpm typecheck && pnpm test` |
+| 2 | User Story 1 (Phase 3) | T010-T017 | `pnpm test && pnpm test:e2e` |
+| 3 | User Story 2 (Phase 4) | T018-T023 | `pnpm test && pnpm test:e2e` |
+| 4 | User Story 3 (Phase 5) | T024-T028 | `pnpm test && pnpm test:e2e` |
+| 5 | Polish (Phase N) | TXXX-TXXX | `pnpm typecheck && pnpm test && pnpm test:e2e` |
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

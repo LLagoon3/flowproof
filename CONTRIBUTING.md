@@ -38,7 +38,7 @@ before implementation. Run the commands in this order:
 4. `speckit-tasks` breaks the Plan into small, verifiable tasks.
 5. `speckit-analyze` (recommended) checks consistency across the specification,
    Plan, and tasks.
-6. `speckit-implement` executes the tasks.
+6. `speckit-implement` executes the tasks of one delivery slice per run.
 
 Invoke commands as `/speckit-<name>` in Claude Code and `$speckit-<name>` in Codex
 CLI. Start from an up-to-date `main`: the Spec Kit Git extension creates the feature
@@ -60,14 +60,38 @@ and known risks.
   scope, user experience, verification effort, storage, network access, or an
   external service commitment.
 - **Tasks** derives small, independently verifiable work items from the approved
-  specification and Plan. It must not introduce new product behavior or completion
-  criteria.
+  specification and Plan and records their [delivery slices](#delivery-slices). It
+  must not introduce new product behavior or completion criteria.
 - **Analyze**, when run, is a read-only consistency check across requirements,
   success criteria, the Plan, and tasks. Resolve any reported critical or
   high-severity gaps and any Constitution violation before implementation.
-- **Implement** follows the approved task order, verifies each completed unit, and
-  marks only work with supporting evidence as complete. Keep automated checks and
-  any remaining human-only verification clearly separated.
+- **Implement** follows the approved task order within the current delivery slice,
+  verifies each completed unit, and marks only work with supporting evidence as
+  complete. Keep automated checks and any remaining human-only verification clearly
+  separated.
+
+### Delivery slices
+
+Deliver a Spec Kit feature as a sequence of delivery slices, with one implementation
+pull request per slice by default. A delivery slice is one `tasks.md` phase or named
+checkpoint. The Delivery slices ledger in `tasks.md` records each slice's order,
+exact task range, and validation commands.
+
+- The repository owner may approve batching small adjacent slices into one pull
+  request. There is no fixed commit or line limit; size each pull request for
+  review.
+- Run `speckit-implement` for the current slice only, for example with
+  `only execute tasks T010-T017, then stop`. At the slice boundary, run the slice's
+  validation, report the results, and stop. Start the next slice only with owner
+  authorization.
+- The branch created by `speckit-specify` carries the Spec Kit artifacts and the
+  first slice. After a slice pull request merges, update local `main` to the current
+  `origin/main` and create the next slice branch from it as
+  `type/NNN-kebab-case-summary-part` (see [Branch names](#branch-names)).
+- If a single phase is still too large and cannot be split at a named checkpoint,
+  decompose the feature with the official
+  [Spec of Specs](https://github.github.com/spec-kit/concepts/spec-of-specs.html)
+  approach. Use it only when this lighter phase and task scoping is insufficient.
 
 ### Commit boundaries
 
@@ -99,8 +123,9 @@ Do not work directly on, commit to, or push directly to `main`. Every change rea
 `main` through a pull request.
 
 1. Update local `main`.
-2. Create a short-lived branch: run `speckit-specify` for Spec Kit work, or create
-   the branch manually for other changes. See [Branch names](#branch-names).
+2. Create a short-lived branch: run `speckit-specify` for a new Spec Kit feature, or
+   create the branch manually for a later delivery slice or another change. See
+   [Branch names](#branch-names).
 3. Make focused commits that serve one coherent purpose.
 4. Run risk-appropriate validation and review the complete diff.
 5. Push the branch and open a pull request targeting `main` when the work is ready
@@ -109,19 +134,21 @@ Do not work directly on, commit to, or push directly to `main`. Every change rea
 7. Merge the pull request with a merge commit, then delete the source branch.
 
 Publishing a branch and opening a pull request are not required after every Spec Kit
-phase or commit. Continue the lifecycle on the same feature branch unless the change
-is an unrelated concern that deserves its own branch.
+phase or commit. By default, each [delivery slice](#delivery-slices) of a Spec Kit
+feature gets its own branch and pull request, and an unrelated concern gets its own
+branch.
 
 Open a Draft pull request after a validated phase when early review of the
-specification, Plan, or another incomplete artifact is useful. Keep subsequent phase
-commits on that branch and keep the pull request description current. A Draft pull
-request is not mergeable work.
+specification, Plan, or another incomplete artifact is useful. Keep subsequent
+commits for the same slice on that branch and keep the pull request description
+current. A Draft pull request is not mergeable work.
 
-For a Spec Kit feature pull request, mark it ready for review only after the approved
-implementation scope is complete, any Analyze findings rated critical or high are
-resolved, and required checks pass. Document any remaining human-only verification
-in the pull request. Do not maintain a long-lived `develop` branch unless the
-repository workflow is explicitly changed.
+For a Spec Kit feature pull request, mark it ready for review once its delivery
+slice, or owner-approved batch of slices, is complete and verified, any Analyze
+findings rated critical or high are resolved, and required checks pass. Later slices
+of the same feature do not hold it back. Document any remaining human-only
+verification in the pull request. Do not maintain a long-lived `develop` branch
+unless the repository workflow is explicitly changed.
 
 ## Change types
 
@@ -180,18 +207,28 @@ Use `Closes #123` in the implementing pull request when it should close the issu
 Every branch name starts with a change type and uses lowercase English words and
 digits separated by hyphens.
 
-Spec Kit branches are created by `speckit-specify` and carry the feature number of
-the matching `specs/` directory:
+Spec Kit branches carry the feature number of the matching `specs/` directory.
+`speckit-specify` creates the first branch of a feature:
 
 ```text
 type/NNN-kebab-case-summary
+```
+
+Later [delivery slices](#delivery-slices) of the same feature reuse its number, so
+several branches may share one feature number. Create each manually from an updated
+`main`, not with `speckit-specify`, which would allocate a new feature number, and
+append a short name for the slice:
+
+```text
+type/NNN-kebab-case-summary-part
 ```
 
 The Git extension uses `feat` by default. When the primary effect of the change is
 another type, include an explicit `GIT_BRANCH_NAME` with the next feature number in
 the `speckit-specify` request, for example
 `GIT_BRANCH_NAME=fix/004-redact-auth-headers`. Run `speckit-git-validate` to confirm
-that the branch matches its `specs/` directory.
+that the branch matches its `specs/` directory; it matches on the feature number, so
+it also accepts slice branches.
 
 Other branches, such as documentation or repository maintenance, are created manually
 without a number:
@@ -204,6 +241,7 @@ Examples:
 
 ```text
 feat/001-capture-browser-session
+feat/001-capture-browser-session-us2
 fix/004-redact-auth-headers
 docs/contribution-guide
 ```
@@ -252,12 +290,15 @@ Use the same Conventional Commit format for the pull request title. Because merg
 commits are the default, the pull request title is recorded in the merge commit on
 `main`. Update the title if the scope changes during review.
 
-Each pull request should contain one user value, defect fix, or maintenance purpose.
-Its description must include:
+Each pull request should serve one coherent, independently verifiable purpose, such
+as a delivery slice, a defect fix, or a maintenance change. Its description must
+include:
 
 - **Summary:** what changed and why;
 - **Scope:** important implementation details and explicit non-goals;
-- **Spec Kit:** affected specification, Plan, or task artifacts, or `N/A`;
+- **Spec Kit:** affected specification, Plan, or task artifacts and, for a delivery
+  slice, its task range and position in the ledger, for example
+  `T010-T017, slice 2 of 5`; or `N/A`;
 - **Constitution:** confirmation of compliance and any justified complexity;
 - **Verification:** commands, scenarios, and observed results;
 - **Risk:** security, privacy, migration, compatibility, and rollback considerations;
