@@ -13,7 +13,6 @@ revision.
 | `runtimeProfileId` | string | Must resolve in the in-process trusted registry |
 | `declaredProjectCommands` | string array | Bounded task context written to the task document; not an enforced OS command allowlist and never interpolated into a host shell |
 | `limits` | Session Limits | Every value must fall within configured minimum and maximum bounds |
-| `inspectionTimeoutMs` | integer | Positive and within the configured inspection bound |
 
 The request contains no raw Docker flags, image reference, mount source, network name, shell string,
 or credential value.
@@ -70,7 +69,7 @@ A session-owned standalone Git clone outside the original repository.
 
 ## Editing Session
 
-The lifecycle owner coordinating preparation, container execution, inspection, and cleanup.
+The lifecycle owner coordinating preparation, container execution, termination, and cleanup.
 
 | Field | Meaning |
 | --- | --- |
@@ -89,14 +88,13 @@ requested
   -> starting
   -> running
   -> stopping
-  -> inspecting
   -> cleaning
   -> finished
 ```
 
 Startup may move from `preparing` or `starting` directly to `cleaning`. Completion, non-zero exit,
 timeout, and cancellation move from `running` to `stopping`. A process that already exited may skip
-the stop operation but not inspection or cleanup. Every path ends in `finished` with a result, even
+the stop operation but not cleanup. Every path ends in `finished` with a result, even
 when cleanup is incomplete. A `failed` cleanup result is a terminal containment failure, not a
 successful acceptance case.
 
@@ -104,7 +102,6 @@ successful acceptance case.
 
 - Only the first execution terminal cause is authoritative.
 - Repeated cancellation and cleanup calls are idempotent.
-- Final inspection starts only after the container process is no longer running.
 - Result resolution waits for cleanup and the original-repository integrity check.
 
 ## Editing Session Result
@@ -119,21 +116,12 @@ The immutable sanitized result returned to the trusted caller.
 | `signal` | bounded string or null | Normalized process signal when observable |
 | `durationMs` | integer | Total bounded session duration |
 | `diagnostic` | string | Bounded, sanitized summary only |
-| `inspection` | Inspection Summary or null | Non-authoritative bounded metadata from the trusted inspector |
 | `cleanup` | Cleanup Result | Complete/recovered/failed status and coded bounded details |
 | `runtime` | Runtime Summary | Profile ID and immutable image reference, no credential or raw argv |
 
 The result has no diff, file contents, prompt transcript, raw stdout/stderr, credential, host path,
-candidate status, replay status, gate status, or verification verdict.
-
-## Inspection Summary
-
-A bounded, non-authoritative value returned by the fixed trusted inspector during the inspection
-window. The first implementation uses only fixture-observable counts and command status. It uses
-`lstat`, never follows symlinks or reads special files, verifies resolved parents remain under the
-session root, and never runs repository-controlled commands or trusts modified Git configuration,
-hooks, or attributes. It must be JSON serializable, size bounded, sanitized, and unable to change
-`executionOutcome`.
+candidate status, replay status, gate status, or verification verdict. It also exposes no workspace
+path, file metadata, or pre-cleanup inspection hook.
 
 ## Cleanup Result
 

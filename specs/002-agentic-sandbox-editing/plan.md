@@ -8,7 +8,7 @@
 
 Add an internal editing-session service that prepares a standalone clone at an exact commit, mounts
 only that disposable clone into a constrained Docker container, starts one registered coding-agent
-runtime, and owns cancellation, timeout, final-state inspection, and idempotent cleanup. The host
+runtime, and owns cancellation, timeout, termination, and idempotent cleanup. The host
 controller remains trusted; the agent receives no original-repository, home-directory, Docker-socket,
 device, or privileged host mount. General outbound internet remains available through Docker bridge
 networking. This feature returns only a sanitized lifecycle result and deliberately does not compute
@@ -103,9 +103,8 @@ queue or scheduler, exposes no new Studio/CLI route, and does not migrate existi
    sanitizer; raw output and inherited host environment never enter the result or persistent
    artifacts.
 6. Completion, failure, timeout, or cancellation selects the first execution terminal cause. The
-   controller then stops or kills the exact container ID, invokes the trusted bounded final-state
-   inspector, removes that container, deletes the task document and workspace state, and verifies
-   the original repository snapshot.
+   controller then stops or kills the exact container ID, removes that container, deletes the task
+   document and workspace state, and verifies the original repository snapshot.
 7. Cleanup is idempotent and exact-ID scoped. Cleanup reports `complete`, `recovered`, or `failed`
    independently of the prior execution outcome. `recovered` means a bounded retry removed all
    residue; `failed` identifies the remaining owned resource and is not an acceptance success.
@@ -144,11 +143,11 @@ unsupported. AppArmor/LSM availability is observed and recorded but is not a pre
 - Graceful stop is bounded. When the grace period expires, the controller force-removes the exact
   container ID. Docker `--init` reaps descendants while the container boundary ensures remaining
   session processes disappear with the container.
-- Final-state inspection runs after the agent process has stopped and before workspace deletion. It
-  is a fixed metadata-only implementation that uses `lstat`, never follows symlinks or reads special
-  files, verifies resolved parents remain under the session root, and never executes repository
-  commands or trusts repository-controlled Git configuration, hooks, or attributes. It is
-  time-bounded and cannot produce a diff or promote the result to candidate or verification success.
+- The controller does not enumerate, open, or analyze agent-authored workspace contents after
+  execution. Cleanup treats the validated session root as opaque disposable state. Safe host-side
+  content traversal, symlink and special-file handling, and authoritative change capture belong to
+  the later change-capture specification. The deterministic fixture verifies its own edits before
+  exiting; successful execution still creates no candidate or verification result.
 
 ## Project Structure
 
@@ -175,7 +174,7 @@ packages/flowproof/src/
 │   ├── contracts.ts        # Internal request, handle, result, limits, and runtime profile types
 │   ├── dockerCli.ts        # Shell-free Docker argv, capability preflight, exact-ID operations
 │   ├── runtimeProfile.ts   # Trusted profile registry and immutable image/argv resolution
-│   ├── session.ts          # Lifecycle, cancellation, timeout, inspection, and finalization owner
+│   ├── session.ts          # Lifecycle, cancellation, timeout, and finalization owner
 │   └── workspace.ts        # Standalone clone preparation, scrubbing, snapshot, and disposal
 └── evidence/
     └── sanitize.ts         # Existing sanitizer reused for bounded diagnostics
@@ -206,7 +205,7 @@ existing worktree path and the new standalone-clone path.
 
 ## Requirement-to-Design Mapping
 
-- **FR-001, FR-011**: standalone no-hardlink clone at the resolved commit, scrubbed source metadata,
+- **FR-001, FR-010**: standalone no-hardlink clone at the resolved commit, scrubbed source metadata,
   pre/post integrity snapshot, and exact session-root disposal
 - **FR-002, FR-003, FR-004**: one workspace mount, registered argv, non-root container policy,
   read-only task document, ordinary bridge egress, and explicit absence of home, credentials,
@@ -216,17 +215,17 @@ existing worktree path and the new standalone-clone path.
   stop deadline, and forced exact-container removal
 - **FR-007, FR-008**: execution outcome plus cleanup outcome, bounded timing and sanitized diagnostic,
   no raw stdout/stderr persistence
-- **FR-009**: trusted time-bounded metadata inspector after process stop and before workspace
-  disposal, with symlink/special-file/repository-command escape protections
-- **FR-010**: exact container ID ownership, idempotent finalizer, session-created path manifest, and
+- **FR-009**: exact container ID ownership, idempotent finalizer, session-created path manifest, and
   post-cleanup residue scan
-- **FR-012**: result contract contains no diff, candidate, replay, gate, or verification verdict
+- **FR-011**: result contract contains no diff, candidate, replay, gate, or verification verdict
 
 ## Post-Design Constitution Re-check
 
 All four Constitution gates still pass. Phase 1 adds no new product surface, persistent storage, or
 provider commitment. The small shared Git helper extraction prevents duplicate security-sensitive
-process/snapshot logic. Rootful-daemon privilege and bridge-network reachability to private,
+process/snapshot logic. Deferring host-side workspace content analysis avoids pulling change-capture
+security logic into the runtime-only slice. Rootful-daemon privilege and bridge-network reachability
+to private,
 link-local, metadata, LAN, and host-bound services remain explicit residual risks and are not
 represented as hostile-code or private-network isolation.
 

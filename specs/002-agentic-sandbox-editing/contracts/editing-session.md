@@ -15,8 +15,8 @@ EditingSessionHandle:
 ```
 
 `request` is immutable after validation. `dependencies` contains only trusted runtime profiles, the
-Docker/Git process adapters, a monotonic clock, and the bounded final-state inspector. The service
-never reads the host process environment implicitly and defines no credential-provider dependency.
+Docker/Git process adapters, and a monotonic clock. The service never reads the host process
+environment implicitly and defines no credential-provider dependency.
 
 ## Request contract
 
@@ -27,7 +27,7 @@ Required values:
 - bounded non-empty `task`
 - registered `runtimeProfileId`
 - bounded `declaredProjectCommands` used as task context, not an enforced OS command allowlist
-- validated wall-clock, stop-grace, memory, CPU, PID, diagnostic, and inspection limits
+- validated wall-clock, stop-grace, memory, CPU, PID, and diagnostic limits
 
 Rejected values and behavior:
 
@@ -83,7 +83,6 @@ The adapter uses direct argv. No request value is evaluated by a host shell.
 - one execution outcome: `completed`, `failed`, `timed_out`, `cancelled`, or `startup_failed`
 - exit code/signal only when safely observable
 - bounded duration and sanitized diagnostic
-- optional bounded non-authoritative inspection summary
 - runtime profile ID and immutable image reference
 - cleanup status reporting exact-container removal, workspace removal, original-repository integrity,
   and any bounded remaining-owned-resource category
@@ -100,14 +99,14 @@ authentication state never appear in the result.
 - Stop waits only for the validated grace period, then force-removes the exact container ID.
 - All callers observe the same finalization and result.
 
-## Inspection contract
+## Workspace-content boundary
 
-After the container has stopped and before workspace removal, the service invokes one fixed trusted
-metadata inspector with a deadline. It uses `lstat`, does not follow symlinks or read special files,
-verifies resolved parents remain under the session root, and never runs repository-controlled
-commands or trusts modified Git configuration, hooks, or attributes. It may return bounded sanitized
-metadata, cannot prolong the workspace beyond the deadline, and cannot create a diff, candidate,
-replay, gate, or `Verified Fix` result in this feature.
+After the container stops, this service does not enumerate, open, or analyze agent-authored
+workspace contents and exposes no pre-cleanup workspace callback or path. Cleanup treats the
+validated session root as opaque disposable state. The deterministic test fixture may verify its own
+edits before exit, but production results contain no file metadata. Safe host-side content traversal,
+symlink and special-file handling, changed-file discovery, and diff construction belong to the later
+change-capture contract.
 
 ## Cleanup contract
 

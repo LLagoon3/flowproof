@@ -57,9 +57,8 @@ changes.
 3. **Given** the task needs public technical documentation, **When** the agent retrieves it, **Then**
    the session permits that access subject to the user's and project's ordinary policies rather
    than limiting access to model-provider endpoints only.
-4. **Given** the agent exits normally, **When** FlowProof finalizes the outcome, **Then** a trusted
-   bounded inspector can observe the final disposable state before cleanup and the caller receives
-   the bounded session result after cleanup.
+4. **Given** the agent exits normally, **When** FlowProof finalizes the outcome, **Then** the caller
+   receives the bounded session result after FlowProof removes the disposable workspace.
 
 ---
 
@@ -144,14 +143,12 @@ secret markers, and never reports candidate or verification success.
 - **FR-008**: A terminal session result MUST include bounded timing, diagnostic, and cleanup
   information and MUST sanitize secrets, credentials, sensitive environment values, and unnecessary
   host paths.
-- **FR-009**: The trusted caller MUST have a bounded opportunity to inspect the disposable project's
-  final state after agent termination and before workspace disposal.
-- **FR-010**: Every finalization path MUST stop session-owned processes and dispose only the
+- **FR-009**: Every finalization path MUST stop session-owned processes and dispose only the
   workspace and lifecycle resources created for that session.
-- **FR-011**: After finalization, the original repository's tracked files, index, checked-out branch,
+- **FR-010**: After finalization, the original repository's tracked files, index, checked-out branch,
   `HEAD`, history, local configuration, and unrelated registered workspaces MUST match their
   pre-session state.
-- **FR-012**: Successful agent completion MUST NOT by itself create an authoritative candidate,
+- **FR-011**: Successful agent completion MUST NOT by itself create an authoritative candidate,
   modify the original repository, or grant `Verified Fix`.
 
 ### Key Entities
@@ -161,7 +158,7 @@ secret markers, and never reports candidate or verification success.
 - **Disposable Editing Workspace**: The run-scoped project copy in which the agent may inspect,
   execute, and edit without changing the developer's original repository.
 - **Editing Session**: The lifecycle that owns workspace preparation, agent execution, cancellation,
-  termination, final-state inspection, and cleanup.
+  termination, and cleanup.
 - **Editing Session Result**: The terminal outcome, timing, sanitized diagnostic, and cleanup status
   returned to the trusted caller without making candidate or verification claims.
 
@@ -202,7 +199,7 @@ secret markers, and never reports candidate or verification success.
 
 ### In Scope
 
-- Disposable editing-workspace creation, readiness, bounded inspection, and disposal.
+- Disposable editing-workspace creation, readiness, and disposal.
 - Coding-agent startup, execution, cancellation, timeout, process cleanup, and terminal outcomes.
 - Multi-file editing and authorized project commands inside the disposable copy.
 - General external technical research subject to ordinary user and project policy.
@@ -213,6 +210,8 @@ secret markers, and never reports candidate or verification success.
 ### Out of Scope
 
 - Computing the authoritative changed-file manifest or final diff.
+- Host-side enumeration, reading, or analysis of agent-authored workspace contents for change
+  capture, including symlink and special-file handling.
 - Candidate path, size, file-type, or secret admission checks.
 - Applying edits to a fresh verification baseline.
 - Replacing the current model-authored-diff path in the production Hero or Failure flow.

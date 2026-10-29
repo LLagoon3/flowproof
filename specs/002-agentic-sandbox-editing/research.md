@@ -162,20 +162,24 @@ system.
 - Returning raw Docker/Git stderr violates the diagnostic requirement.
 - Persisting full logs and redacting on read leaves secret-bearing data at rest.
 
-## Decision 9: Keep final-state inspection internal and non-authoritative
+## Decision 9: Defer host-side workspace inspection to change capture
 
-**Decision**: Invoke a trusted, time-bounded inspector after agent termination and before disposal.
-It returns only fixed bounded metadata. It uses `lstat`, does not follow symlinks or read special
-files, verifies resolved parents stay within the session root, and never executes repository-owned
-commands or trusts modified Git configuration, hooks, or attributes. This PR does not define a diff,
-candidate, replay, or verification verdict.
+**Decision**: Do not enumerate, open, or analyze agent-authored workspace contents in this feature.
+Cleanup treats the validated session root as opaque disposable state. The deterministic fixture
+verifies its own expected edits before exiting, while the trusted controller records only execution,
+diagnostic, runtime, cleanup, and original-repository integrity outcomes. A later numbered
+specification will define safe host-side content traversal, symlink and special-file handling, the
+authoritative changed-file manifest, and diff construction against the exact baseline.
 
-**Rationale**: This satisfies the bounded inspection window while maintaining the one-Spec/one-PR
-boundary. A later numbered specification can define authoritative change capture against the exact
-baseline.
+**Rationale**: Inspecting untrusted workspace contents safely is part of authoritative change
+capture, not the sandbox lifecycle or agent-execution boundary. Deferring it keeps this one-PR slice
+focused and avoids implementing a second, non-authoritative traversal path that the next feature
+would replace.
 
 **Alternatives considered**:
 
+- A metadata-only production inspector still needs the same symlink, special-file, Git-control-file,
+  deadline, and path-containment defenses as later authoritative change capture.
 - Returning the live workspace path after the session result weakens cleanup ownership and permits
   indefinite residue.
 - Computing a Git diff now would pull candidate admission and verification concerns into this PR.

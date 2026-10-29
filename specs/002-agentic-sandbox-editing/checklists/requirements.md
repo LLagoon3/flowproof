@@ -34,6 +34,7 @@
 - Validation iteration 1 passed all checklist items after narrowing the feature.
 - This specification maps to one pull request: the disposable editing-workspace lifecycle and
   coding-agent execution boundary only.
-- Authoritative change capture and verification integration are reserved for later specifications.
-- Planning clarified the finalization order: bounded inspection occurs before cleanup, while the
-  caller receives the terminal result only after cleanup has completed or reported its final state.
+- Host-side content enumeration and analysis, authoritative change capture, and verification
+  integration are reserved for later specifications.
+- The caller receives the terminal result only after cleanup has completed or reported its final
+  state; this feature exposes no pre-cleanup workspace-inspection contract.

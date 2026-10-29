@@ -68,8 +68,9 @@ The deterministic fixture must:
 3. read the task document and run the declared synthetic project command;
 4. fetch one public technical resource through ordinary bridge networking;
 5. exit successfully within 120 seconds;
-6. expose bounded final-state metadata to the trusted inspector before disposal; and
-7. return `executionOutcome=completed` and `cleanup.status=complete`.
+6. verify its own three expected edits before exit; and
+7. return `executionOutcome=completed` and `cleanup.status=complete` without exposing workspace
+   contents or metadata.
 
 After the result resolves, assert that:
 
@@ -85,9 +86,9 @@ pnpm exec vitest run tests/integration/editing-session-cleanup.test.ts
 ```
 
 Prepared Docker cases cover non-zero exit, startup failure, timeout, explicit cancellation,
-cancellation racing with completion, descendant processes, repeated cleanup, inspector timeout,
-seeded secret and host-path diagnostics, and a transient cleanup interruption recovered by bounded
-retry. Every prepared integration case must preserve the execution cause, report cleanup
+cancellation racing with completion, descendant processes, repeated cleanup, seeded secret and
+host-path diagnostics, and a transient cleanup interruption recovered by bounded retry. Every
+prepared integration case must preserve the execution cause, report cleanup
 independently, leave no owned residue, and leave unrelated containers and workspaces untouched.
 
 Contract/unit tests separately inject a persistent final cleanup failure. That result must retain the
@@ -124,4 +125,5 @@ model on the prepared Linux/Docker environment. It does not claim resistance to 
 Docker daemon, container-runtime escape, target repository, or model, and it does not prove that agent
 edits are a valid candidate. Default bridge networking may reach host/LAN/private, link-local, and
 cloud-metadata services; private-network egress isolation is future hardening, not a property proved
-by this feature.
+by this feature. Host-side content enumeration and analysis, symlink and special-file handling, and
+authoritative change capture are likewise deferred to the next specification.
