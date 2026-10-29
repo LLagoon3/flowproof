@@ -57,9 +57,9 @@ changes.
 3. **Given** the task needs public technical documentation, **When** the agent retrieves it, **Then**
    the session permits that access subject to the user's and project's ordinary policies rather
    than limiting access to model-provider endpoints only.
-4. **Given** the agent exits normally, **When** FlowProof records the outcome, **Then** the trusted
-   caller can observe the final disposable project state and the bounded session result before
-   cleanup.
+4. **Given** the agent exits normally, **When** FlowProof finalizes the outcome, **Then** a trusted
+   bounded inspector can observe the final disposable state before cleanup and the caller receives
+   the bounded session result after cleanup.
 
 ---
 
@@ -189,8 +189,8 @@ secret markers, and never reports candidate or verification success.
 ## Assumptions
 
 - The trusted caller resolves the repository revision and editing task before starting a session.
-- The coding-agent runtime and any required provider authentication are supplied through a bounded
-  mechanism that does not expose reusable host credentials to the project copy.
+- This feature uses a deterministic runtime that requires no provider authentication. Selecting a
+  production coding agent and defining its authentication boundary require a later specification.
 - External technical content is untrusted input and does not alter repository scope or verification
   policy by itself.
 - The threat model protects the developer's repository and host resources from agent mistakes,

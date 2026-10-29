@@ -35,3 +35,5 @@
 - This specification maps to one pull request: the disposable editing-workspace lifecycle and
   coding-agent execution boundary only.
 - Authoritative change capture and verification integration are reserved for later specifications.
+- Planning clarified the finalization order: bounded inspection occurs before cleanup, while the
+  caller receives the terminal result only after cleanup has completed or reported its final state.
