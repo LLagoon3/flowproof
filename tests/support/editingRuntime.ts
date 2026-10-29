@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { cp } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -18,7 +19,9 @@ const run = promisify(execFile)
 
 export const FIXTURE_DIR = path.join(REPO_ROOT, 'tests/fixtures/editing-agent')
 export const FIXTURE_PROJECT_DIR = path.join(FIXTURE_DIR, 'project')
-export const FIXTURE_IMAGE_TAG = 'flowproof-editing-agent:test'
+// Vitest can run the two Docker-backed files in isolated workers. A per-module tag prevents one
+// worker's concurrent rebuild from untagging the immutable image ID another worker is using.
+export const FIXTURE_IMAGE_TAG = `flowproof-editing-agent:test-${process.pid}-${randomBytes(6).toString('hex')}`
 export const FIXTURE_PROFILE_ID = 'fixture-editing-agent'
 export const FIXTURE_ARGV = ['node', '/opt/flowproof-agent/agent.mjs', '/run/flowproof/task.json'] as const
 export const FIXTURE_COMMAND = 'node scripts/check.mjs'
@@ -43,6 +46,14 @@ export function buildFixtureImage(): Promise<string> {
     return id
   })()
   return fixtureImage
+}
+
+/** Removes only this worker's fixture tag after all of that file's containers are gone. */
+export async function removeFixtureImage(): Promise<void> {
+  if (fixtureImage === null) return
+  await fixtureImage.catch(() => undefined)
+  await docker(['image', 'rm', FIXTURE_IMAGE_TAG]).catch(() => undefined)
+  fixtureImage = null
 }
 
 /** The registered deterministic fixture profile for an immutable image reference. */

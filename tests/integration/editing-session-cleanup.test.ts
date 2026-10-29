@@ -26,6 +26,7 @@ import {
   fixtureProfile,
   processesMentioning,
   recordingDocker,
+  removeFixtureImage,
   sessionContainers,
   sessionResidue,
   waitForRunningContainer,
@@ -142,9 +143,10 @@ beforeAll(() => {
   process.env.MODEL_API_KEY = HOST_SECRET
 })
 
-afterAll(() => {
+afterAll(async () => {
   if (savedHostKey === undefined) delete process.env.MODEL_API_KEY
   else process.env.MODEL_API_KEY = savedHostKey
+  await removeFixtureImage()
 })
 
 /**

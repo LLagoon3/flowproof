@@ -3,6 +3,7 @@
 // one prepared scenario, which the agent performs inside its disposable `/workspace` copy. Every
 // observation it prints is a fixed `FIXTURE` line so tests can assert on the sanitized diagnostic.
 import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 const TASK_DOCUMENT = process.argv[2] ?? '/run/flowproof/task.json'
@@ -135,9 +136,13 @@ switch (scenario) {
   case 'flood': {
     // More output than the diagnostic bound, with a secret straddling the retained tail's start.
     const line = `${'x'.repeat(60)} api_key=fpseededfloodsecret000001\n`
-    for (let index = 0; index < Number(options.lines ?? 4_000); index += 1) process.stdout.write(line)
-    report('flood done')
-    process.exit(0)
+    for (let index = 0; index < Number(options.lines ?? 4_000); index += 1) {
+      if (!process.stdout.write(line)) await once(process.stdout, 'drain')
+    }
+    // Wait until the final marker is accepted by the pipe. `process.exit()` can otherwise discard
+    // the tail under full-suite load and make the bounded-tail assertion nondeterministic.
+    await new Promise((resolve) => process.stdout.write('FIXTURE flood done\n', resolve))
+    process.exitCode = 0
     break
   }
   default:

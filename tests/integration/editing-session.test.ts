@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import { parseEditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
 import type { EditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
@@ -22,6 +22,7 @@ import {
   fixtureProfile,
   listTree,
   recordingDocker,
+  removeFixtureImage,
   sessionResidue,
 } from '../support/editingRuntime.js'
 import type { SyntheticRepository } from '../support/editingRuntime.js'
@@ -43,6 +44,10 @@ beforeAll(async () => {
   imageId = await buildFixtureImage()
   profiles = createRuntimeProfileRegistry([fixtureProfile(imageId)])
 }, 300_000)
+
+afterAll(async () => {
+  await removeFixtureImage()
+})
 
 const cleanups: Array<() => Promise<void>> = []
 
