@@ -4,6 +4,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 
 import type { AgentRuntimeProfile } from '../../packages/flowproof/src/editing/contracts.js'
+import type { DockerAdapter } from '../../packages/flowproof/src/editing/dockerCli.js'
 import { REPO_ROOT, createTempDirectory, git, listTree, processesMentioning } from './repoFixture.js'
 import type { TempDirectory } from './repoFixture.js'
 
@@ -154,3 +155,27 @@ export async function sessionResidue(input: {
 }
 
 export const NO_RESIDUE: ResidueReport = { containers: [], tmpEntries: [], processes: [] }
+
+export interface RecordingDocker extends DockerAdapter {
+  /** Full IDs of every container this adapter created, in creation order. */
+  readonly created: readonly string[]
+  /** The complete `docker inspect` document of each created container, captured before start. */
+  readonly inspected: ReadonlyMap<string, Record<string, unknown>>
+}
+
+/** Wraps a real Docker adapter, recording created container IDs and their inspect documents. */
+export function recordingDocker(inner: DockerAdapter): RecordingDocker {
+  const created: string[] = []
+  const inspected = new Map<string, Record<string, unknown>>()
+  return {
+    ...inner,
+    created,
+    inspected,
+    async create(spec) {
+      const id = await inner.create(spec)
+      created.push(id)
+      inspected.set(id, await inspectContainer(id))
+      return id
+    },
+  }
+}
