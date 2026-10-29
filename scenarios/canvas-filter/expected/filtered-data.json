@@ -1,0 +1,6 @@
+[
+  { "region": "North", "quarter": "Q1", "revenue": 120 },
+  { "region": "North", "quarter": "Q2", "revenue": 135 },
+  { "region": "North", "quarter": "Q3", "revenue": 128 },
+  { "region": "North", "quarter": "Q4", "revenue": 150 }
+]

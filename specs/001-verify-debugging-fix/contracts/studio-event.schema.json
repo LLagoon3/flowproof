@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowproof.local/contracts/studio-event.schema.json",
+  "title": "FlowProof Studio Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "run_id",
+    "sequence",
+    "occurred_at",
+    "type",
+    "phase",
+    "message",
+    "evidence_ids",
+    "gate",
+    "artifact_refs"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}:[1-9][0-9]*$"
+    },
+    "run_id": { "type": "string", "format": "uuid" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": [
+        "chat_received",
+        "phase_started",
+        "phase_completed",
+        "evidence_added",
+        "diagnosis_ready",
+        "candidate_ready",
+        "gate_updated",
+        "run_finalized",
+        "agent_message"
+      ]
+    },
+    "phase": {
+      "type": ["string", "null"],
+      "enum": [
+        "initialized",
+        "reproducing",
+        "failure_captured",
+        "diagnosing",
+        "candidate_validated",
+        "applying",
+        "replaying",
+        "finalized",
+        null
+      ]
+    },
+    "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "evidence_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/evidenceId" }
+    },
+    "gate": {
+      "oneOf": [
+        { "$ref": "#/$defs/gateSummary" },
+        { "type": "null" }
+      ]
+    },
+    "artifact_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/relativePath" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "gate_updated" } } },
+      "then": { "properties": { "gate": { "$ref": "#/$defs/gateSummary" } } },
+      "else": { "properties": { "gate": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "type": { "const": "evidence_added" } } },
+      "then": { "properties": { "evidence_ids": { "minItems": 1 } } }
+    }
+  ],
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "evidenceId": {
+      "type": "string",
+      "allOf": [
+        { "pattern": "^ev_(failure|replay)_" },
+        { "pattern": "_(actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$" }
+      ]
+    },
+    "gateId": {
+      "enum": [
+        "failure_reproduced",
+        "evidence_complete",
+        "citations_valid",
+        "patch_scope_valid",
+        "patch_applied",
+        "dataset_matches",
+        "canvas_matches",
+        "secret_scan_clean",
+        "original_worktree_unchanged"
+      ]
+    },
+    "gateSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_id", "status", "reason_code"],
+      "properties": {
+        "gate_id": { "$ref": "#/$defs/gateId" },
+        "status": { "enum": ["pass", "fail", "unevaluable"] },
+        "reason_code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+      }
+    }
+  },
+  "x-flowproof-invariants": [
+    "event_id equals the event run_id followed by a colon and its decimal sequence.",
+    "Sequences start at one and remain contiguous, unique, and ascending for a connected run.",
+    "Every Evidence ID and artifact reference belongs to the same run and already exists.",
+    "Each event is sanitized before SSE delivery; replay after disconnect is outside the MVP."
+  ]
+}

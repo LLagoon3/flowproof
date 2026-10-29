@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowproof.local/contracts/diagnosis.schema.json",
+  "title": "FlowProof Model Diagnosis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "root_cause", "claims", "candidate"],
+  "properties": {
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "root_cause": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text", "evidence_ids"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "evidence_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/evidenceId" }
+          }
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_paths", "evidence_ids", "unified_diff"],
+      "properties": {
+        "target_paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/repoPath" }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/evidenceId" }
+        },
+        "unified_diff": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000,
+          "pattern": "^diff --git a/"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidenceId": {
+      "type": "string",
+      "pattern": "^ev_failure_(?:actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$"
+    },
+    "repoPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    }
+  },
+  "x-flowproof-invariants": [
+    "Every Evidence ID exists in the current failure Evidence Bundle.",
+    "Every target path is in the scenario permitted_source_paths allowlist.",
+    "Schema validity alone does not authorize patch application."
+  ]
+}

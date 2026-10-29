@@ -1,0 +1,42 @@
+{
+  "summary": "Selecting North also returns Northeast rows because the region filter matches substrings instead of exact region values.",
+  "root_cause": "filterByRegion keeps every row whose region includes the selected text, so the North selection also keeps the four Northeast rows and the chart renders eight bars.",
+  "claims": [
+    {
+      "text": "After the North selection the filtered dataset contains eight rows, including four Northeast rows, while the expected dataset has four North rows.",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ]
+    },
+    {
+      "text": "The rendered chart shows eight bars with each quarter label repeated instead of four bars for Q1 to Q4.",
+      "evidence_ids": [
+        "ev_failure_chart_001",
+        "ev_failure_screenshot_001"
+      ]
+    },
+    {
+      "text": "The defect follows the single committed select-region action that chooses North.",
+      "evidence_ids": [
+        "ev_failure_actions_001"
+      ]
+    },
+    {
+      "text": "filterByRegion compares regions with String.prototype.includes rather than equality.",
+      "evidence_ids": [
+        "ev_failure_source_001"
+      ]
+    }
+  ],
+  "candidate": {
+    "target_paths": [
+      "apps/demo-chart/src/filterData.ts"
+    ],
+    "evidence_ids": [
+      "ev_failure_dataset_001",
+      "ev_failure_chart_001",
+      "ev_failure_source_001"
+    ],
+    "unified_diff": "diff --git a/apps/demo-chart/src/filterData.ts b/apps/demo-chart/src/filterData.ts\nindex 5cd986b..31c7332 100644\n--- a/apps/demo-chart/src/filterData.ts\n+++ b/apps/demo-chart/src/filterData.ts\n@@ -2,5 +2,5 @@ import type { SalesRow } from './data.js'\n \n // Returns the rows for the selected region, preserving dataset order.\n export function filterByRegion(rows: readonly SalesRow[], region: string): SalesRow[] {\n-  return rows.filter((row) => row.region.includes(region))\n+  return rows.filter((row) => row.region === region)\n }\n"
+  }
+}

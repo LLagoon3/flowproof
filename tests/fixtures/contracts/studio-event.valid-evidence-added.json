@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e:7",
+  "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+  "sequence": 7,
+  "occurred_at": "2026-10-27T10:00:00.000Z",
+  "type": "evidence_added",
+  "phase": "reproducing",
+  "message": "Captured the failing filtered dataset.",
+  "evidence_ids": [
+    "ev_failure_dataset_001"
+  ],
+  "gate": null,
+  "artifact_refs": [
+    "evidence/failure/dataset.json"
+  ]
+}

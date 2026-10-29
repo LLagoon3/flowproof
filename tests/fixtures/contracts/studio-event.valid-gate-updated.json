@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "event_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e:12",
+  "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+  "sequence": 12,
+  "occurred_at": "2026-10-27T10:00:00.000Z",
+  "type": "gate_updated",
+  "phase": "replaying",
+  "message": "The dataset gate passed.",
+  "evidence_ids": [],
+  "gate": {
+    "gate_id": "dataset_matches",
+    "status": "pass",
+    "reason_code": "DATASET_EXACT_MATCH"
+  },
+  "artifact_refs": []
+}

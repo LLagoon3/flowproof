@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0.0",
+  "scenario_id": "canvas-filter-failure-invalid-citation",
+  "case": "failure-invalid-citation",
+  "default_request": "Find the incorrect Canvas filtering behavior and verify the fix.",
+  "app": {
+    "root": "apps/demo-chart",
+    "url": "http://localhost:43119/",
+    "start_command": [
+      "pnpm",
+      "--filter",
+      "@flowproof/demo-chart",
+      "run",
+      "build"
+    ],
+    "viewport": {
+      "width": 1280,
+      "height": 800,
+      "device_scale_factor": 1
+    },
+    "canvas": {
+      "width": 640,
+      "height": 360
+    }
+  },
+  "actions": [
+    {
+      "action_id": "select-region",
+      "type": "select",
+      "selector": "#region-filter",
+      "value": "North"
+    }
+  ],
+  "oracle": {
+    "dataset_path": "scenarios/canvas-filter/expected/filtered-data.json",
+    "chart_path": "scenarios/canvas-filter/expected/chart-series.json"
+  },
+  "permitted_source_paths": [
+    "apps/demo-chart/src/filterData.ts"
+  ],
+  "provider": {
+    "mode": "fixture",
+    "fixture_path": "scenarios/canvas-filter/provider-fixtures/invalid-citation.json",
+    "injected_fault_label": "Injected evaluation fixture: nonexistent Evidence ID"
+  },
+  "timeouts": {
+    "capture_ms": 45000,
+    "model_ms": 90000,
+    "replay_ms": 120000,
+    "total_ms": 300000
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "summary": "The region filter matches substrings instead of exact values.",
+  "root_cause": "filterByRegion uses String.prototype.includes, so prefix regions also match.",
+  "claims": [],
+  "candidate": {
+    "target_paths": [
+      "apps/demo-chart/src/filterData.ts"
+    ],
+    "evidence_ids": [
+      "ev_failure_dataset_001",
+      "ev_failure_source_001"
+    ],
+    "unified_diff": "diff --git a/apps/demo-chart/src/filterData.ts b/apps/demo-chart/src/filterData.ts\n--- a/apps/demo-chart/src/filterData.ts\n+++ b/apps/demo-chart/src/filterData.ts\n@@ -1,1 +1,1 @@\n-  return rows.filter((row) => row.region.includes(region))\n+  return rows.filter((row) => row.region === region)\n"
+  }
+}

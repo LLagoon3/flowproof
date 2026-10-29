@@ -1,0 +1,133 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+  "scenario_id": "canvas-filter-hero",
+  "phase": "failure",
+  "items": [
+    {
+      "evidence_id": "ev_failure_actions_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "actions",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/actions.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "summary": "Sanitized actions evidence captured during failure.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_failure_chart_002",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "dataset",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/dataset.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "summary": "Sanitized dataset evidence captured during failure.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_failure_chart_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "chart",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/chart.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "summary": "Sanitized chart evidence captured during failure.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_failure_screenshot_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "screenshot",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/screenshot.json",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "summary": "Sanitized screenshot evidence captured during failure.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_failure_console_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "console",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/console.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "summary": "Sanitized console evidence captured during failure.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": []
+    },
+    {
+      "evidence_id": "ev_failure_network_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "network",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/network.json",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Sanitized network evidence captured during failure.",
+      "provenance": {
+        "mechanism": "playwright",
+        "origin": "browser",
+        "trusted": false,
+        "source_path": null
+      },
+      "redactions": [
+        {
+          "category": "query",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "evidence_id": "ev_failure_source_001",
+      "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+      "phase": "failure",
+      "type": "source",
+      "captured_at": "2026-10-27T10:00:00.000Z",
+      "artifact_path": "evidence/failure/source.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "summary": "Sanitized source evidence captured during failure.",
+      "provenance": {
+        "mechanism": "repository-read",
+        "origin": "repository",
+        "trusted": true,
+        "source_path": "apps/demo-chart/src/filterData.ts"
+      },
+      "redactions": []
+    }
+  ],
+  "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+}

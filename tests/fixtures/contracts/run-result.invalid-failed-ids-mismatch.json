@@ -1,0 +1,124 @@
+{
+  "schema_version": "1.0.0",
+  "run_id": "3d2642cc-e3d1-4c15-ae44-56fa719cd48e",
+  "request_id": "69f414d8-aa1e-4b2d-8c60-a5ce21b415cf",
+  "scenario_id": "canvas-filter-hero",
+  "case": "hero",
+  "started_at": "2026-10-27T10:00:00.000Z",
+  "completed_at": "2026-10-27T10:03:20.000Z",
+  "original_head": "0123456789abcdef0123456789abcdef01234567",
+  "original_status_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+  "phase_durations_ms": {
+    "capture": 12000,
+    "model": 8000,
+    "apply": 4000,
+    "replay": 11000,
+    "finalize": 900
+  },
+  "provider": {
+    "mode": "meta",
+    "model": "muse-spark-1.3",
+    "injected_fault_label": null
+  },
+  "status": "Unverified",
+  "gates": [
+    {
+      "gate_id": "failure_reproduced",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate failure_reproduced reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "evidence_complete",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate evidence_complete reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "citations_valid",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate citations_valid reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "patch_scope_valid",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate patch_scope_valid reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "patch_applied",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate patch_applied reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "dataset_matches",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate dataset_matches reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "canvas_matches",
+      "status": "fail",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "CANVAS_VALUE_MISMATCH",
+      "message": "Gate canvas_matches reported fail.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "secret_scan_clean",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate secret_scan_clean reported pass.",
+      "metrics": {}
+    },
+    {
+      "gate_id": "original_worktree_unchanged",
+      "status": "pass",
+      "evidence_ids": [
+        "ev_failure_dataset_001"
+      ],
+      "reason_code": "GATE_PASSED",
+      "message": "Gate original_worktree_unchanged reported pass.",
+      "metrics": {}
+    }
+  ],
+  "failed_gate_ids": [
+    "dataset_matches"
+  ],
+  "diagnosis_path": "diagnosis.json",
+  "candidate_diff_path": "candidate/diff.patch",
+  "failure_screenshot_path": "evidence/failure/screenshot.png",
+  "replay_screenshot_path": "evidence/replay/screenshot.png",
+  "total_duration_ms": 35900
+}
