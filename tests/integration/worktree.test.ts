@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -8,7 +8,7 @@ import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario
 import type { LoadedScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
 import { loadPendingModule } from '../support/pendingModule.js'
 import { loadRecordedHeroResponse } from '../support/recordedTransport.js'
-import { createTempClone, createTempDirectory, git, gitStatus, listTree, snapshotRepository } from '../support/repoFixture.js'
+import { REPO_ROOT, createTempClone, createTempDirectory, git, gitStatus, listTree, snapshotRepository } from '../support/repoFixture.js'
 import type { RepositorySnapshot } from '../support/repoFixture.js'
 
 // T027: the detached-worktree contract that T038 implements in
@@ -339,6 +339,94 @@ describe('detached worktree session', () => {
     expect(report.mismatches.length).toBeGreaterThan(0)
     // The FlowProof-owned entry is still removed and pruned.
     expect(git(fx.repo, 'worktree', 'list', '--porcelain')).toBe(session.worktreeListBaseline)
+  })
+
+  // T008 (Spec 002): regression coverage for the shared Git runner and snapshot primitives that
+  // the editing runtime reuses. They must behave identically before and after extraction.
+  it('runs Git without a shell, inherited Git overrides, global configuration, or hooks', async () => {
+    const mod = await worktreeModule()
+    const side = await createTempDirectory('flowproof-git-safety-')
+    cleanups.push(side.remove)
+    // A repository path full of shell metacharacters must be passed through as one argument.
+    const parent = path.join(side.path, 'repo $(touch flowproof-shell-marker) ; `touch flowproof-shell-marker` & x')
+    await mkdir(parent)
+    const repo = path.join(parent, 'repo')
+    git(REPO_ROOT, 'clone', '--quiet', REPO_ROOT, repo)
+    await appendFile(path.join(repo, '.git', 'info', 'exclude'), '\nnode_modules\n')
+    const hookMarker = path.join(side.path, 'hook-ran')
+    const hook = `#!/bin/sh\ntouch '${hookMarker}'\n`
+    // A repository-local hook and a hostile global configuration that would install another.
+    await writeFile(path.join(repo, '.git', 'hooks', 'post-checkout'), hook, { mode: 0o755 })
+    const globalHooks = path.join(side.path, 'global-hooks')
+    await mkdir(globalHooks)
+    await writeFile(path.join(globalHooks, 'post-checkout'), hook, { mode: 0o755 })
+    const globalConfig = path.join(side.path, 'global.gitconfig')
+    await writeFile(globalConfig, `[core]\n\thooksPath = ${globalHooks}\n`)
+    const before = await snapshotRepository(repo)
+    const saved = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE, GIT_DIR: process.env.GIT_DIR }
+    Object.assign(process.env, { GIT_CONFIG_GLOBAL: globalConfig, GIT_INDEX_FILE: path.join(side.path, 'missing', 'index'), GIT_DIR: side.path })
+    const scenario = await loadScenario('canvas-filter-hero', { repoRoot: repo })
+    let session: WorktreeSession
+    try {
+      session = await mod.createWorktreeSession({ repoRoot: repo, scenario })
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+    cleanups.push(async () => {
+      await session.dispose().catch(() => undefined)
+    })
+    expect(git(session.path, 'rev-parse', 'HEAD').trim()).toBe(before.head)
+
+    expect(await session.dispose()).toMatchObject(CLEAN)
+    expect(existsSync(hookMarker)).toBe(false)
+    for (const directory of [side.path, parent, process.cwd()]) expect(existsSync(path.join(directory, 'flowproof-shell-marker'))).toBe(false)
+    expect(await snapshotRepository(repo)).toEqual(before)
+  })
+
+  it.each([
+    ['localConfig', ['localConfig'], (repo: string) => git(repo, 'config', '--local', 'flowproof.probe', 'changed')],
+    ['refs', ['refs'], (repo: string) => git(repo, 'branch', 'flowproof-probe')],
+    ['an untracked file', ['status'], (repo: string) => writeFile(path.join(repo, 'flowproof-untracked.txt'), 'x')],
+    [
+      'the index',
+      ['status', 'index', 'trackedFiles'],
+      async (repo: string) => {
+        await writeFile(path.join(repo, 'flowproof-staged.txt'), 'x')
+        git(repo, 'add', 'flowproof-staged.txt')
+      },
+    ],
+    // The porcelain worktree list also records the main worktree's HEAD and branch.
+    ['HEAD and history', ['head', 'refs', 'history', 'worktreeList'], (repo: string) => git(repo, '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--allow-empty', '-m', 'probe')],
+    ['the checked-out branch', ['branch', 'worktreeList'], (repo: string) => git(repo, 'checkout', '--quiet', '--detach')],
+    [
+      'a tracked file',
+      ['status', 'trackedFiles'],
+      (repo: string) => writeFile(path.join(repo, 'README.md'), 'changed during the run\n', { flag: 'a' }),
+    ],
+    [
+      'the registered worktrees',
+      ['worktreeList', 'worktreeAdminEntries'],
+      async (repo: string) => {
+        const extra = await createTempDirectory('flowproof-extra-worktree-')
+        cleanups.push(extra.remove)
+        git(repo, 'worktree', 'add', '--quiet', '--detach', path.join(extra.path, 'extra'))
+      },
+    ],
+  ] as const)('names exactly the changed snapshot facets after %s changes', async (_label, expected, mutate) => {
+    const mod = await worktreeModule()
+    const fx = await fixture()
+    const session = await open(mod, fx)
+
+    await mutate(fx.repo)
+    const report = await session.dispose()
+
+    expect(report.unchanged).toBe(false)
+    expect(report.mismatches).toEqual(expected)
+    // FlowProof's own entry is still removed even though the comparison failed.
+    expect(existsSync(session.path)).toBe(false)
   })
 
   it('refuses a dirty tracked baseline without creating a worktree or Git metadata', async () => {
