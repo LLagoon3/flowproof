@@ -260,7 +260,7 @@ export interface DockerAdapter {
   exists(id: string): Promise<boolean>
   /** The exact ID of a container with this FlowProof-generated name, if one exists. */
   findByName(name: string): Promise<string | null>
-  /** `docker container rm --force` for one exact ID. */
+  /** `docker container rm --force --volumes` for one exact ID. */
   remove(id: string): Promise<void>
 }
 
@@ -392,7 +392,7 @@ export function createDockerCli(options: { readonly runner?: DockerCommandRunner
     },
 
     async remove(id: string): Promise<void> {
-      const { code } = await run(['container', 'rm', '--force', exactId(id)])
+      const { code } = await run(['container', 'rm', '--force', '--volumes', exactId(id)])
       if (code !== 0) throw new DockerError('DOCKER_REMOVE_FAILED', 'The session container could not be removed.')
     },
   })

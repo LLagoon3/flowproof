@@ -83,7 +83,8 @@ After the result resolves, assert that:
 
 - the original repository's tracked state, index, branch, `HEAD`, history, local Git configuration,
   and complete registered-worktree list equal the pre-session snapshot;
-- no session container, workspace, task document, or session-created temporary path remains;
+- no session container, anonymous volume, workspace, task document, or session-created temporary
+  path remains;
 - the result contains no diff, candidate, replay, gate, or verification verdict.
 
 ## Run termination and cleanup scenarios

@@ -103,8 +103,9 @@ queue or scheduler, exposes no new Studio/CLI route, and does not migrate existi
    sanitizer; raw output and inherited host environment never enter the result or persistent
    artifacts.
 6. Completion, failure, timeout, or cancellation selects the first execution terminal cause. The
-   controller then stops or kills the exact container ID, removes that container, deletes the task
-   document and workspace state, and verifies the original repository snapshot.
+   controller then stops or kills the exact container ID, removes that container and its anonymous
+   volumes, deletes the task document and workspace state, and verifies the original repository
+   snapshot.
 7. Cleanup is idempotent and exact-ID scoped. Cleanup reports `complete`, `recovered`, or `failed`
    independently of the prior execution outcome. `recovered` means a bounded retry removed all
    residue; `failed` identifies the remaining owned resource and is not an acceptance success.

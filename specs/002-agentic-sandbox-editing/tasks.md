@@ -220,3 +220,4 @@ None. Docker capability checks, fixture execution, containment, cleanup, and all
 
 - [X] T031 [US1] Reject rootless Docker during capability preflight until writable bind-mount ownership can be resolved with the daemon's UID/GID mapping while preserving the non-root agent policy; keep the rootless observation truthful and align `packages/flowproof/src/editing/dockerCli.ts`, `tests/unit/editing-docker-cli.test.ts`, and the Spec 002 runtime documentation
 - [X] T032 Make the shared worktree-integrity regression deterministic under GitHub Actions' detached PR checkout by giving its temporary repository an explicit local branch baseline in `tests/integration/worktree.test.ts`
+- [X] T033 [US2] Remove anonymous volumes owned by the exact session container during cleanup by adding Docker's `--volumes` removal flag in `packages/flowproof/src/editing/dockerCli.ts`, with command-contract coverage in `tests/unit/editing-docker-cli.test.ts` and aligned cleanup documentation

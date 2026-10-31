@@ -301,7 +301,7 @@ describe('docker operations', () => {
     const commands = runner.calls.map((call) => call.args)
     expect(commands).toContainEqual(['container', 'stop', '--timeout=7', CONTAINER_ID])
     expect(commands).toContainEqual(['container', 'inspect', '--format', '{{json .State}}', CONTAINER_ID])
-    expect(commands).toContainEqual(['container', 'rm', '--force', CONTAINER_ID])
+    expect(commands).toContainEqual(['container', 'rm', '--force', '--volumes', CONTAINER_ID])
     expect(commands).toContainEqual(['container', 'ls', '--all', '--no-trunc', '--quiet', `--filter=id=${CONTAINER_ID}`])
     // The bounded stop call allows the grace period plus a margin.
     expect(runner.calls.find((call) => call.args[1] === 'stop')?.timeoutMs).toBeGreaterThan(7_000)
