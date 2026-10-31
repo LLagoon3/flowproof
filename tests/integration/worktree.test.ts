@@ -83,6 +83,10 @@ async function fixture(): Promise<Fixture> {
   const side = await createTempDirectory('flowproof-unrelated-')
   cleanups.push(clone.remove, side.remove)
   const repo = clone.path
+  // GitHub Actions checks pull requests out at a detached merge commit. A local clone of that
+  // checkout may therefore also start detached, which would make the branch/ref mutation cases
+  // no-ops. Give this suite the explicit branch baseline its integrity assertions exercise.
+  git(repo, 'checkout', '--quiet', '-B', 'flowproof-fixture-main')
   const plain = path.join(side.path, 'plain')
   const locked = path.join(side.path, 'locked')
   git(repo, 'worktree', 'add', '--quiet', '-b', 'unrelated/plain', plain)
