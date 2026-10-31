@@ -213,3 +213,9 @@ None. Docker capability checks, fixture execution, containment, cleanup, and all
 ## Phase 7: Convergence
 
 - [X] T030 [US3] Preserve private-key redaction state across bounded stdout/stderr chunk and tail boundaries in `packages/flowproof/src/editing/session.ts`, and add regression coverage for missing or truncated PEM boundaries in `tests/unit/editing-session-state.test.ts`, per FR-008 and SC-005 (partial)
+
+---
+
+## Phase 8: Review Remediation
+
+- [X] T031 [US1] Reject rootless Docker during capability preflight until writable bind-mount ownership can be resolved with the daemon's UID/GID mapping while preserving the non-root agent policy; keep the rootless observation truthful and align `packages/flowproof/src/editing/dockerCli.ts`, `tests/unit/editing-docker-cli.test.ts`, and the Spec 002 runtime documentation

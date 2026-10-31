@@ -24,7 +24,9 @@ docker info --format '{{json .SecurityOptions}}'
 ```
 
 The Docker security output must include seccomp. The implementation records whether rootless and an
-LSM profile are available; it must not falsely report rootless mode on a rootful daemon.
+LSM profile are available; it must not falsely report rootless mode on a rootful daemon. This v1
+slice rejects a rootless daemon during preflight because its user-namespace mapping would make the
+controller-owned bind mount unwritable by the required non-root container user.
 
 ## Build the deterministic fixture image
 

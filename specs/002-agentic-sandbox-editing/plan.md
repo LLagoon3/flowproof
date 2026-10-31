@@ -133,6 +133,9 @@ shell:
 The implementation performs capability preflight against the local Docker daemon and returns
 `startup_failed` before agent execution if required isolation flags, including seccomp, are
 unsupported. AppArmor/LSM availability is observed and recorded but is not a preflight blocker.
+Rootless mode is also observed, but this v1 slice rejects it until the controller can resolve the
+daemon's UID/GID mapping together with writable bind-mount ownership while preserving a non-root
+container process.
 
 ### Resource-limit contract
 

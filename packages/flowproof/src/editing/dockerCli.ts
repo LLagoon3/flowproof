@@ -203,11 +203,17 @@ export function evaluateCapabilities(info: unknown): DockerCapabilities {
   if (record.PidsLimit !== true) missing.push('pids')
   if (record.CpuCfsQuota !== true) missing.push('cpu')
   const has = (name: string): boolean => names.some((option) => option.name === name)
+  const rootless = has('rootless')
+  // The controller-owned clone appears as container root through a rootless daemon's user
+  // namespace. Reusing the controller's numeric UID therefore selects a subordinate host UID,
+  // which cannot write the bind mount. Fail closed until workspace ownership and the daemon's
+  // UID/GID mapping can be resolved together without running the agent as container root.
+  if (rootless) missing.push('rootless-user-mapping')
   const lsm: LsmKind | null = has('apparmor') ? 'apparmor' : has('selinux') ? 'selinux' : null
   return Object.freeze({
     supported: missing.length === 0,
     missing: Object.freeze(missing),
-    isolation: Object.freeze({ rootless: has('rootless'), lsm }),
+    isolation: Object.freeze({ rootless, lsm }),
   })
 }
 

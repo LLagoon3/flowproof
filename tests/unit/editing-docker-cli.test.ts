@@ -183,9 +183,13 @@ describe('capability preflight', () => {
     expect(evaluateCapabilities(DOCKER_INFO)).toEqual({ supported: true, missing: [], isolation: { rootless: false, lsm: 'apparmor' } })
   })
 
-  it('records rootless and SELinux only when the daemon reports them', () => {
+  it('records rootless and SELinux but rejects the unsupported bind-mount identity mapping', () => {
     const info = { ...DOCKER_INFO, SecurityOptions: ['name=seccomp,profile=default', 'name=rootless', 'name=selinux'] }
-    expect(evaluateCapabilities(info)).toEqual({ supported: true, missing: [], isolation: { rootless: true, lsm: 'selinux' } })
+    expect(evaluateCapabilities(info)).toEqual({
+      supported: false,
+      missing: ['rootless-user-mapping'],
+      isolation: { rootless: true, lsm: 'selinux' },
+    })
   })
 
   it('treats a missing LSM as an observation, not a blocker', () => {

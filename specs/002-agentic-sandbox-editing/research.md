@@ -204,19 +204,24 @@ and the diagnostic cap prevents result amplification.
   machines and weakens reproducibility.
 - Unlimited time, memory, processes, or diagnostics contradict the bounded-runtime requirement.
 
-## Decision 11: Treat rootless Docker as recommended hardening, not a claim
+## Decision 11: Observe rootless Docker but fail closed without bind-mount identity mapping
 
-**Decision**: Support a local Docker Engine and record whether rootless mode is active during
-preflight. Require all container-level restrictions regardless. Document rootful operation as a
-residual risk and do not claim hostile-code isolation.
+**Decision**: Support the prepared rootful local Docker Engine and record whether rootless mode is
+active during preflight. Reject a rootless daemon in this v1 slice until FlowProof can resolve its
+UID/GID mapping together with writable workspace ownership while retaining the required non-root
+container process. Require all other container-level restrictions regardless. Document rootful
+operation as a residual risk and do not claim hostile-code isolation.
 
 **Rationale**: Docker's rootless mode reduces daemon and runtime privilege, but the prepared host is
-currently rootful. The agent never receives the Docker socket, and deliberate runtime escape is
-outside the approved threat model. Requiring a host migration would expand this feature into system
-administration rather than product implementation.
+currently rootful. On a rootless daemon, the controller's host UID maps to container UID 0; passing
+that numeric UID to `--user` instead selects a subordinate host UID that cannot write the
+controller-owned bind mount. Running the agent as container root would violate the non-root policy,
+so preflight must reject that mapping rather than report a session as supported. The agent never
+receives the Docker socket, and deliberate runtime escape remains outside the approved threat model.
 
 **Alternatives considered**:
 
 - Pretending the current daemon is rootless would make the security claim false.
-- Blocking implementation until a rootless migration would add operational scope without changing
-  the accepted accidental-error product boundary.
+- Adding rootless workspace ownership or ID-mapped mount preparation in this slice would expand the
+  approved runtime boundary; accepting it without that preparation would produce deterministic
+  permission failures.
