@@ -207,3 +207,9 @@ None. Docker capability checks, fixture execution, containment, cleanup, and all
 - Do not claim private-network isolation: default bridge egress may reach host/LAN/private, link-local, or cloud-metadata services.
 - Do not mark a task complete without the specified failing-first or passing verification evidence.
 - Commit implementation in small reviewable units with its tests; the whole T001-T029 range remains one delivery slice and one pull request.
+
+---
+
+## Phase 7: Convergence
+
+- [X] T030 [US3] Preserve private-key redaction state across bounded stdout/stderr chunk and tail boundaries in `packages/flowproof/src/editing/session.ts`, and add regression coverage for missing or truncated PEM boundaries in `tests/unit/editing-session-state.test.ts`, per FR-008 and SC-005 (partial)

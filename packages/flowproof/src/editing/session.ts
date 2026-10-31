@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:os'
 import { performance } from 'node:perf_hooks'
+import { StringDecoder } from 'node:string_decoder'
 
 import { sanitizeText } from '../evidence/sanitize.js'
 import { createTaskDocument } from './contracts.js'
@@ -222,35 +223,91 @@ interface TailBuffer {
   text(): string
 }
 
-/** Keeps the last `limit` bytes of one output stream. */
+const PRIVATE_KEY_LABEL_MAX = 64
+const PRIVATE_KEY_MARKER_CARRY = 128
+const KEY_BEGIN = new RegExp(`-----BEGIN [A-Z ]{0,${PRIVATE_KEY_LABEL_MAX}}PRIVATE KEY-----`)
+const KEY_END = new RegExp(`-----END [A-Z ]{0,${PRIVATE_KEY_LABEL_MAX}}PRIVATE KEY-----`)
+
+/** Keeps the last `limit` bytes of one output stream while tracking private-key blocks. */
 function createTailBuffer(limit: number): TailBuffer {
   let chunks: Buffer[] = []
   let size = 0
   let truncated = false
-  return {
-    push(chunk: Buffer): void {
-      if (chunk.length >= limit) {
-        chunks = [Buffer.from(chunk.subarray(chunk.length - limit))]
-        size = limit
-        truncated = true
+  let markerCarry = ''
+  let privateKeyOpen = false
+  let finalized = false
+  const decoder = new StringDecoder('utf8')
+
+  const append = (text: string): void => {
+    if (text === '') return
+    const chunk = Buffer.from(text)
+    if (chunk.length >= limit) {
+      chunks = [Buffer.from(chunk.subarray(chunk.length - limit))]
+      size = limit
+      truncated = true
+      return
+    }
+    chunks.push(chunk)
+    size += chunk.length
+    while (size > limit) {
+      const first = chunks[0] as Buffer
+      const excess = size - limit
+      if (first.length <= excess) {
+        chunks.shift()
+        size -= first.length
+      } else {
+        chunks[0] = first.subarray(excess)
+        size -= excess
+      }
+      truncated = true
+    }
+  }
+
+  const scrubPrivateKeys = (decoded: string, flush: boolean): void => {
+    let current = markerCarry + decoded
+    markerCarry = ''
+    while (current !== '') {
+      if (privateKeyOpen) {
+        const end = KEY_END.exec(current)
+        if (end !== null) {
+          current = current.slice(end.index + end[0].length)
+          privateKeyOpen = false
+          continue
+        }
+        // Retain only enough text to recognize an END marker split across chunks. On final flush,
+        // discard the unfinished block rather than exposing a body whose BEGIN marker is gone.
+        if (!flush) markerCarry = current.slice(-PRIVATE_KEY_MARKER_CARRY)
         return
       }
-      chunks.push(Buffer.from(chunk))
-      size += chunk.length
-      while (size > limit) {
-        const first = chunks[0] as Buffer
-        const excess = size - limit
-        if (first.length <= excess) {
-          chunks.shift()
-          size -= first.length
-        } else {
-          chunks[0] = first.subarray(excess)
-          size -= excess
-        }
-        truncated = true
+
+      const begin = KEY_BEGIN.exec(current)
+      if (begin !== null) {
+        append(current.slice(0, begin.index))
+        append('[REDACTED]')
+        current = current.slice(begin.index + begin[0].length)
+        privateKeyOpen = true
+        continue
       }
+      if (flush) {
+        append(current)
+        return
+      }
+      const safeLength = Math.max(0, current.length - PRIVATE_KEY_MARKER_CARRY)
+      append(current.slice(0, safeLength))
+      markerCarry = current.slice(safeLength)
+      return
+    }
+  }
+
+  return {
+    push(chunk: Buffer): void {
+      if (!finalized) scrubPrivateKeys(decoder.write(chunk), false)
     },
     text(): string {
+      if (!finalized) {
+        scrubPrivateKeys(decoder.end(), true)
+        finalized = true
+      }
       const text = Buffer.concat(chunks).toString('utf8')
       return truncated ? dropPartialFirstLine(text) : text
     },
@@ -263,8 +320,7 @@ const dropPartialFirstLine = (text: string): string => {
   return newline === -1 ? '' : text.slice(newline + 1)
 }
 
-const KEY_BEGIN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/
-const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----[^\n]*\n?/
+const KEY_END_WITH_LINE = new RegExp(`${KEY_END.source}[^\\n]*\\n?`)
 
 /**
  * The sanitizer redacts complete private-key blocks only. A retained tail can hold a key body
@@ -272,11 +328,11 @@ const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----[^\n]*\n?/
  */
 function dropPartialPrivateKeys(text: string): string {
   let current = text
-  const end = KEY_END.exec(current)
+  const end = KEY_END_WITH_LINE.exec(current)
   const begin = KEY_BEGIN.exec(current)
   if (end !== null && (begin === null || begin.index > end.index)) current = current.slice(end.index + end[0].length)
   const openBegin = KEY_BEGIN.exec(current)
-  if (openBegin !== null && !KEY_END.test(current.slice(openBegin.index))) current = current.slice(0, openBegin.index)
+  if (openBegin !== null && !KEY_END_WITH_LINE.test(current.slice(openBegin.index))) current = current.slice(0, openBegin.index)
   return current
 }
 

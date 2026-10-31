@@ -415,6 +415,36 @@ describe('bounded sanitized diagnostics', () => {
     expect(diagnostic).toContain('after the key')
   })
 
+  it('redacts an unterminated private key after its BEGIN marker leaves the retained tail', async () => {
+    const body = Array.from(
+      { length: 5_000 },
+      (_, index) => `FPSEEDEDUNTERMINATEDKEY${String(index).padStart(4, '0')}abcdefghijklmnopqrstuvwxyz\n`,
+    ).join('')
+    const output = `-----BEGIN PRIVATE KEY-----\n${body}`
+    // Split both the marker and body at arbitrary chunk boundaries. The capture must remember
+    // that it is inside a private-key block even after the BEGIN marker leaves the bounded tail.
+    const chunks = output.match(/[\s\S]{1,997}/g) ?? []
+    const diagnostic = await diagnosticFor({ stdout: chunks }, { limits: { diagnosticBytes: 4_096 } })
+
+    expect(diagnostic).toContain('[REDACTED]')
+    expect(diagnostic).not.toContain('FPSEEDEDUNTERMINATEDKEY')
+  })
+
+  it('redacts complete private-key markers split across output chunks', async () => {
+    const diagnostic = await diagnosticFor({
+      stderr: [
+        'before\n-----BE',
+        'GIN OPENSSH PRIVATE KEY-----\nFPSEEDEDSPLITKEYBODY\n-----EN',
+        'D OPENSSH PRIVATE KEY-----\nafter\n',
+      ],
+    })
+
+    expect(diagnostic).toContain('before')
+    expect(diagnostic).toContain('[REDACTED]')
+    expect(diagnostic).toContain('after')
+    expect(diagnostic).not.toContain('FPSEEDEDSPLITKEYBODY')
+  })
+
   it.each([
     ['a provider key', 'MODEL_API_KEY=sk-fpseededproviderkey00000001', 'fpseededproviderkey'],
     ['a bearer token', 'Authorization: Bearer FPSEEDEDBEARER0000000001', 'FPSEEDEDBEARER'],
