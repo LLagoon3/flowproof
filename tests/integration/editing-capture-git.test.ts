@@ -1064,5 +1064,7 @@ describe('completeness and failure accuracy', () => {
       clearInterval(watcher)
     }
     expect(controller.signal.aborted).toBe(true)
-  })
+    // Preparing and snapshotting several 3,000-file workspaces exceeds Vitest's default
+    // five seconds on shared CI runners. This does not change capture's tested deadlines.
+  }, 30_000)
 })
