@@ -564,6 +564,93 @@ async function nestedRepository(root: string, content: string): Promise<string> 
   return git(root, 'rev-parse', 'HEAD').trim()
 }
 
+describe('ignored tracked leaf structural transitions', () => {
+  it.each([
+    ['regular file to symlink', 'file', 'link', false],
+    ['symlink to regular file', 'link', 'file', true],
+    ['regular file to gitlink', 'file', 'gitlink', false],
+    ['gitlink to regular file', 'gitlink', 'file', true],
+    ['symlink to gitlink', 'link', 'gitlink', false],
+    ['gitlink to symlink', 'gitlink', 'link', true],
+  ] as const)('retains baseline tracking when an ignored path changes from %s', async (_label, source, destination, stage) => {
+    const side = await createTempDirectory('flowproof-capture-ignored-leaf-')
+    cleanups.push(side.remove)
+
+    const baselineGitlink = source === 'gitlink' ? await nestedRepository(path.join(side.path, 'baseline'), 'baseline nested content\n') : null
+    const baselineEntry: Entry = source === 'gitlink'
+      ? { mode: '160000', data: Buffer.from(baselineGitlink as string) }
+      : source === 'link'
+        ? link('baseline-target')
+        : file('baseline bytes\n')
+    const baselineState = new Map<string, Entry>([
+      ['.gitignore', file('ignored/\n')],
+      ['ignored/leaf', baselineEntry],
+    ])
+    const baseline = await commitBaseline(baselineState, { forced: source === 'gitlink' ? [] : ['ignored/leaf'] })
+    const session = await openSession(baseline)
+    const leaf = at(session, 'ignored/leaf')
+    const nestedPath = leaf.toString('latin1')
+
+    await rm(leaf, { recursive: true, force: true })
+    let finalEntry: Entry
+    if (destination === 'file') {
+      await writeFile(leaf, stage ? 'intermediate bytes\n' : 'final bytes\n')
+      finalEntry = file('final bytes\n')
+    } else if (destination === 'link') {
+      await symlink(stage ? 'intermediate-target' : 'final-target', leaf)
+      finalEntry = link('final-target')
+    } else {
+      const initialHead = await nestedRepository(nestedPath, 'initial nested content\n')
+      finalEntry = { mode: '160000', data: Buffer.from(initialHead) }
+    }
+
+    if (stage) {
+      editorGit(session, 'add', '--force', '--', 'ignored/leaf')
+      if (destination === 'file') {
+        await writeFile(leaf, (finalEntry as Entry).data)
+      } else if (destination === 'link') {
+        await unlink(leaf)
+        await symlink((finalEntry as Entry).data, leaf)
+      } else {
+        await writeFile(path.join(nestedPath, 'final.txt'), 'committed after staging\n')
+        git(nestedPath, '-c', 'user.email=n@example.invalid', '-c', 'user.name=Nested', '-c', 'commit.gpgsign=false', 'add', '--all')
+        git(nestedPath, '-c', 'user.email=n@example.invalid', '-c', 'user.name=Nested', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--message', 'final nested state')
+        finalEntry = { mode: '160000', data: Buffer.from(git(nestedPath, 'rev-parse', 'HEAD').trim()) }
+      }
+    } else if (destination === 'gitlink') {
+      finalEntry = { mode: '160000', data: Buffer.from(git(nestedPath, 'rev-parse', 'HEAD').trim()) }
+    }
+
+    // A new ignored sibling has no baseline or final-index eligibility and must not be force-exported.
+    await writeFile(at(session, 'ignored/untracked-only.txt'), 'must stay ignored\n')
+    const finalState = new Map(baselineState)
+    finalState.set('ignored/leaf', finalEntry)
+
+    const candidate = expectCaptured(await session.capture())
+    expectState(await rebuild(baseline, candidate.patch), finalState)
+    expectFiles(candidate, baselineState, finalState, [{ path: 'ignored/leaf', operation: 'modified' }])
+    expect(candidate.patch.toString('latin1')).not.toContain('untracked-only.txt')
+  })
+
+  it('keeps a deleted ignored tracked path as a deletion and excludes ignored untracked files', async () => {
+    const baselineState = new Map<string, Entry>([
+      ['.gitignore', file('ignored/\n')],
+      ['ignored/deleted.txt', file('baseline bytes\n')],
+    ])
+    const baseline = await commitBaseline(baselineState, { forced: ['ignored/deleted.txt'] })
+    const session = await openSession(baseline)
+    await unlink(at(session, 'ignored/deleted.txt'))
+    await writeFile(at(session, 'ignored/new.txt'), 'not part of the candidate\n')
+
+    const candidate = expectCaptured(await session.capture())
+    const finalState = new Map(baselineState)
+    finalState.delete('ignored/deleted.txt')
+    expectState(await rebuild(baseline, candidate.patch), finalState)
+    expectFiles(candidate, baselineState, finalState, [{ path: 'ignored/deleted.txt', operation: 'deleted' }])
+    expect(candidate.patch.toString('latin1')).not.toContain('ignored/new.txt')
+  })
+})
+
 function expectRejected(result: CaptureResult, reasonCode: string): void {
   expect(result).toMatchObject({ status: 'rejected', reasonCode })
   expect(JSON.stringify(result)).not.toMatch(/patch|files|\/tmp\//)

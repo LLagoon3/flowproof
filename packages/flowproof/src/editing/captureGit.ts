@@ -692,10 +692,16 @@ export async function extractChanges(budget: CaptureBudget, workspace: CaptureWo
   const stale = structuralIndexRemovals(baseline, worktree)
   if (stale.length > 0) await git(['update-index', '--force-remove', '-z', '--stdin'], { input: joinNul(stale) })
 
-  // Newly tracked final-index paths that still exist are added even when ignored; their staged
-  // blobs are not used. Every baseline path is refreshed from the filesystem, then ordinary
-  // add semantics apply to untracked paths. Missing baseline paths remain deletions.
-  const forced = [...new Set(final.map((entry) => entry.key))].filter((key) => !baselinePaths.has(key) && worktree.entries.has(key))
+  // Force-add only existing leaves whose tracking eligibility is established by either trusted
+  // baseline metadata or the editor's final index. A structural removal temporarily erased that
+  // eligibility from the private index, so reapply it for the same final leaf path; do not extend
+  // it to newly-created ignored children when a tracked file/gitlink becomes a directory.
+  const finalIndexPaths = new Set(final.map((entry) => entry.key))
+  const eligiblePaths = new Set([...baselinePaths, ...finalIndexPaths])
+  const structurallyRemoved = new Set(stale)
+  const forced = [...eligiblePaths].filter(
+    (key) => worktree.entries.has(key) && (!baselinePaths.has(key) || structurallyRemoved.has(key)),
+  )
   if (forced.length > 0) {
     await git(['--literal-pathspecs', 'add', '--force', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: joinNul(forced) })
   }
