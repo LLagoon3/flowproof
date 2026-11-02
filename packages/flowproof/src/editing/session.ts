@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { StringDecoder } from 'node:string_decoder'
 
 import { sanitizeText } from '../evidence/sanitize.js'
+import type { SecretScanner } from '../evidence/secretScan.js'
 import { createTaskDocument } from './contracts.js'
 import type {
   CleanupReasonCode,
@@ -15,11 +16,14 @@ import type {
   OwnedResourceCategory,
   ResolvedEditingSessionRequest,
 } from './contracts.js'
+import { EditingSessionError } from './contracts.js'
 import { containerName, createDockerCli } from './dockerCli.js'
 import type { AttachedContainer, ContainerState, DockerAdapter } from './dockerCli.js'
+import { captureChanges, failedResult, notAttemptedResult, rejectedResult } from './capture.js'
+import type { CaptureResult, CapturingEditingSessionResult } from './capture.js'
 import type { RuntimeProfileRegistry } from './runtimeProfile.js'
 import { createWorkspaceManager } from './workspace.js'
-import type { OriginalIntegrity, PathPlaceholder, SessionWorkspace, WorkspaceDisposal, WorkspaceManager } from './workspace.js'
+import type { CaptureWorkspace, OriginalIntegrity, PathPlaceholder, SessionWorkspace, WorkspaceDisposal, WorkspaceManager } from './workspace.js'
 
 // The editing-session lifecycle owner. It validates the request synchronously, then prepares the
 // standalone clone, creates and attaches the constrained container, and finalizes exactly once.
@@ -36,6 +40,32 @@ export interface EditingSessionDependencies {
   readonly workspaces?: WorkspaceManager
   /** Monotonic milliseconds. */
   readonly clock?: () => number
+}
+
+/** The opt-in capture entry point requires an existing scanner created by trusted code. */
+export interface CapturingEditingSessionDependencies extends EditingSessionDependencies {
+  readonly scanner: SecretScanner
+}
+
+/** The opt-in entry point preserves the usual handle and cancellation style. */
+export interface CapturingEditingSessionHandle {
+  readonly id: string
+  readonly result: Promise<CapturingEditingSessionResult>
+  cancel(reason?: string): Promise<void>
+}
+
+type SessionRunnerResult = EditingSessionResult | CapturingEditingSessionResult
+
+interface SessionRunnerHandle<R extends SessionRunnerResult> {
+  readonly id: string
+  readonly result: Promise<R>
+  cancel(reason?: string): Promise<void>
+}
+
+interface CaptureCancellation {
+  readonly controller: AbortController
+  /** Open after successful editor termination until capture has either settled or been skipped. */
+  active: boolean
 }
 
 // ---------------------------------------------------------------------------------------
@@ -420,6 +450,26 @@ function describeOutcome(input: {
 
 /** Starts one editing session; throws synchronously, before any side effect, on invalid input. */
 export function startEditingSession(request: unknown, dependencies: EditingSessionDependencies): EditingSessionHandle {
+  return startSession<EditingSessionResult>(request, dependencies, null)
+}
+
+/** Starts one opt-in capture session; the lifecycle-only entry point remains file-blind. */
+export function startCapturingEditingSession(
+  request: unknown,
+  dependencies: CapturingEditingSessionDependencies,
+): CapturingEditingSessionHandle {
+  const scanner = dependencies?.scanner
+  if (typeof scanner !== 'object' || scanner === null || typeof scanner.scan !== 'function' || typeof scanner.scanRun !== 'function') {
+    throw new EditingSessionError('EDITING_REQUEST_INVALID', 'The capture scanner dependency is invalid.')
+  }
+  return startSession<CapturingEditingSessionResult>(request, dependencies, scanner)
+}
+
+function startSession<R extends SessionRunnerResult>(
+  request: unknown,
+  dependencies: EditingSessionDependencies,
+  scanner: SecretScanner | null,
+): SessionRunnerHandle<R> {
   const resolved: ResolvedEditingSessionRequest = dependencies.profiles.resolveRequest(request)
   const docker = dependencies.docker ?? createDockerCli()
   const workspaces = dependencies.workspaces ?? createWorkspaceManager()
@@ -428,9 +478,16 @@ export function startEditingSession(request: unknown, dependencies: EditingSessi
   const lifecycle = createSessionLifecycle()
   // Only the winning cancellation's reason is kept; it is sanitized during finalization.
   const cancellation: { reason: unknown } = { reason: undefined }
+  const captureCancellation: CaptureCancellation = { controller: new AbortController(), active: false }
   // A won timeout or cancellation resolves `lifecycle.terminal`, which the running session awaits.
   const requestStop = (cause: 'timed_out' | 'cancelled', reason?: unknown): void => {
-    if (lifecycle.selectTerminal(cause) && cause === 'cancelled') cancellation.reason = reason
+    if (lifecycle.selectTerminal(cause)) {
+      if (cause === 'cancelled') cancellation.reason = reason
+    } else if (cause === 'cancelled' && captureCancellation.active) {
+      // A cancellation after the editor already exited interrupts only the capture phase; it
+      // never rewrites the observed execution result or starts another cleanup cycle.
+      captureCancellation.controller.abort()
+    }
   }
 
   const { signal } = resolved.request
@@ -438,9 +495,8 @@ export function startEditingSession(request: unknown, dependencies: EditingSessi
   if (signal?.aborted) onAbort()
   else signal?.addEventListener('abort', onAbort, { once: true })
 
-  const result = runSession({ id, resolved, docker, workspace: workspaces.open(), clock, lifecycle, requestStop, cancellation }).finally(() =>
-    signal?.removeEventListener('abort', onAbort),
-  )
+  const result = runSession({ id, resolved, docker, workspace: workspaces.open(), clock, lifecycle, requestStop, cancellation, scanner, captureCancellation })
+    .finally(() => signal?.removeEventListener('abort', onAbort)) as Promise<R>
   return Object.freeze({
     id,
     result,
@@ -458,12 +514,14 @@ interface SessionContext {
   readonly workspace: SessionWorkspace
   readonly clock: () => number
   readonly lifecycle: SessionLifecycle
-  readonly requestStop: (cause: 'timed_out' | 'cancelled') => void
+  readonly requestStop: (cause: 'timed_out' | 'cancelled', reason?: unknown) => void
   readonly cancellation: { readonly reason: unknown }
+  readonly scanner: SecretScanner | null
+  readonly captureCancellation: CaptureCancellation
 }
 
-async function runSession(context: SessionContext): Promise<EditingSessionResult> {
-  const { id, resolved, docker, workspace, clock, lifecycle, requestStop, cancellation } = context
+async function runSession(context: SessionContext): Promise<SessionRunnerResult> {
+  const { id, resolved, docker, workspace, clock, lifecycle, requestStop, cancellation, scanner, captureCancellation } = context
   const { request, profile, limits } = resolved
   const startedAt = clock()
   let isolation: IsolationObservation | null = null
@@ -473,6 +531,9 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
   let startupCode: StartupCode | null = null
   let finalState: ContainerState | null = null
   let runtimeInterrupted = false
+  let captureWorkspace: CaptureWorkspace | null = null
+  let capturePreparationFailed = false
+  let captureResult: CaptureResult | null = scanner === null ? null : notAttemptedResult()
   // Raw output stays in memory, bounded per stream, and leaves only through composeDiagnostic.
   const stdout = createTailBuffer(Math.floor(limits.diagnosticBytes / 2))
   const stderr = createTailBuffer(Math.floor(limits.diagnosticBytes / 2))
@@ -492,6 +553,18 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
       isolation = capabilities.isolation
     }
     const prepared = ended() ? null : await workspace.create(createTaskDocument(request))
+    if (prepared !== null && scanner !== null && !ended()) {
+      try {
+        if (workspace.prepareCapture === undefined) throw new StartupFailure('WORKSPACE_PREPARE_FAILED')
+        captureWorkspace = await workspace.prepareCapture()
+      } catch {
+        if (!ended()) {
+          capturePreparationFailed = true
+          captureResult = failedResult('CAPTURE_IO_FAILED')
+          throw new StartupFailure('WORKSPACE_PREPARE_FAILED')
+        }
+      }
+    }
     if (prepared !== null && !ended()) {
       lifecycle.transition('starting')
       // Establish absence before create. If create subsequently fails after the daemon made the
@@ -519,7 +592,9 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
       const running = docker.start(containerId, { onStdout: (chunk) => stdout.push(chunk), onStderr: (chunk) => stderr.push(chunk) })
       attached = running
       timer = setTimeout(() => requestStop('timed_out'), limits.wallClockMs)
-      void running.exited.then(() => lifecycle.selectTerminal('exited'))
+      void running.exited.then(() => {
+        if (lifecycle.selectTerminal('exited') && scanner !== null) captureCancellation.active = true
+      })
       await lifecycle.terminal
     }
   } catch (error) {
@@ -540,6 +615,51 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
     }
   }
   if (attached !== null && containerId !== null) finalState = await docker.inspect(containerId).catch(() => null)
+
+  // ---- Opt-in final-state capture, after container inspection and before any owned state is removed.
+  if (scanner !== null && !capturePreparationFailed) {
+    const successfulStop =
+      cause === 'exited' &&
+      finalState?.started === true &&
+      finalState.running === false &&
+      finalState.startError === false &&
+      finalState.exitCode === 0
+    if (!successfulStop) {
+      captureResult = notAttemptedResult()
+      captureCancellation.active = false
+    } else if (captureWorkspace === null) {
+      captureResult = failedResult('CAPTURE_IO_FAILED')
+      captureCancellation.active = false
+    } else {
+      captureCancellation.active = true
+      let viewProved = false
+      if (!captureCancellation.controller.signal.aborted && containerId !== null) {
+        try {
+          viewProved = await docker.verifyWorkspaceView(containerId, captureWorkspace.workspacePath)
+        } catch {
+          viewProved = false
+        }
+      }
+      if (captureCancellation.controller.signal.aborted) {
+        captureResult = failedResult('CAPTURE_INTERRUPTED')
+      } else if (!viewProved) {
+        captureResult = rejectedResult('WORKSPACE_VIEW_UNAVAILABLE')
+      } else {
+        try {
+          captureResult = await captureChanges({
+            sessionId: id,
+            workspace: captureWorkspace,
+            scanner,
+            signal: captureCancellation.controller.signal,
+          })
+        } catch {
+          // Capture failures are result facts and must not prevent the existing cleanup path.
+          captureResult = failedResult(captureCancellation.controller.signal.aborted ? 'CAPTURE_INTERRUPTED' : 'CAPTURE_IO_FAILED')
+        }
+      }
+      captureCancellation.active = false
+    }
+  }
 
   // ---- Cleaning: exact container, manifest paths, bounded retry, original comparison.
   lifecycle.transition('cleaning')
@@ -604,7 +724,7 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
     wallClockMs: limits.wallClockMs,
     reason: outcome === 'cancelled' ? sanitizeReason(cancellation.reason, placeholders) : null,
   })
-  return Object.freeze({
+  const sessionResult: EditingSessionResult = Object.freeze({
     sessionId: id,
     executionOutcome: outcome,
     exitCode,
@@ -618,4 +738,7 @@ async function runSession(context: SessionContext): Promise<EditingSessionResult
       isolation: isolation === null ? null : Object.freeze({ rootless: isolation.rootless, lsm: isolation.lsm }),
     }),
   })
+  return scanner === null
+    ? sessionResult
+    : Object.freeze({ session: sessionResult, capture: captureResult ?? notAttemptedResult() })
 }

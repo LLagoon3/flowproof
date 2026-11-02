@@ -5,8 +5,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { captureChanges } from '../../packages/flowproof/src/editing/capture.js'
-import type { CaptureResult } from '../../packages/flowproof/src/editing/capture.js'
+import { CAPTURE_REASON_MESSAGES, captureChanges, validateCapturingSessionResult } from '../../packages/flowproof/src/editing/capture.js'
+import type { CaptureResult, CapturingEditingSessionResult } from '../../packages/flowproof/src/editing/capture.js'
 import {
   CAPTURE_BYTE_BUDGET,
   CAPTURE_DEADLINE_MS,
@@ -15,12 +15,17 @@ import {
   createCaptureBudget,
   runCaptureGit,
 } from '../../packages/flowproof/src/editing/captureGit.js'
+import { EDITING_SESSION_RESULT_FIELDS, EditingSessionError, parseEditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
+import type { DockerAdapter } from '../../packages/flowproof/src/editing/dockerCli.js'
+import { startCapturingEditingSession, startEditingSession } from '../../packages/flowproof/src/editing/session.js'
 import { createWorkspaceManager } from '../../packages/flowproof/src/editing/workspace.js'
-import type { CaptureWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
+import type { CaptureWorkspace, SessionWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
 import { createSecretScanner } from '../../packages/flowproof/src/evidence/secretScan.js'
 import type { SecretScanner } from '../../packages/flowproof/src/evidence/secretScan.js'
 import { GIT_TIMEOUT_MS, MAX_GIT_OUTPUT_BYTES } from '../../packages/flowproof/src/git/repositoryState.js'
-import { createTempDirectory, git, processesMentioning } from '../support/repoFixture.js'
+import { deferred, fakeDocker, fakeProfiles, fakeRequest, fakeWorkspace, tick } from '../support/editingFakes.js'
+import type { FakeDockerOptions, FakeWorkspaceOptions } from '../support/editingFakes.js'
+import { createTempDirectory, git, processesMentioning, snapshotRepository } from '../support/repoFixture.js'
 import type { TempDirectory } from '../support/repoFixture.js'
 
 // T004 (specs/003-capture-editing-candidate): the small shell-free capture Git runner. It moves
@@ -282,15 +287,20 @@ interface Captured {
   capture(options?: { readonly scanner?: SecretScanner; readonly signal?: AbortSignal; readonly bounds?: { readonly deadlineMs?: number; readonly byteLimit?: number } }): Promise<CaptureResult>
 }
 
-/** A one-commit repository with `files`, cloned into a prepared capture workspace. */
-async function capturable(files: Record<string, string | Buffer>): Promise<Captured> {
+/** A one-commit repository holding `files`. */
+async function syntheticRepository(files: Record<string, string | Buffer>): Promise<{ readonly root: string; readonly head: string }> {
   const parent = await temp('flowproof-capture-unit-repo-')
   const root = path.join(parent.path, 'repo')
   git(parent.path, 'init', '--quiet', '--initial-branch=main', 'repo')
   for (const [name, content] of Object.entries(files)) await writeFile(path.join(root, name), content)
   git(root, 'add', '--all')
   git(root, '-c', 'user.email=u@example.invalid', '-c', 'user.name=Unit', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--message', 'base')
-  const head = git(root, 'rev-parse', 'HEAD').trim()
+  return { root, head: git(root, 'rev-parse', 'HEAD').trim() }
+}
+
+/** A one-commit repository with `files`, cloned into a prepared capture workspace. */
+async function capturable(files: Record<string, string | Buffer>): Promise<Captured> {
+  const { root, head } = await syntheticRepository(files)
   const tmp = await temp('flowproof-capture-unit-tmp-')
   const workspace = createWorkspaceManager({ tmpRoot: tmp.path }).open()
   cleanups.push(async () => {
@@ -450,3 +460,286 @@ describe('capture failure distinctions', () => {
     expect(await repo.capture({ bounds: { byteLimit: 1 } })).toMatchObject({ status: 'rejected', reasonCode: 'CAPTURE_LIMIT', coverage: null })
   })
 })
+
+// ---------------------------------------------------------------------------------------
+// T017 (US3): the opt-in capturing session lifecycle. A fake Docker adapter fixes terminal and
+// cancellation ordering while a real workspace and real capture run underneath, so these cases
+// prove ordering without a daemon: capture runs once, only after an inspected successful stop,
+// before disposal, and the result resolves after cleanup with distinct execution, capture, and
+// cleanup facts.
+// ---------------------------------------------------------------------------------------
+
+const profiles = fakeProfiles()
+
+interface Harness {
+  readonly repo: { readonly root: string; readonly head: string }
+  readonly docker: ReturnType<typeof fakeDocker>
+  readonly workspaces: { open(): SessionWorkspace }
+  /** The real workspace once opened. */
+  workspace(): SessionWorkspace
+  /** The clone path once created. */
+  clonePath(): string
+  request(overrides?: Record<string, unknown>): Record<string, unknown>
+}
+
+/** A real repository and real workspace manager beneath a fake Docker daemon. */
+async function harness(dockerOptions: FakeDockerOptions = {}, wrap: (inner: SessionWorkspace) => SessionWorkspace = (inner) => inner): Promise<Harness> {
+  const repo = await syntheticRepository({ 'a.txt': 'a\n', 'b.txt': 'b\n' })
+  const tmp = await temp('flowproof-capture-session-tmp-')
+  const manager = createWorkspaceManager({ tmpRoot: tmp.path })
+  let opened: SessionWorkspace | null = null
+  const docker = fakeDocker(dockerOptions)
+  return {
+    repo,
+    docker,
+    workspaces: {
+      open: () => {
+        const inner = manager.open()
+        cleanups.push(async () => {
+          await inner.dispose()
+        })
+        opened = wrap(inner)
+        return opened
+      },
+    },
+    workspace: () => opened as unknown as SessionWorkspace,
+    clonePath: () => (opened as unknown as SessionWorkspace).createdPaths[1] as string,
+    request: (overrides = {}) => fakeRequest({ repositoryRoot: repo.root, revision: repo.head, ...overrides }),
+  }
+}
+
+function startCapture(h: Harness, overrides: Record<string, unknown> = {}, scanner: SecretScanner = SCANNER) {
+  return startCapturingEditingSession(h.request(overrides), { profiles, docker: h.docker, workspaces: h.workspaces, scanner })
+}
+
+function expectComposition(result: CapturingEditingSessionResult): void {
+  expect(Object.keys(result)).toEqual(['session', 'capture'])
+  expect(Object.keys(result.session)).toEqual([...EDITING_SESSION_RESULT_FIELDS])
+  expect(parseEditingSessionResult(result.session)).toMatchObject({ ok: true })
+  expect(validateCapturingSessionResult(result)).toMatchObject({ ok: true })
+  expect(Object.isFrozen(result)).toBe(true)
+  expect(JSON.stringify(result)).not.toContain('Verified Fix')
+}
+
+const NOT_ATTEMPTED = { status: 'not_attempted', reasonCode: 'EDITOR_NOT_SUCCESSFUL', message: CAPTURE_REASON_MESSAGES.EDITOR_NOT_SUCCESSFUL, coverage: null }
+
+describe('capturing session admission', () => {
+  it.each([
+    ['an invalid request', { task: '' }, SCANNER, 'EDITING_REQUEST_INVALID'],
+    ['an unknown profile', { runtimeProfileId: 'codex' }, SCANNER, 'EDITING_PROFILE_UNKNOWN'],
+    ['a missing scanner', {}, undefined, 'EDITING_REQUEST_INVALID'],
+    ['a scanner without a scan function', {}, { scanRun: () => ({ clean: true, findings: [] }) }, 'EDITING_REQUEST_INVALID'],
+  ])('rejects %s synchronously before any side effect', (_label, overrides, scanner, code) => {
+    const docker = fakeDocker()
+    const workspace = fakeWorkspace()
+    let caught: unknown
+    try {
+      startCapturingEditingSession(fakeRequest(overrides), { profiles, docker, workspaces: { open: () => workspace }, scanner: scanner as SecretScanner })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(EditingSessionError)
+    expect((caught as EditingSessionError).code).toBe(code)
+    expect(docker.calls).toEqual([])
+    expect(workspace.calls).toEqual([])
+  })
+})
+
+describe('capturing session lifecycle', () => {
+  it('captures exactly once after an inspected successful stop, before disposal, then cleans up', async () => {
+    const h = await harness()
+    const before = await snapshotRepository(h.repo.root)
+    const handle = startCapture(h)
+    await h.docker.started
+    await writeFile(path.join(h.clonePath(), 'b.txt'), 'b edited\n')
+    h.docker.exit(0)
+
+    const result = await handle.result
+
+    expectComposition(result)
+    expect(result.session).toMatchObject({ sessionId: handle.id, executionOutcome: 'completed', exitCode: 0, cleanup: { status: 'complete' } })
+    expect(result.capture.status).toBe('captured')
+    if (result.capture.status !== 'captured') return
+    expect(result.capture.candidate.sessionId).toBe(handle.id)
+    expect(result.capture.candidate.baselineCommit).toBe(h.repo.head)
+    expect(result.capture.candidate.files.map((record) => record.path.toString('utf8'))).toEqual(['b.txt'])
+    // Ordering: inspect, then the single view proof, then removal; disposal comes last.
+    const calls = h.docker.calls
+    expect(calls.filter((call) => call === 'verifyWorkspaceView')).toHaveLength(1)
+    expect(calls.lastIndexOf('inspect')).toBeLessThan(calls.indexOf('verifyWorkspaceView'))
+    expect(calls.indexOf('verifyWorkspaceView')).toBeLessThan(calls.indexOf('remove'))
+    expect(await snapshotRepository(h.repo.root)).toEqual(before)
+    expect(h.workspace().createdPaths.every((entry) => !existsSync(entry))).toBe(true)
+    // A later cancellation starts neither another capture nor another cleanup.
+    await handle.cancel('late')
+    expect(await handle.result).toBe(result)
+    expect(h.docker.calls.filter((call) => call === 'verifyWorkspaceView')).toHaveLength(1)
+    expect(h.docker.calls.filter((call) => call === 'remove')).toHaveLength(1)
+  })
+
+  it('reports no changes after a successful stop that changed nothing', async () => {
+    const h = await harness({ exitImmediately: 0 })
+    const result = await startCapture(h).result
+    expectComposition(result)
+    expect(result.capture).toEqual({ status: 'no_changes', coverage: { scope: 'main_repository', note: null } })
+  })
+
+  it.each([
+    ['an attach-client exit while the container still runs', { attachClientExitImmediately: 0, runningExitCode: 0 }, {}, 'failed'],
+    ['a nonzero exit', { exitImmediately: 3 }, {}, 'failed'],
+    ['a container that never started', { startError: true }, {}, 'startup_failed'],
+    ['a failed container creation', { createFails: true }, {}, 'startup_failed'],
+    ['a timeout', { stopExitCode: 137 }, { limits: { wallClockMs: 1_000, stopGraceMs: 1_000 } }, 'timed_out'],
+  ] as const)('never captures after %s', async (_label, dockerOptions, overrides, outcome) => {
+    const h = await harness(dockerOptions)
+    const handle = startCapture(h, overrides)
+    // Edits are made whenever the container starts; a creation failure never starts it.
+    await Promise.race([h.docker.started.then(() => writeFile(path.join(h.clonePath(), 'b.txt'), 'edited before failure\n')).catch(() => undefined), handle.result])
+    const result = await handle.result
+
+    expectComposition(result)
+    expect(result.session.executionOutcome).toBe(outcome)
+    expect(result.session.cleanup.status).toBe('complete')
+    expect(result.capture).toEqual(NOT_ATTEMPTED)
+    expect(h.docker.calls).not.toContain('verifyWorkspaceView')
+  })
+
+  it('never captures after cancellation before or while the editor runs', async () => {
+    const early = await harness()
+    const beforeStart = startCapture(early)
+    await beforeStart.cancel('before start')
+    const first = await beforeStart.result
+    expectComposition(first)
+    expect(first.session.executionOutcome).toBe('cancelled')
+    expect(first.capture).toEqual(NOT_ATTEMPTED)
+
+    const running = await harness()
+    const handle = startCapture(running)
+    await running.docker.started
+    await writeFile(path.join(running.clonePath(), 'b.txt'), 'edited before cancel\n')
+    await handle.cancel('while running')
+    const second = await handle.result
+    expectComposition(second)
+    expect(second.session).toMatchObject({ executionOutcome: 'cancelled', cleanup: { status: 'complete' } })
+    expect(second.capture).toEqual(NOT_ATTEMPTED)
+    expect(running.docker.calls).not.toContain('verifyWorkspaceView')
+  })
+
+  it('interrupts capture on cancellation during capture without rewriting the completed execution', async () => {
+    const gate = deferred<boolean>()
+    const h = await harness({ workspaceViewGate: gate.promise })
+    const handle = startCapture(h)
+    await h.docker.started
+    await writeFile(path.join(h.clonePath(), 'b.txt'), 'edited\n')
+    h.docker.exit(0)
+    while (!h.docker.calls.includes('verifyWorkspaceView')) await tick(1)
+
+    const cancelled = handle.cancel('during capture')
+    gate.resolve(true)
+    await cancelled
+    const result = await handle.result
+
+    expectComposition(result)
+    expect(result.session).toMatchObject({ executionOutcome: 'completed', exitCode: 0, cleanup: { status: 'complete' } })
+    expect(result.capture).toEqual({ status: 'failed', reasonCode: 'CAPTURE_INTERRUPTED', message: CAPTURE_REASON_MESSAGES.CAPTURE_INTERRUPTED, coverage: null })
+    expect(h.workspace().createdPaths.every((entry) => !existsSync(entry))).toBe(true)
+  })
+
+  it.each([
+    ['an unproved workspace view', { workspaceView: false }, 'rejected', 'WORKSPACE_VIEW_UNAVAILABLE'],
+    ['a failing workspace-view check', { workspaceView: 'throws' }, 'rejected', 'WORKSPACE_VIEW_UNAVAILABLE'],
+  ] as const)('settles %s as a safe capture result and still cleans up', async (_label, dockerOptions, status, reasonCode) => {
+    const h = await harness({ exitImmediately: 0, ...dockerOptions })
+    const result = await startCapture(h).result
+    expectComposition(result)
+    expect(result.session).toMatchObject({ executionOutcome: 'completed', cleanup: { status: 'complete' } })
+    expect(result.capture).toMatchObject({ status, reasonCode })
+  })
+
+  it('reports a capture-preparation failure as a failed capture of an editor that never started', async () => {
+    const docker = fakeDocker({ exitImmediately: 0 })
+    const workspace = fakeWorkspace({ prepareCaptureFails: true })
+    const result = await startCapturingEditingSession(fakeRequest(), { profiles, docker, workspaces: { open: () => workspace }, scanner: SCANNER }).result
+    expectComposition(result)
+    expect(result.session).toMatchObject({ executionOutcome: 'startup_failed', cleanup: { status: 'complete' } })
+    expect(result.session.diagnostic).toBe('startup_failed: the disposable workspace could not be prepared.')
+    expect(result.capture).toEqual({ status: 'failed', reasonCode: 'CAPTURE_IO_FAILED', message: CAPTURE_REASON_MESSAGES.CAPTURE_IO_FAILED, coverage: null })
+    expect(docker.calls).not.toContain('create')
+    expect(workspace.calls).toEqual(['resolve', 'create', 'prepareCapture', 'dispose', 'verifyOriginal'])
+  })
+
+  it('settles a capture read failure as data and still disposes and verifies', async () => {
+    const docker = fakeDocker({ exitImmediately: 0 })
+    const workspace = fakeWorkspace()
+    const result = await startCapturingEditingSession(fakeRequest(), { profiles, docker, workspaces: { open: () => workspace }, scanner: SCANNER }).result
+    expectComposition(result)
+    expect(result.session.cleanup.status).toBe('complete')
+    expect(result.capture).toMatchObject({ status: 'failed', reasonCode: 'CAPTURE_IO_FAILED' })
+    expect(workspace.calls.slice(-2)).toEqual(['dispose', 'verifyOriginal'])
+  })
+
+  it.each([
+    ['a container that cannot be removed', { failRemovals: 'always' } as FakeDockerOptions, null, 'CONTAINER_NOT_REMOVED'],
+    [
+      'a changed original repository',
+      {} as FakeDockerOptions,
+      (inner: SessionWorkspace): SessionWorkspace => ({
+        ...inner,
+        get createdPaths() {
+          return inner.createdPaths
+        },
+        ...(inner.prepareCapture === undefined ? {} : { prepareCapture: inner.prepareCapture.bind(inner) }),
+        verifyOriginal: async () => ({ verified: true, unchanged: false, mismatches: ['status'] }),
+      }),
+      'ORIGINAL_REPOSITORY_CHANGED',
+    ],
+  ] as const)('keeps a completed candidate beside an explicit cleanup failure for %s', async (_label, dockerOptions, wrap, reasonCode) => {
+    const h = await harness(dockerOptions, wrap ?? undefined)
+    const handle = startCapture(h)
+    await h.docker.started
+    await writeFile(path.join(h.clonePath(), 'a.txt'), 'a edited\n')
+    h.docker.exit(0)
+    const result = await handle.result
+
+    expectComposition(result)
+    expect(result.session).toMatchObject({ executionOutcome: 'completed', cleanup: { status: 'failed', reasonCode } })
+    expect(result.capture.status).toBe('captured')
+  })
+})
+
+describe('lifecycle-only compatibility', () => {
+  it('keeps the existing entry point free of capture work and fields', async () => {
+    const docker = fakeDocker({ exitImmediately: 0 })
+    const workspace = fakeWorkspace()
+    const handle = startEditingSession(fakeRequest(), { profiles, docker: docker as DockerAdapter, workspaces: { open: () => workspace } })
+    const result = await handle.result
+
+    expect(Object.keys(result)).toEqual([...EDITING_SESSION_RESULT_FIELDS])
+    expect(parseEditingSessionResult(result)).toMatchObject({ ok: true })
+    expect(result).toMatchObject({ executionOutcome: 'completed', exitCode: 0, cleanup: { status: 'complete' } })
+    expect(docker.calls).not.toContain('verifyWorkspaceView')
+    expect(workspace.calls).not.toContain('prepareCapture')
+    expect(JSON.stringify(result)).not.toMatch(/capture|candidate|patch/)
+  })
+
+  it.each([
+    ['completed', { exitImmediately: 0 }, {}],
+    ['failed', { exitImmediately: 9 }, {}],
+    ['startup_failed', { createFails: true }, {}],
+    ['timed_out', { stopExitCode: 137 }, { limits: { wallClockMs: 1_000, stopGraceMs: 1_000 } }],
+  ] as const)('reports the same %s session facts through both entry points', async (_label, dockerOptions, overrides) => {
+    const plain = await startEditingSession(fakeRequest(overrides), { profiles, docker: fakeDocker(dockerOptions), workspaces: { open: () => fakeWorkspace() } }).result
+    const capturing = await startCapturingEditingSession(fakeRequest(overrides), {
+      profiles,
+      docker: fakeDocker(dockerOptions),
+      workspaces: { open: () => fakeWorkspace() },
+      scanner: SCANNER,
+    }).result
+    const stable = ({ sessionId: _id, durationMs: _duration, ...rest }: typeof plain) => rest
+    expect(stable(capturing.session)).toEqual(stable(plain))
+  })
+})
+
+// Fake options used above must exist on the shared fakes.
+const _fakeOptionsCompile: FakeWorkspaceOptions = { prepareCaptureFails: true }
+void _fakeOptionsCompile

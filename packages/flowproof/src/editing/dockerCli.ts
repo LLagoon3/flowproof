@@ -262,6 +262,11 @@ export interface DockerAdapter {
   findByName(name: string): Promise<string | null>
   /** `docker container rm --force --volumes` for one exact ID. */
   remove(id: string): Promise<void>
+  /**
+   * Capture only: true when the exact container's `/workspace` is exactly the expected bind and
+   * nothing below it is mounted separately. Any uncertainty is false; nothing is exported.
+   */
+  verifyWorkspaceView(id: string, expectedWorkspacePath: string): Promise<boolean>
 }
 
 /** The allowlisted host variables the Docker CLI may need; never forwarded into a container. */
@@ -308,6 +313,37 @@ export function createDockerCommandRunner(options: { readonly executable?: strin
       })
     },
   })
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isAtOrBelowWorkspace = (destination: string): boolean => destination === WORKSPACE_MOUNT || destination.startsWith(`${WORKSPACE_MOUNT}/`)
+
+/**
+ * Evaluates one `docker container inspect` document for capture: exactly one `/workspace` mount,
+ * a bind of `expectedWorkspacePath`, and no mount or tmpfs at or below it otherwise. A volume
+ * there (for example an image-declared `VOLUME /workspace/generated`) hides part of the editor's
+ * filesystem from the host clone, so the view is not proved.
+ */
+export function workspaceViewIsComplete(document: unknown, expectedWorkspacePath: string): boolean {
+  if (!isRecord(document) || !Array.isArray(document.Mounts)) return false
+  let roots = 0
+  for (const mount of document.Mounts) {
+    if (!isRecord(mount) || typeof mount.Destination !== 'string' || mount.Destination === '') return false
+    const destination = path.posix.normalize(mount.Destination).replace(/(.)\/$/, '$1')
+    if (destination === WORKSPACE_MOUNT) {
+      roots += 1
+      if (mount.Type !== 'bind' || mount.Source !== expectedWorkspacePath) return false
+    } else if (isAtOrBelowWorkspace(destination)) {
+      return false
+    }
+  }
+  const tmpfs = isRecord(document.HostConfig) ? document.HostConfig.Tmpfs : undefined
+  if (tmpfs !== undefined && tmpfs !== null) {
+    if (!isRecord(tmpfs)) return false
+    if (Object.keys(tmpfs).some((target) => isAtOrBelowWorkspace(path.posix.normalize(target).replace(/(.)\/$/, '$1')))) return false
+  }
+  return roots === 1
 }
 
 const exactId = (id: string): string => {
@@ -394,6 +430,18 @@ export function createDockerCli(options: { readonly runner?: DockerCommandRunner
     async remove(id: string): Promise<void> {
       const { code } = await run(['container', 'rm', '--force', '--volumes', exactId(id)])
       if (code !== 0) throw new DockerError('DOCKER_REMOVE_FAILED', 'The session container could not be removed.')
+    },
+
+    async verifyWorkspaceView(id: string, expectedWorkspacePath: string): Promise<boolean> {
+      const exact = exactId(id)
+      if (!isSafeHostPath(expectedWorkspacePath)) return false
+      const { code, stdout } = await run(['container', 'inspect', '--format', '{{json .}}', exact])
+      if (code !== 0) return false
+      try {
+        return workspaceViewIsComplete(JSON.parse(stdout) as unknown, expectedWorkspacePath)
+      } catch {
+        return false
+      }
     },
   })
 }
