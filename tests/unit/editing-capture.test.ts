@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
+import { performance } from 'node:perf_hooks'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -118,6 +119,22 @@ describe('capture budget constants', () => {
     cleanups.push(async () => budget.dispose())
     expect(budget.byteLimit).toBe(CAPTURE_BYTE_BUDGET)
     expect(budget.deadlineMs).toBe(CAPTURE_DEADLINE_MS)
+  })
+
+  it('enforces the monotonic deadline when synchronous work blocks the timer callback', () => {
+    const budget = createCaptureBudget({ deadlineMs: 5 })
+    try {
+      const overrunUntil = performance.now() + 30
+      while (performance.now() < overrunUntil) {
+        // Deliberately do not yield: the deadline timer cannot update `stopped` in this interval.
+      }
+
+      expect(budget.stopped).toBeNull()
+      expect(() => budget.check()).toThrow(CaptureStopError)
+      expect(budget.stopped).toBe('limit')
+    } finally {
+      budget.dispose()
+    }
   })
 })
 

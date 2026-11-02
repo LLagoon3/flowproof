@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { lstat, open, readFile, readdir, realpath, rm } from 'node:fs/promises'
+import { performance } from 'node:perf_hooks'
 import path from 'node:path'
 
 import { GIT_SAFETY, GIT_TIMEOUT_MS, MAX_GIT_OUTPUT_BYTES, gitEnvironment } from '../git/repositoryState.js'
@@ -60,6 +61,7 @@ export interface CaptureBudgetOptions {
 
 export function createCaptureBudget(options: CaptureBudgetOptions = {}): CaptureBudget {
   const deadlineMs = options.deadlineMs ?? CAPTURE_DEADLINE_MS
+  const deadlineAt = performance.now() + deadlineMs
   const byteLimit = options.byteLimit ?? CAPTURE_BYTE_BUDGET
   const controller = new AbortController()
   let consumed = 0
@@ -68,6 +70,10 @@ export function createCaptureBudget(options: CaptureBudgetOptions = {}): Capture
     if (stopped !== null) return
     stopped = kind
     controller.abort()
+  }
+  const check = (): void => {
+    if (stopped === null && performance.now() >= deadlineAt) stop('limit')
+    if (stopped !== null) throw new CaptureStopError(stopped)
   }
   const timer = setTimeout(() => stop('limit'), deadlineMs)
   const onAbort = (): void => stop('interrupted')
@@ -85,15 +91,16 @@ export function createCaptureBudget(options: CaptureBudgetOptions = {}): Capture
     },
     signal: controller.signal,
     check(): void {
-      if (stopped !== null) throw new CaptureStopError(stopped)
+      check()
     },
     consume(bytes: number): void {
-      if (stopped !== null) throw new CaptureStopError(stopped)
+      check()
       consumed += bytes
       if (consumed > byteLimit) {
         stop('limit')
         throw new CaptureStopError('limit')
       }
+      check()
     },
     dispose(): void {
       clearTimeout(timer)
