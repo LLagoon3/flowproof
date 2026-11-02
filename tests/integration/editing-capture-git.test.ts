@@ -11,7 +11,7 @@ import { captureGitEnvironment, createCaptureBudget, runCaptureGit } from '../..
 import { createSecretScanner } from '../../packages/flowproof/src/evidence/secretScan.js'
 import { WorkspaceError, createWorkspaceManager } from '../../packages/flowproof/src/editing/workspace.js'
 import type { CaptureWorkspace, SessionWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
-import { createPrivateTmpRoot, createSyntheticRepository, listTree } from '../support/editingRuntime.js'
+import { createPrivateTmpRoot, createSyntheticRepository, listTree, processesWithin } from '../support/editingRuntime.js'
 import type { SyntheticRepository } from '../support/editingRuntime.js'
 import { createTempDirectory, git, snapshotRepository } from '../support/repoFixture.js'
 import type { TempDirectory } from '../support/repoFixture.js'
@@ -307,6 +307,7 @@ interface Session {
   readonly baseline: Baseline
   readonly workspacePath: string
   readonly sessionId: string
+  readonly pinned: CaptureWorkspace
   capture(options?: { readonly scanner?: typeof SCANNER; readonly signal?: AbortSignal; readonly bounds?: { readonly deadlineMs?: number; readonly byteLimit?: number } }): Promise<CaptureResult>
 }
 
@@ -325,6 +326,7 @@ async function openSession(baseline: Baseline): Promise<Session> {
     baseline,
     workspacePath: prepared.workspacePath,
     sessionId,
+    pinned,
     capture: (options = {}) =>
       captureChanges({
         sessionId,
@@ -787,5 +789,223 @@ describe('links, gitlinks, and repository control metadata', () => {
       { path: '.gitattributes', operation: 'added' },
       { path: 'b.txt', operation: 'modified' },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// T013 (US2): the existing trusted scanner checks every exposed surface before release: raw
+// old and new blobs (including binary payloads the encoded patch hides), raw path bytes, and
+// the patch. A match rejects the whole candidate with a fixed reason; nothing is redacted.
+// Credential-shaped values are assembled from fragments so fixtures never look like secrets.
+// ---------------------------------------------------------------------------------------
+
+const SEEDED = ['FPCAPTURE', 'SEEDED', 'MARKER', '000002'].join('')
+const SEEDED_SCANNER = createSecretScanner({ markers: [SEEDED] })
+const CREDENTIAL = ['gh', 'p_', 'FPCAPTURE', 'SEEDED', 'TOKEN', '00000000002'].join('')
+
+/** The editor's working tree, index, and HEAD; capture must leave them exactly as they were. */
+function editorView(session: Session): string {
+  return [git(session.workspacePath, 'status', '--porcelain=v1', '-z', '--untracked-files=all'), git(session.workspacePath, 'rev-parse', 'HEAD')].join('|')
+}
+
+function expectSensitiveRejection(result: CaptureResult, ...secrets: string[]): void {
+  expect(result).toEqual({
+    status: 'rejected',
+    reasonCode: 'SENSITIVE_DATA',
+    message: 'Capture was rejected because a changed path or payload matched a required sensitive-data check.',
+    coverage: { scope: 'main_repository', note: null },
+  })
+  const serialized = JSON.stringify(result)
+  for (const secret of secrets) expect(serialized).not.toContain(secret)
+}
+
+describe('sensitive-data admission', () => {
+  const binaryWith = (marker: string): Buffer => Buffer.concat([BINARY_V1, Buffer.from(marker, 'latin1'), BINARY_V2])
+
+  it.each([
+    ['an added text line', async (s: Session) => writeFile(at(s, 'a.txt'), `a\n${SEEDED}\n`)],
+    ['a removed text line', async (s: Session) => writeFile(at(s, 'seeded.txt'), 'clean now\n')],
+    ['a deleted text file', async (s: Session) => unlink(at(s, 'seeded.txt'))],
+    ['a new binary payload hidden by patch encoding', async (s: Session) => writeFile(at(s, 'new.bin'), binaryWith(SEEDED))],
+    ['an old binary payload hidden by patch encoding', async (s: Session) => unlink(at(s, 'seeded.bin'))],
+    ['a modified binary payload', async (s: Session) => writeFile(at(s, 'seeded.bin'), BINARY_V2)],
+    ['raw filename bytes', async (s: Session) => writeFile(Buffer.concat([at(s, ''), Buffer.from(`notes-${SEEDED}-`, 'latin1'), Buffer.from([0xff, 0x2e, 0x74])]), 'x\n')],
+    ['a UTF-8 filename', async (s: Session) => writeFile(at(s, `${SEEDED}.txt`), 'x\n')],
+    ['a credential-shaped text value', async (s: Session) => writeFile(at(s, 'config.env'), `SETTING=${CREDENTIAL}\n`)],
+  ])('rejects the whole candidate for a match in %s', async (_label, edit) => {
+    const baseline = await commitBaseline(
+      new Map([
+        ['a.txt', file('a\n')],
+        ['seeded.txt', file(`keep\n${SEEDED}\n`)],
+        ['seeded.bin', file(binaryWith(SEEDED))],
+      ]),
+    )
+    const session = await openSession(baseline)
+    await writeFile(at(session, 'clean-change.txt'), 'an unrelated clean change\n')
+    await edit(session)
+    const before = editorView(session)
+
+    const result = await session.capture({ scanner: SEEDED_SCANNER })
+
+    expectSensitiveRejection(result, SEEDED, CREDENTIAL)
+    // No redacted substitute, no retry, no edit: the editor's view is untouched.
+    expect(editorView(session)).toBe(before)
+  })
+
+  it('proves the binary marker is invisible in the encoded patch yet still rejected', async () => {
+    const baseline = await commitBaseline(new Map([['seeded.bin', file(binaryWith(SEEDED))]]))
+    const clean = await openSession(baseline)
+    await unlink(at(clean, 'seeded.bin'))
+    const unscanned = expectCaptured(await clean.capture())
+    expect(unscanned.patch.includes(SEEDED)).toBe(false)
+    expect(unscanned.patch.toString('latin1')).toContain('GIT binary patch')
+
+    const session = await openSession(baseline)
+    await unlink(at(session, 'seeded.bin'))
+    expectSensitiveRejection(await session.capture({ scanner: SEEDED_SCANNER }), SEEDED)
+  })
+
+  it('releases a clean change unchanged when no applicable check matches', async () => {
+    const baseline = await commitBaseline(new Map([['a.txt', file('a\n')]]))
+    const session = await openSession(baseline)
+    await writeFile(at(session, 'a.txt'), 'a clean edit\n')
+    const candidate = expectCaptured(await session.capture({ scanner: SEEDED_SCANNER }))
+    expect(candidate.files.map((record) => record.path.toString('utf8'))).toEqual(['a.txt'])
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// T015 (US2): completeness and operational failures. A non-ignored entry Git would silently
+// drop is a rejection; an unreadable workspace or Git state is a failure; the one shared byte
+// budget covers metadata, patch, and raw payload reads; the one deadline and cancellation stop
+// capture. Every outcome is whole: no candidate fragment, fixed safe text, joined children.
+// ---------------------------------------------------------------------------------------
+
+const NON_CANDIDATE_KEYS = ['status', 'reasonCode', 'message', 'coverage']
+
+async function expectWhole(session: Session, result: CaptureResult, status: string, reasonCode: string): Promise<void> {
+  expect(result).toMatchObject({ status, reasonCode })
+  expect(Object.keys(result)).toEqual(NON_CANDIDATE_KEYS)
+  const serialized = JSON.stringify(result)
+  for (const forbidden of [session.workspacePath, session.pinned.gitDir, session.baseline.root, 'fatal', 'error:', 'EACCES']) {
+    expect(serialized).not.toContain(forbidden)
+  }
+  expect(await processesWithin(session.workspacePath)).toEqual([])
+  expect(await processesWithin(session.pinned.gitDir)).toEqual([])
+}
+
+const mkfifo = (target: Buffer): void => {
+  execFileSync('mkfifo', [target.toString('latin1')])
+}
+
+describe('completeness and failure accuracy', () => {
+  it('rejects a non-ignored special entry Git would silently drop, but not ignored output', async () => {
+    const baseline = await commitBaseline(new Map([['.gitignore', file('build/\n*.sock\n')], ['a.txt', file('a\n')], ['tracked.txt', file('t\n')]]))
+
+    const ignored = await openSession(baseline)
+    await mkdir(at(ignored, 'build'))
+    mkfifo(at(ignored, 'build/pipe'))
+    mkfifo(at(ignored, 'local.sock'))
+    expect(await ignored.capture()).toEqual({ status: 'no_changes', coverage: { scope: 'main_repository', note: null } })
+
+    const fifo = await openSession(baseline)
+    await writeFile(at(fifo, 'a.txt'), 'a2\n')
+    mkfifo(at(fifo, 'pipe'))
+    await expectWhole(fifo, await fifo.capture(), 'rejected', 'UNREPRESENTABLE_ENTRY')
+
+    const replaced = await openSession(baseline)
+    await unlink(at(replaced, 'tracked.txt'))
+    mkfifo(at(replaced, 'tracked.txt'))
+    await expectWhole(replaced, await replaced.capture(), 'rejected', 'UNREPRESENTABLE_ENTRY')
+
+    const socket = await openSession(baseline)
+    const server = (await import('node:net')).createServer()
+    await new Promise<void>((resolve) => server.listen(at(socket, 'agent.socket').toString('latin1'), resolve))
+    try {
+      await expectWhole(socket, await socket.capture(), 'rejected', 'UNREPRESENTABLE_ENTRY')
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
+  it('reports unreadable workspace or Git state as a failure, never as no changes or a rejection', async () => {
+    const baseline = await commitBaseline(new Map([['a.txt', file('a\n')], ['dir/b.txt', file('b\n')]]))
+
+    const unreadable = await openSession(baseline)
+    await chmod(at(unreadable, 'dir'), 0o000)
+    cleanups.push(async () => chmod(at(unreadable, 'dir'), 0o755))
+    const denied = await unreadable.capture()
+    await chmod(at(unreadable, 'dir'), 0o755)
+    await expectWhole(unreadable, denied, 'failed', 'CAPTURE_IO_FAILED')
+
+    const corrupt = await openSession(baseline)
+    await writeFile(at(corrupt, '.git/index'), `DIRC corrupt index naming ${corrupt.workspacePath}`)
+    await expectWhole(corrupt, await corrupt.capture(), 'failed', 'CAPTURE_IO_FAILED')
+
+    // The pinned baseline objects are unavailable: a preparation-level read failure.
+    const missing = await openSession(baseline)
+    const empty = await createTempDirectory('flowproof-capture-empty-objects-')
+    cleanups.push(empty.remove)
+    const broken = await captureChanges({ sessionId: missing.sessionId, workspace: { ...missing.pinned, objectDirectory: empty.path }, scanner: SCANNER })
+    await expectWhole(missing, broken, 'failed', 'CAPTURE_IO_FAILED')
+  })
+
+  it('counts metadata, patch, and raw payload reads against one shared byte budget', async () => {
+    // Metadata: many long tracked names exceed the budget before any patch exists.
+    const names = new Map<string, Entry>(Array.from({ length: 400 }, (_, index) => [`src/${'n'.repeat(80)}-${index}.txt`, file(`${index}\n`)]))
+    const metadata = await openSession(await commitBaseline(names))
+    await writeFile(at(metadata, 'src/new.txt'), 'x\n')
+    await expectWhole(metadata, await metadata.capture({ bounds: { byteLimit: 8 * 1024 } }), 'rejected', 'CAPTURE_LIMIT')
+
+    // Patch: a large text addition exceeds the budget while producing the patch.
+    const text = await openSession(await commitBaseline(new Map([['a.txt', file('a\n')]])))
+    await writeFile(at(text, 'large.txt'), 'line of ordinary text\n'.repeat(12_000))
+    await expectWhole(text, await text.capture({ bounds: { byteLimit: 160 * 1024 } }), 'rejected', 'CAPTURE_LIMIT')
+
+    // Raw payload: a compressible binary has a small patch but a large raw blob to check.
+    const zeros = Buffer.alloc(2 * 1024 * 1024)
+    const roomy = await openSession(await commitBaseline(new Map([['a.txt', file('a\n')]])))
+    await writeFile(at(roomy, 'zeros.bin'), zeros)
+    const fits = expectCaptured(await roomy.capture())
+    expect(fits.patch.length).toBeLessThan(64 * 1024)
+    expect(fits.files[0]?.newSize).toBe(zeros.length)
+    const payload = await openSession(await commitBaseline(new Map([['a.txt', file('a\n')]])))
+    await writeFile(at(payload, 'zeros.bin'), zeros)
+    await expectWhole(payload, await payload.capture({ bounds: { byteLimit: 512 * 1024 } }), 'rejected', 'CAPTURE_LIMIT')
+  })
+
+  it(
+    'rejects a change set beyond the fixed 32-MiB ceiling instead of publishing a truncated patch',
+    async () => {
+      const session = await openSession(await commitBaseline(new Map([['a.txt', file('a\n')]])))
+      await writeFile(at(session, 'random.bin'), (await import('node:crypto')).randomBytes(33 * 1024 * 1024))
+      await expectWhole(session, await session.capture(), 'rejected', 'CAPTURE_LIMIT')
+    },
+    120_000,
+  )
+
+  it('stops at the shared deadline and on cancellation before or during capture', async () => {
+    const baseline = await commitBaseline(new Map(Array.from({ length: 3_000 }, (_, index): [string, Entry] => [`files/${index}.txt`, file(`${index}\n`)])))
+
+    const late = await openSession(baseline)
+    await writeFile(at(late, 'files/new.txt'), 'x\n')
+    await expectWhole(late, await late.capture({ bounds: { deadlineMs: 1 } }), 'rejected', 'CAPTURE_LIMIT')
+
+    const early = await openSession(baseline)
+    await expectWhole(early, await early.capture({ signal: AbortSignal.abort() }), 'failed', 'CAPTURE_INTERRUPTED')
+
+    const during = await openSession(baseline)
+    for (let index = 0; index < 3_000; index += 1) await writeFile(at(during, `files/${index}.txt`), `${index} edited\n`)
+    const controller = new AbortController()
+    const privateIndex = path.join(during.pinned.gitDir, 'index')
+    const watcher = setInterval(() => {
+      if (existsSync(privateIndex)) controller.abort()
+    }, 1)
+    try {
+      await expectWhole(during, await during.capture({ signal: controller.signal }), 'failed', 'CAPTURE_INTERRUPTED')
+    } finally {
+      clearInterval(watcher)
+    }
+    expect(controller.signal.aborted).toBe(true)
   })
 })

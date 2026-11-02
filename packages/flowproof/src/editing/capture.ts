@@ -1,3 +1,5 @@
+import { isUtf8 } from 'node:buffer'
+
 import type { SecretScanner } from '../evidence/secretScan.js'
 import { CaptureStopError, createCaptureBudget, extractChanges, readBlobs } from './captureGit.js'
 import type { CaptureStopKind, ExtractionProgress, RawChange } from './captureGit.js'
@@ -380,6 +382,25 @@ function candidateFile(change: RawChange, blobs: ReadonlyMap<string, Buffer>): C
   }
 }
 
+/** A fixed scanner label; scanner finding locations never leave capture. */
+const SCAN_LABEL = 'capture'
+
+/**
+ * Reuses the existing scanner on one raw surface. Valid UTF-8 without NUL is text, checked for
+ * credential shapes and seeded markers; any other bytes are binary, checked for seeded markers
+ * only, which is the existing scanner's binary contract.
+ */
+function surfaceIsSensitive(scanner: SecretScanner, surface: Uint8Array): boolean {
+  const value = !surface.includes(0) && isUtf8(surface) ? Buffer.from(surface).toString('utf8') : surface
+  return !scanner.scan(SCAN_LABEL, value).clean
+}
+
+/** Raw path bytes, raw old and new blobs, and the patch; gitlink IDs are references only. */
+function candidateIsSensitive(scanner: SecretScanner, changes: readonly RawChange[], blobs: ReadonlyMap<string, Buffer>, patch: Buffer): boolean {
+  const surfaces: Uint8Array[] = [patch, ...changes.map((change) => change.path), ...blobs.values()]
+  return surfaces.some((surface) => surfaceIsSensitive(scanner, surface))
+}
+
 function stopResult(kind: CaptureStopKind, coverage: CaptureCoverage | null): CaptureResult {
   switch (kind) {
     case 'limit':
@@ -407,6 +428,9 @@ export async function captureChanges(input: CaptureChangesInput): Promise<Captur
     if (extracted.changes.length === 0) return noChangesResult(coverage)
     const blobs = await readBlobs(budget, input.workspace, extracted.changes.flatMap(blobSides))
     const files = extracted.changes.map((change) => candidateFile(change, blobs))
+    budget.check()
+    // Whole-candidate admission: any match rejects; nothing is filtered or redacted.
+    if (candidateIsSensitive(input.scanner, extracted.changes, blobs, extracted.patch)) return rejectedResult('SENSITIVE_DATA', coverage)
     // A candidate is released only while the shared deadline and budget still hold.
     budget.check()
     return capturedResult(

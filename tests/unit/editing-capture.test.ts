@@ -340,3 +340,113 @@ describe('captured candidate snapshot', () => {
     expect(Object.isFrozen(candidate.files)).toBe(true)
   })
 })
+
+// T013 (US2): text-versus-binary dispatch to the existing scanner and fixed safe reasons.
+// Valid UTF-8 without NUL is scanned as text (credential shapes and seeded markers); every other
+// payload is scanned as binary (seeded markers only), the existing scanner's documented limit.
+
+describe('scanner dispatch', () => {
+  const marker = ['FPCAPTURE', 'UNIT', 'MARKER', '0001'].join('')
+  const credential = ['gh', 'p_', 'FPCAPTURE', 'UNIT', 'TOKEN', '000000000001'].join('')
+  const scanner = createSecretScanner({ markers: [marker] })
+
+  /** Records what the scanner saw for each surface. */
+  function recording(inner: SecretScanner): SecretScanner & { readonly seen: Array<'text' | 'binary'> } {
+    const seen: Array<'text' | 'binary'> = []
+    return {
+      seen,
+      scan(label, value) {
+        seen.push(typeof value === 'string' ? 'text' : 'binary')
+        return inner.scan(label, value)
+      },
+      scanRun: (run) => inner.scanRun(run),
+    }
+  }
+
+  it.each([
+    ['a credential shape in UTF-8 text', 'config.env', Buffer.from(`SETTING=${credential}\n`), 'rejected'],
+    ['a credential shape in non-ASCII UTF-8 text', 'notes.txt', Buffer.from(`café ${credential} 안녕\n`), 'rejected'],
+    ['a seeded marker in non-UTF-8 text', 'latin1.txt', Buffer.concat([Buffer.from([0xe9, 0x20]), Buffer.from(marker)]), 'rejected'],
+    ['a seeded marker in a binary payload', 'blob.bin', Buffer.concat([Buffer.from([0, 1]), Buffer.from(marker), Buffer.from([0])]), 'rejected'],
+    ['a credential shape inside a binary payload', 'blob.bin', Buffer.concat([Buffer.from([0, 1]), Buffer.from(credential), Buffer.from([0])]), 'captured'],
+  ])('handles %s', async (_label, name, content, expected) => {
+    const repo = await capturable({ 'base.txt': 'base\n' })
+    await writeFile(path.join(repo.workspacePath, name), content)
+    const result = await repo.capture({ scanner })
+    expect(result.status).toBe(expected)
+    if (result.status === 'rejected') expect(result.reasonCode).toBe('SENSITIVE_DATA')
+  })
+
+  it('scans text surfaces as text and binary surfaces as bytes', async () => {
+    const repo = await capturable({ 'base.txt': 'base\n' })
+    await writeFile(path.join(repo.workspacePath, 'text.txt'), 'plain text\n')
+    await writeFile(path.join(repo.workspacePath, 'blob.bin'), Buffer.from([0, 1, 2]))
+    const spy = recording(scanner)
+    expect((await repo.capture({ scanner: spy })).status).toBe('captured')
+    expect(spy.seen).toContain('text')
+    expect(spy.seen).toContain('binary')
+  })
+
+  it('returns only the fixed reason, never the scanner finding, path, or matched value', async () => {
+    const repo = await capturable({ 'base.txt': 'base\n' })
+    const name = `secret-dir-${marker}`
+    await writeFile(path.join(repo.workspacePath, `${name}.txt`), `value ${marker}\n`)
+    const leaking: SecretScanner = {
+      scan: (label, value) => {
+        const report = scanner.scan(label, value)
+        return report.clean ? report : { clean: false, findings: [{ path: `${label}:${name}:${repo.workspacePath}`, category: 'seeded-marker' }] }
+      },
+      scanRun: (run) => scanner.scanRun(run),
+    }
+    const result = await repo.capture({ scanner: leaking })
+    expect(result).toEqual({
+      status: 'rejected',
+      reasonCode: 'SENSITIVE_DATA',
+      message: 'Capture was rejected because a changed path or payload matched a required sensitive-data check.',
+      coverage: { scope: 'main_repository', note: null },
+    })
+    const serialized = JSON.stringify(result)
+    for (const forbidden of [marker, name, repo.workspacePath, 'seeded-marker', 'findings']) expect(serialized).not.toContain(forbidden)
+  })
+})
+
+// T015 (US2): failures stay failures. A scanner or read exception becomes a fixed I/O failure
+// without its text, and interruption is reported even when nothing changed.
+
+describe('capture failure distinctions', () => {
+  it('turns an unexpected exception into a fixed failure without its message', async () => {
+    const repo = await capturable({ 'base.txt': 'base\n' })
+    await writeFile(path.join(repo.workspacePath, 'base.txt'), 'changed\n')
+    const throwing: SecretScanner = {
+      scan: () => {
+        throw new Error(`scanner exploded at ${repo.workspacePath} with sk-fpcaptureexception0001`)
+      },
+      scanRun: () => ({ clean: true, findings: [] }),
+    }
+    const result = await repo.capture({ scanner: throwing })
+    expect(result).toEqual({
+      status: 'failed',
+      reasonCode: 'CAPTURE_IO_FAILED',
+      message: 'Capture failed because the workspace or Git state could not be read.',
+      coverage: { scope: 'main_repository', note: null },
+    })
+    expect(JSON.stringify(result)).not.toMatch(/exploded|fpcaptureexception|\/tmp\//)
+  })
+
+  it('reports an interrupted unchanged capture as interrupted, not as no changes', async () => {
+    const repo = await capturable({ 'base.txt': 'base\n' })
+    expect(await repo.capture({ signal: AbortSignal.abort() })).toEqual({
+      status: 'failed',
+      reasonCode: 'CAPTURE_INTERRUPTED',
+      message: 'Capture was interrupted before it completed, so no candidate was produced.',
+      coverage: null,
+    })
+    expect(await repo.capture()).toEqual({ status: 'no_changes', coverage: { scope: 'main_repository', note: null } })
+  })
+
+  it('reports an exhausted budget as a rejection, not as a failure', async () => {
+    const repo = await capturable({ 'base.txt': 'base\n' })
+    await writeFile(path.join(repo.workspacePath, 'base.txt'), 'changed\n')
+    expect(await repo.capture({ bounds: { byteLimit: 1 } })).toMatchObject({ status: 'rejected', reasonCode: 'CAPTURE_LIMIT', coverage: null })
+  })
+})
