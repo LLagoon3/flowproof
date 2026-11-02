@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, realpath, rm, rmdir, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, realpath, rm, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -11,10 +11,15 @@ import type { TaskDocument } from './contracts.js'
 // document. Nothing is linked back to the source: the clone has no remote, alternates, worktree
 // registration, or Git file naming the source path. Disposal removes only paths this session
 // recorded in its manifest and never enumerates or reads what the agent wrote.
+//
+// Only an opt-in capturing session (specs/003-capture-editing-candidate) also creates a private
+// capture Git directory beside the clone, outside the `/workspace` mount. It pins the trusted
+// baseline and original object source before the editor runs and is disposed with the workspace.
 
 export const SESSION_ROOT_PREFIX = 'flowproof-editing-'
 const WORKSPACE_DIR = 'workspace'
 const TASK_DOCUMENT_FILE = 'task.json'
+const CAPTURE_GIT_DIR = 'capture-git'
 // Session paths become Docker bind-mount sources; this charset keeps them free of mount syntax.
 const SAFE_HOST_PATH = /^\/[A-Za-z0-9._/-]+$/
 // Diagnostic placeholders for host paths that must never reach a result.
@@ -48,6 +53,19 @@ export interface PreparedWorkspace {
   readonly baselineCommit: string
 }
 
+/** Trusted capture state pinned before the editor runs; never exposed in a result. */
+export interface CaptureWorkspace {
+  /** The standalone clone the editor changed. */
+  readonly workspacePath: string
+  /** The trusted starting commit, never the editor's HEAD. */
+  readonly baselineCommit: string
+  /** Private capture Git directory beneath the session root, outside the agent mount. */
+  readonly gitDir: string
+  /** The trusted original object directory, read only as an alternate. */
+  readonly objectDirectory: string
+  readonly objectFormat: 'sha1' | 'sha256'
+}
+
 export interface WorkspaceDisposal {
   readonly taskDocumentRemoved: boolean
   readonly workspaceRemoved: boolean
@@ -75,6 +93,11 @@ export interface SessionWorkspace {
   resolve(repositoryRoot: string, revision: string): Promise<void>
   /** Creates the session root, the standalone clone, and the task document. */
   create(document: TaskDocument): Promise<PreparedWorkspace>
+  /**
+   * Opt-in capture only: creates the private capture Git directory once, after `create()`, and
+   * pins the baseline and original object source. Disposal removes it with the workspace.
+   */
+  prepareCapture?(): Promise<CaptureWorkspace>
   /** The exact paths eligible for cleanup, in creation order. */
   readonly createdPaths: readonly string[]
   /** Host paths known to this session that diagnostics must replace, longest first. */
@@ -114,6 +137,7 @@ function openWorkspace(requestedTmpRoot: string): SessionWorkspace {
   let sessionRoot: string | null = null
   let workspacePath: string | null = null
   let taskDocumentPath: string | null = null
+  let captureGitDir: string | null = null
   let creating = false
   const createdPaths: string[] = []
 
@@ -203,6 +227,32 @@ function openWorkspace(requestedTmpRoot: string): SessionWorkspace {
     }
   }
 
+  const prepareCapture = async (): Promise<CaptureWorkspace> => {
+    if (sessionRoot === null || workspacePath === null || taskDocumentPath === null || repoRoot === null || revision === null || captureGitDir !== null) {
+      throw new WorkspaceError('WORKSPACE_STATE_INVALID', 'Capture state must be prepared once, after the workspace is created.')
+    }
+    const root = sessionRoot
+    const clone = workspacePath
+    const source = repoRoot
+    const commit = revision
+    const target = path.join(root, CAPTURE_GIT_DIR)
+    try {
+      // Trusted original facts: its object format and object directory, never the clone's.
+      const objectFormat = (await readGit(source, ['rev-parse', '--show-object-format'])).trim()
+      if (objectFormat !== 'sha1' && objectFormat !== 'sha256') throw new Error('unsupported object format')
+      const objectDirectory = await realpath((await readGit(source, ['rev-parse', '--path-format=absolute', '--git-path', 'objects'])).trim())
+      if (isInside(root, objectDirectory)) throw new Error('object source inside the session')
+      // An exclusive create records only a path this session made.
+      await mkdir(target, { mode: 0o700 })
+      captureGitDir = target
+      createdPaths.push(target)
+      await git(root, ['init', '--bare', '--quiet', '--template=', `--object-format=${objectFormat}`, '--', target])
+      return Object.freeze({ workspacePath: clone, baselineCommit: commit, gitDir: target, objectDirectory, objectFormat })
+    } catch {
+      throw new WorkspaceError('WORKSPACE_PREPARE_FAILED', 'The private capture state could not be prepared.')
+    }
+  }
+
   /** Removes one manifest path beneath the session root; true when it no longer exists. */
   const removeOwned = async (target: string | null, kind: 'file' | 'tree' | 'directory'): Promise<boolean> => {
     if (target === null) return true
@@ -222,7 +272,9 @@ function openWorkspace(requestedTmpRoot: string): SessionWorkspace {
 
   const dispose = async (): Promise<WorkspaceDisposal> => {
     const taskDocumentRemoved = await removeOwned(taskDocumentPath, 'file')
-    const workspaceRemoved = await removeOwned(workspacePath, 'tree')
+    // Capture scratch is part of the workspace state, not another cleanup category.
+    const captureRemoved = await removeOwned(captureGitDir, 'tree')
+    const workspaceRemoved = (await removeOwned(workspacePath, 'tree')) && captureRemoved
     const rootInfo = sessionRoot === null ? null : await lstatOrNull(sessionRoot)
     const sessionRootRemoved =
       rootInfo === null || (rootInfo.isDirectory() && !rootInfo.isSymbolicLink() && (await removeOwned(sessionRoot, 'directory')))
@@ -256,6 +308,7 @@ function openWorkspace(requestedTmpRoot: string): SessionWorkspace {
   return {
     resolve,
     create,
+    prepareCapture,
     get createdPaths(): readonly string[] {
       return Object.freeze([...createdPaths])
     },

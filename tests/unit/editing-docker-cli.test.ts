@@ -358,3 +358,66 @@ describe('docker operations', () => {
     await expect(docker.remove(CONTAINER_ID)).rejects.toMatchObject({ code: 'DOCKER_REMOVE_FAILED' })
   })
 })
+
+// T018 (specs/003-capture-editing-candidate): the capture-only workspace-view proof. The exact
+// container's `/workspace` must be the expected bind source, and no mount may sit below it,
+// because an image-declared volume such as `/workspace/generated` hides part of the editor's
+// filesystem from the host clone. Any uncertainty is "unproved"; nothing is exported.
+
+const VIEW_WORKSPACE = '/tmp/flowproof-editing-AbC123/workspace'
+
+const inspectDocument = (mounts: unknown, tmpfs: unknown = { '/tmp': 'rw', '/home/agent': 'rw' }) =>
+  JSON.stringify({ Id: CONTAINER_ID, Mounts: mounts, HostConfig: { Tmpfs: tmpfs } })
+
+const rootBind = { Type: 'bind', Source: VIEW_WORKSPACE, Destination: '/workspace', RW: true, Propagation: 'rprivate' }
+const taskBind = { Type: 'bind', Source: '/tmp/flowproof-editing-AbC123/task.json', Destination: '/run/flowproof/task.json', RW: false }
+
+describe('capture workspace view', () => {
+  async function view(stdout: string, code = 0, expected = VIEW_WORKSPACE): Promise<{ readonly proved: boolean; readonly calls: RecordedCall[] }> {
+    const runner = fakeRunner(() => ({ code, stdout }))
+    const proved = await createDockerCli({ runner }).verifyWorkspaceView(CONTAINER_ID, expected)
+    return { proved, calls: runner.calls }
+  }
+
+  it('proves the exact root bind with no descendant mount through one exact-ID inspect', async () => {
+    const { proved, calls } = await view(inspectDocument([rootBind, taskBind, { Type: 'bind', Source: '/srv/x', Destination: '/workspace-other' }]))
+    expect(proved).toBe(true)
+    expect(calls.map((call) => call.args)).toEqual([['container', 'inspect', '--format', '{{json .}}', CONTAINER_ID]])
+  })
+
+  it.each([
+    ['an image-declared descendant volume', inspectDocument([rootBind, taskBind, { Type: 'volume', Name: 'a'.repeat(64), Destination: '/workspace/generated' }])],
+    ['a descendant bind', inspectDocument([rootBind, { Type: 'bind', Source: '/srv/x', Destination: '/workspace/vendor' }])],
+    ['a descendant tmpfs mount', inspectDocument([rootBind, { Type: 'tmpfs', Source: '', Destination: '/workspace/cache' }])],
+    ['a descendant tmpfs option', inspectDocument([rootBind], { '/tmp': 'rw', '/workspace/tmp': 'rw' })],
+    ['a non-normalized descendant destination', inspectDocument([rootBind, { Type: 'volume', Destination: '/workspace/./generated/' }])],
+    ['another bind source', inspectDocument([{ ...rootBind, Source: '/tmp/flowproof-editing-Other1/workspace' }])],
+    ['a volume at the root', inspectDocument([{ ...rootBind, Type: 'volume' }])],
+    ['a missing root mount', inspectDocument([taskBind])],
+    ['two root mounts', inspectDocument([rootBind, rootBind])],
+    ['a mount without a destination', inspectDocument([rootBind, { Type: 'volume' }])],
+    ['malformed mounts', inspectDocument('not-a-list')],
+    ['malformed JSON', '{"Mounts": ['],
+    ['a failed inspect', inspectDocument([rootBind])],
+  ])('reports %s as unproved', async (label, stdout) => {
+    expect((await view(stdout, label === 'a failed inspect' ? 1 : 0)).proved).toBe(false)
+  })
+
+  it('reports an unsafe expected path as unproved without running Docker', async () => {
+    const { proved, calls } = await view(inspectDocument([rootBind]), 0, '/tmp/x,source=/etc')
+    expect(proved).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('rejects a non-exact container ID before running Docker', async () => {
+    const runner = fakeRunner(() => ({ code: 0, stdout: inspectDocument([rootBind]) }))
+    await expect(createDockerCli({ runner }).verifyWorkspaceView('abc', VIEW_WORKSPACE)).rejects.toMatchObject({ code: 'DOCKER_SPEC_INVALID' })
+    expect(runner.calls).toEqual([])
+  })
+
+  it('leaves lifecycle-only container admission unchanged', () => {
+    const args = buildCreateArgs(spec())
+    expect(args.filter((arg) => arg.startsWith('--mount'))).toHaveLength(2)
+    expect(args.join(' ')).not.toMatch(/--volume|-v=|volume-driver/)
+  })
+})

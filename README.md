@@ -217,6 +217,57 @@ display the diagnosis text; it shows the diagnosis provenance and the Evidence I
   and gate evaluation always complete. If the target frame cannot load the app, the run stops
   before any model call or patch.
 
+## Opt-in editing change capture
+
+The engine also provides an internal, opt-in editing-session entry point for trusted callers that
+need to preserve what a registered coding agent changed before its disposable workspace is
+removed. It uses the same registered runtime profiles and request/handle/cancel lifecycle as
+`startEditingSession`, and requires a `SecretScanner` created by trusted code:
+
+```ts
+const handle = startCapturingEditingSession(request, { profiles, scanner })
+const { session, capture } = await handle.result
+```
+
+This capability is not exposed by the current CLI or Studio, is not wired into the Hero or Failure
+demo, and does not change lifecycle-only callers. `startEditingSession` remains file-blind and keeps
+its existing result shape.
+
+Capture is attempted only after Docker confirms that the editor started, stopped, had no startup
+error, and exited with code zero. FlowProof also proves that the container's complete `/workspace`
+view is the expected bind mount before reading the host-side clone. The comparison uses the trusted
+starting commit and the final filesystem, not the agent's staging area or final branch tip. A
+successful result is an **unverified candidate**, not a correct fix.
+
+The `capture` result has five statuses:
+
+- `captured`: one complete binary-capable Git patch and matching changed-file summary.
+- `no_changes`: no main-repository changes; no candidate is present.
+- `rejected`: a known unsafe, unrepresentable, or over-budget change prevented whole-candidate
+  release.
+- `failed`: capture was interrupted or an operational read failed.
+- `not_attempted`: the editor did not finish successfully with confirmed termination.
+
+The seven stable reason codes are `EDITOR_NOT_SUCCESSFUL`, `WORKSPACE_VIEW_UNAVAILABLE`,
+`UNREPRESENTABLE_ENTRY`, `SENSITIVE_DATA`, `CAPTURE_LIMIT`, `CAPTURE_INTERRUPTED`, and
+`CAPTURE_IO_FAILED`. Messages are fixed and bounded; raw Git output, unsafe paths, content, and
+scanner finding details are not returned. One fixed budget covers the entire capture: 60 seconds
+and 32 MiB of cumulative materialized metadata, process output, patch, and changed-payload bytes.
+There is no configurable file-type or path allowlist.
+
+Ordinary Git-representable text and binary files, modes, symlink records, and gitlink references can
+be captured. Symlink records preserve link text without reading the target. Nested repositories are
+reference-only: nested working trees are not traversed, and results state this coverage when
+gitlinks are present. The existing scanner checks credential patterns in valid UTF-8 text and
+seeded markers in text and binary payloads; binary checks do not claim general credential
+detection. Host capture does not execute project-configured Git filters, hooks, or external diff
+commands, so custom-filter/LFS hydration fidelity is not promised.
+
+Execution, capture, and cleanup are independent result facts. A completed candidate can remain
+available beside `session.cleanup.status === 'failed'`; callers must inspect cleanup separately and
+must not treat capture as verification. This feature does not apply or replay the candidate, run
+builds or tests on it, call an agent again, or decide `Verified Fix`.
+
 ## Testing
 
 ```bash

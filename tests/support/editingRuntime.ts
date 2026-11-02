@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { cp } from 'node:fs/promises'
+import { cp, readFile, readdir, readlink } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
@@ -166,6 +166,27 @@ export async function sessionResidue(input: {
 }
 
 export const NO_RESIDUE: ResidueReport = { containers: [], tmpEntries: [], processes: [] }
+
+/**
+ * Live host processes (zombies awaiting a late reaper excluded) whose working directory is
+ * `root` or below it. Capture runs every Git process inside the session workspace, so this
+ * finds a capture-owned helper that outlived its capture.
+ */
+export async function processesWithin(root: string): Promise<number[]> {
+  const pids: number[] = []
+  for (const entry of await readdir('/proc')) {
+    if (!/^[0-9]+$/.test(entry) || Number(entry) === process.pid) continue
+    try {
+      const stat = await readFile(`/proc/${entry}/stat`, 'latin1')
+      if (['Z', 'X'].includes(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] ?? 'X')) continue
+      const cwd = await readlink(`/proc/${entry}/cwd`)
+      if (cwd === root || cwd.startsWith(`${root}/`)) pids.push(Number(entry))
+    } catch {
+      // The process exited or is not inspectable.
+    }
+  }
+  return pids
+}
 
 export interface RecordingDocker extends DockerAdapter {
   /** Full IDs of every container this adapter created, in creation order. */

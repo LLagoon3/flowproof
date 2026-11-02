@@ -2,6 +2,7 @@ import { createRuntimeProfileRegistry } from '../../packages/flowproof/src/editi
 import type { RuntimeProfileRegistry } from '../../packages/flowproof/src/editing/runtimeProfile.js'
 import type { AttachOutput, ContainerSpec, ContainerState, DockerAdapter } from '../../packages/flowproof/src/editing/dockerCli.js'
 import type {
+  CaptureWorkspace,
   OriginalIntegrity,
   PathPlaceholder,
   PreparedWorkspace,
@@ -76,6 +77,10 @@ export interface FakeDockerOptions {
   readonly runningExitCode?: number | null
   /** An unrelated container already owns the generated session name. */
   readonly generatedNameOccupied?: boolean
+  /** Capture's workspace-view proof: proved (default), unproved, or an adapter failure. */
+  readonly workspaceView?: boolean | 'throws'
+  /** Holds the workspace-view proof until this settles, to order a cancellation during capture. */
+  readonly workspaceViewGate?: Promise<boolean>
 }
 
 export interface FakeDocker extends DockerAdapter {
@@ -172,12 +177,20 @@ export function fakeDocker(options: FakeDockerOptions = {}): FakeDocker {
       finish(137)
       removed = true
     },
+    async verifyWorkspaceView() {
+      calls.push('verifyWorkspaceView')
+      if (options.workspaceViewGate !== undefined) return options.workspaceViewGate
+      if (options.workspaceView === 'throws') throw Object.assign(new Error(`inspect failed for ${FAKE_SESSION_ROOT}`), { code: 'DOCKER_INSPECT_FAILED' })
+      return options.workspaceView ?? true
+    },
   }
   return docker
 }
 
 export interface FakeWorkspaceOptions {
   readonly resolveFails?: string
+  /** Opt-in capture preparation fails. */
+  readonly prepareCaptureFails?: boolean
   readonly disposal?: WorkspaceDisposal
   readonly integrity?: OriginalIntegrity
 }
@@ -204,6 +217,17 @@ export function fakeWorkspace(options: FakeWorkspaceOptions = {}): FakeWorkspace
     async create(): Promise<PreparedWorkspace> {
       calls.push('create')
       return { workspacePath: `${FAKE_SESSION_ROOT}/workspace`, taskDocumentPath: `${FAKE_SESSION_ROOT}/task.json`, baselineCommit: FAKE_REVISION }
+    },
+    async prepareCapture(): Promise<CaptureWorkspace> {
+      calls.push('prepareCapture')
+      if (options.prepareCaptureFails) throw Object.assign(new Error(`capture state failed at ${FAKE_SESSION_ROOT}`), { code: 'WORKSPACE_PREPARE_FAILED' })
+      return {
+        workspacePath: `${FAKE_SESSION_ROOT}/workspace`,
+        baselineCommit: FAKE_REVISION,
+        gitDir: `${FAKE_SESSION_ROOT}/capture-git`,
+        objectDirectory: `${FAKE_REPOSITORY_ROOT}/.git/objects`,
+        objectFormat: 'sha1',
+      }
     },
     get createdPaths() {
       return []

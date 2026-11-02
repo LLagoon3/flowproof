@@ -4,7 +4,7 @@
 // observation it prints is a fixed `FIXTURE` line so tests can assert on the sanitized diagnostic.
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 
 const TASK_DOCUMENT = process.argv[2] ?? '/run/flowproof/task.json'
 const WORKSPACE = '/workspace'
@@ -92,6 +92,62 @@ async function succeed() {
   process.exit(verified ? 0 : 23)
 }
 
+// Change-capture scenarios (specs/003-capture-editing-candidate). They change the workspace with
+// ordinary file operations only; the image has no Git, and the capture tests compare the result
+// with independently expected bytes. Every byte is synthetic.
+
+/** Bytes of a small synthetic binary asset: NUL, high bytes, and no valid UTF-8 text. */
+const CAPTURE_BINARY = Buffer.from([0x89, 0x46, 0x50, 0x00, 0x01, 0xff, 0xfe, 0x00, 0x7f, 0x80, 0x0a, 0x00])
+
+/** A successful multi-file edit: text, binary, empty, non-ASCII, rename, mode, link, deletion. */
+function captureEdits() {
+  edit('src/math.mjs', 'return left - right', 'return left + right')
+  mkdirSync(`${WORKSPACE}/assets`, { recursive: true })
+  writeFileSync(`${WORKSPACE}/assets/pixel.bin`, CAPTURE_BINARY)
+  writeFileSync(`${WORKSPACE}/empty.txt`, '')
+  writeFileSync(`${WORKSPACE}/src/héllo.txt`, 'café 안녕 no final newline')
+  mkdirSync(`${WORKSPACE}/lib`, { recursive: true })
+  renameSync(`${WORKSPACE}/src/greeting.mjs`, `${WORKSPACE}/lib/greeting.mjs`)
+  chmodSync(`${WORKSPACE}/scripts/check.mjs`, 0o755)
+  symlinkSync('../src/math.mjs', `${WORKSPACE}/lib/math-link.mjs`)
+  unlinkSync(`${WORKSPACE}/README.md`)
+  report('capture edits applied')
+}
+
+/** Edits that are undone before exit, so no versioned change remains. */
+function revertEdits() {
+  const file = `${WORKSPACE}/src/math.mjs`
+  const original = readFileSync(file)
+  edit('src/math.mjs', 'return left - right', 'return left + right')
+  writeFileSync(`${WORKSPACE}/scratch.txt`, 'temporary\n')
+  writeFileSync(file, original)
+  unlinkSync(`${WORKSPACE}/scratch.txt`)
+  report('capture edits reverted')
+}
+
+/** A change carrying a synthetic credential shape or seeded marker, assembled from fragments. */
+function sensitiveEdit() {
+  mkdirSync(`${WORKSPACE}/config`, { recursive: true })
+  if (options.kind === 'marker') {
+    const seeded = ['FPCAPTURE', 'SEEDED', 'MARKER', '000001'].join('')
+    writeFileSync(`${WORKSPACE}/config/blob.bin`, Buffer.concat([CAPTURE_BINARY, Buffer.from(seeded, 'latin1'), CAPTURE_BINARY]))
+  } else {
+    const token = ['gh', 'p_', 'FPCAPTURE', 'SEEDED', 'TOKEN', '00000000001'].join('')
+    writeFileSync(`${WORKSPACE}/config/fixture.env`, `FIXTURE_SETTING=${token}\n`)
+  }
+  report('sensitive edit applied')
+}
+
+/** After capture edits: exit with `code` (default 0), or idle until stopped when `after=hang`. */
+function finishCapture() {
+  if (options.after === 'hang') {
+    report('ready')
+    idle()
+    return
+  }
+  process.exit(Number(options.code ?? 0))
+}
+
 const SEEDED_MARKERS = [
   'MODEL_API_KEY=sk-fpseededmarkerapikey000001',
   'Authorization: Bearer FPSEEDEDBEARERTOKEN000001',
@@ -105,6 +161,18 @@ const scenario = options.scenario ?? 'success'
 switch (scenario) {
   case 'success':
     await succeed()
+    break
+  case 'capture':
+    captureEdits()
+    finishCapture()
+    break
+  case 'revert':
+    revertEdits()
+    finishCapture()
+    break
+  case 'sensitive':
+    sensitiveEdit()
+    finishCapture()
     break
   case 'fail':
     console.error('FIXTURE failing on purpose')
