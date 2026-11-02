@@ -52,8 +52,8 @@ capture with independently expected file contents and Git changes; no live model
    is preserved. Rename detection is optional: equivalent deletion plus addition is acceptable.
 4. **Given** a versioned symbolic link or submodule reference change, **When** capture runs, **Then**
    only its Git-representable link/reference is captured; the external target or nested working tree
-   is not recursively copied or inspected. Uncommitted nested changes that cannot be represented
-   by that reference must be reported explicitly, not claimed to be part of the candidate.
+   is not recursively copied or inspected. The result explicitly states that nested working-tree
+   changes were not inspected or captured; it does not claim that nested working trees are clean.
 5. **Given** no remaining changes, including edits reverted by the editor, **When** capture runs,
    **Then** the result explicitly reports no changes and contains no candidate.
 
@@ -119,6 +119,8 @@ check capture outcomes, original-checkout integrity, and existing cleanup result
   by trusted code, not inferred from an editor-modified branch or staging area.
 - Special files and uncommitted nested-repository contents must not be silently flattened into an
   incomplete candidate. Ordinary capture is not a recursive backup of every workspace entry.
+  A fixed coverage note accompanies results when a baseline or final tree has submodule references;
+  a no-change result then means no main-repository versioned changes, not recursive cleanliness.
 - Secrets in removed text, file names, or binary payloads receive the applicable existing checks;
   no claim is made that arbitrary unknown secret formats can all be detected.
 - Capture errors must not prevent cleanup attempts. No workspace is kept alive to await a future
