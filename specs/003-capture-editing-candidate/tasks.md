@@ -119,7 +119,7 @@ The approved one-PR scope is retained. Phases above are internal implementation 
 | --- | --- | --- | --- |
 | 1 | Capture-only ready (Phases 1–6) | T001–T023 | Four-file discovery check below; focused capture suites; legacy editing suites; `pnpm typecheck`; `pnpm build`; serialized `pnpm test`; `pnpm exec playwright test --pass-with-no-tests`; exact owned-resource residue and original-integrity checks; `git diff --check` |
 
-Implementation was authorized with the exact scope `only execute tasks T001-T023, then stop`. The capture-only ready checkpoint is complete; this does not authorize push, PR creation, or merge.
+Implementation was authorized with the exact scope `only execute tasks T001-T023, then stop`. The capture-only ready checkpoint is complete. The owner subsequently authorized branch publication, PR creation, and review on 2026-11-02; merge remains separately gated.
 
 ### Gate commands
 
@@ -195,4 +195,4 @@ The minimal usable deliverable includes all three stories: actual changes, hones
 - Repository gates: `pnpm typecheck` passed; `pnpm build` passed; `pnpm test --no-file-parallelism --maxWorkers=1` passed 43/43 files and 1269/1269 tests (0 skipped); `pnpm exec playwright test --pass-with-no-tests` passed 8/8 (0 skipped); `git diff --check` passed after final documentation/task updates. No credential-gated live-model smoke was run or required.
 - Extension hooks: `before_implement` and `after_implement` register only the optional Git commit hook; `auto_commit.default` and the implementation-specific setting are disabled. Automatic hooks were skipped; implementation units and documentation were reviewed and committed manually.
 - Owner-only manual gates: **none** in the approved capture-only scope.
-- Publication: no push, PR, or merge was performed or authorized; the local feature branch and commits are preserved.
+- Publication: the owner authorized push, PR creation, and review on 2026-11-02. [PR #18](https://github.com/LLagoon3/flowproof/pull/18) targets `main`; CI and exact-head GitHub Codex review are pending. In-scope review remediation follows the repository's maximum of three rounds. Merge and manual deployment are not authorized.
