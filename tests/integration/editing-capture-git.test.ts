@@ -600,6 +600,72 @@ describe('links, gitlinks, and repository control metadata', () => {
     expect(candidate.patch.includes(marker)).toBe(false)
   })
 
+  it.each([
+    ['unstaged children', false],
+    ['staged child with a later unstaged edit', true],
+  ] as const)('captures a baseline gitlink replaced by an ordinary directory with %s', async (_variant, stageChild) => {
+    const side = await createTempDirectory('flowproof-capture-gitlink-to-directory-')
+    cleanups.push(side.remove)
+    const reference = await nestedRepository(path.join(side.path, 'baseline'), 'nested baseline\n')
+    const baseline = await commitBaseline(new Map([['a.txt', file('a\n')], ['vendor/lib', { mode: '160000', data: Buffer.from(reference) }]]))
+    const session = await openSession(baseline)
+    const directory = at(session, 'vendor/lib').toString('latin1')
+    await rm(directory, { recursive: true, force: true })
+    await mkdir(directory, { recursive: true })
+    await writeFile(path.join(directory, 'nested.txt'), 'staged bytes\n')
+    await writeFile(path.join(directory, 'new.txt'), 'unstaged addition\n')
+    editorGit(session, 'rm', '--cached', '-r', '-f', '--', 'vendor/lib')
+    if (stageChild) {
+      editorGit(session, 'add', '--', 'vendor/lib/nested.txt')
+      await writeFile(path.join(directory, 'nested.txt'), 'actual final bytes\n')
+    }
+
+    const final = new Map(baseline.state)
+    final.delete('vendor/lib')
+    final.set('vendor/lib/nested.txt', file(stageChild ? 'actual final bytes\n' : 'staged bytes\n'))
+    final.set('vendor/lib/new.txt', file('unstaged addition\n'))
+    const candidate = expectCaptured(await session.capture())
+
+    expectState(await rebuild(baseline, candidate.patch), final)
+    expect(candidate.coverage).toMatchObject({ scope: 'main_repository', note: expect.stringContaining('neither inspected nor captured') })
+    expectFiles(candidate, baseline.state, final, [
+      { path: 'vendor/lib', operation: 'deleted' },
+      { path: 'vendor/lib/nested.txt', operation: 'added' },
+      { path: 'vendor/lib/new.txt', operation: 'added' },
+    ])
+  })
+
+  it.each([
+    ['unstaged nested repository', false],
+    ['staged gitlink', true],
+  ] as const)('captures a tracked directory replaced by a nested repository as a gitlink (%s)', async (_variant, stageGitlink) => {
+    const baseline = await commitBaseline(
+      new Map([
+        ['vendor/lib/nested.txt', file('ordinary nested file\n')],
+        ['vendor/lib/keep.txt', file('ordinary sibling file\n')],
+      ]),
+    )
+    const session = await openSession(baseline)
+    const directory = at(session, 'vendor/lib').toString('latin1')
+    await rm(directory, { recursive: true, force: true })
+    if (stageGitlink) editorGit(session, 'rm', '--cached', '-r', '-f', '--', 'vendor/lib')
+    const nestedHead = await nestedRepository(directory, 'nested repository content\n')
+    if (stageGitlink) editorGit(session, 'add', '--', 'vendor/lib')
+
+    const final = new Map<string, Entry>()
+    final.set('vendor/lib', { mode: '160000', data: Buffer.from(nestedHead) })
+    const candidate = expectCaptured(await session.capture())
+
+    expectState(await rebuild(baseline, candidate.patch), final)
+    expect(candidate.coverage).toMatchObject({ scope: 'main_repository', note: expect.stringContaining('neither inspected nor captured') })
+    expectFiles(candidate, baseline.state, final, [
+      { path: 'vendor/lib', operation: 'added' },
+      { path: 'vendor/lib/keep.txt', operation: 'deleted' },
+      { path: 'vendor/lib/nested.txt', operation: 'deleted' },
+    ])
+    expect(candidate.patch.toString('latin1')).not.toContain('nested repository content')
+  })
+
   it('captures gitlink references only and states reference-only coverage, even with no change', async () => {
     const side = await createTempDirectory('flowproof-capture-nested-')
     cleanups.push(side.remove)

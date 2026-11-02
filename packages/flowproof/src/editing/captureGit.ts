@@ -536,13 +536,22 @@ async function ignoredKeys(budget: CaptureBudget, root: string, env: NodeJS.Proc
 }
 
 type EntryKind = 'file' | 'link' | 'directory' | 'special'
+type WorktreeLeafKind = 'file' | 'link' | 'gitlink'
+
+interface WorkspaceWalk {
+  readonly entries: ReadonlyMap<string, WorktreeLeafKind>
+  /** Directories in the final filesystem, including the roots of nested repositories. */
+  readonly directories: ReadonlySet<string>
+  /** Directories with at least one filesystem child, including ignored entries. */
+  readonly nonEmptyDirectories: ReadonlySet<string>
+}
 
 /**
  * Breadth-first no-follow walk. Returns every observed file, link, and nested-repository path.
  * Ignored untracked entries are pruned (one `check-ignore` call per depth); tracked paths and
- * their directories never are. Tracked gitlinks and nested repositories are references only:
- * their pointers are checked but their working trees are not entered. A non-ignored entry Git
- * cannot represent stops capture rather than being silently dropped.
+ * their directories never are. Actual nested repositories are references only: their pointers
+ * are checked but their working trees are not entered, regardless of the baseline or index type.
+ * A non-ignored entry Git cannot represent stops capture rather than being silently dropped.
  */
 async function walkWorkspace(input: {
   readonly budget: CaptureBudget
@@ -551,12 +560,13 @@ async function walkWorkspace(input: {
   readonly env: NodeJS.ProcessEnv
   readonly tracked: ReadonlySet<string>
   readonly trackedDirectories: ReadonlySet<string>
-  readonly gitlinks: ReadonlySet<string>
-}): Promise<Set<string>> {
-  const { budget, root, rootReal, env, tracked, trackedDirectories, gitlinks } = input
+}): Promise<WorkspaceWalk> {
+  const { budget, root, rootReal, env, tracked, trackedDirectories } = input
   const rootBytes = Buffer.from(root)
   const absolute = (key: string): Buffer => (key === '' ? rootBytes : appendPath(rootBytes, fromKey(key)))
-  const leaves = new Set<string>()
+  const entries = new Map<string, WorktreeLeafKind>()
+  const directories = new Set<string>()
+  const nonEmptyDirectories = new Set<string>()
   let level: string[] = ['']
   while (level.length > 0) {
     budget.check()
@@ -564,6 +574,7 @@ async function walkWorkspace(input: {
     const pending: Array<{ readonly key: string; readonly kind: EntryKind }> = []
     for (const directory of level) {
       const entries = await readdir(absolute(directory), { withFileTypes: true, encoding: 'buffer' })
+      if (entries.length > 0) nonEmptyDirectories.add(directory)
       for (const entry of entries) {
         const name = entry.name
         budget.consume(name.length + 1)
@@ -580,23 +591,20 @@ async function walkWorkspace(input: {
     for (const { key, kind } of [...kept, ...pending.filter((entry) => !ignored.has(entry.key))]) {
       if (kind === 'special') throw unrepresentable()
       if (kind !== 'directory') {
-        leaves.add(key)
+        entries.set(key, kind)
         continue
       }
       const directory = absolute(key)
-      if (gitlinks.has(key)) {
-        // A tracked submodule path: validate any pointer Git would read, never enter it.
-        await nestedRepository(budget, rootReal, directory)
-        leaves.add(key)
-      } else if (await nestedRepository(budget, rootReal, directory)) {
-        leaves.add(key)
+      directories.add(key)
+      if (await nestedRepository(budget, rootReal, directory)) {
+        entries.set(key, 'gitlink')
       } else {
         next.push(key)
       }
     }
     level = next
   }
-  return leaves
+  return { entries, directories, nonEmptyDirectories }
 }
 
 const DOT_GIT = Buffer.from('.git')
@@ -612,6 +620,36 @@ function parentDirectories(paths: Iterable<string>): Set<string> {
     }
   }
   return directories
+}
+
+/**
+ * Baseline index entries that cannot coexist with the observed final filesystem shape.
+ * Remove them before refreshing or adding so Git cannot preserve a stale gitlink/blob when a
+ * directory boundary changed (or treat a nested repository's contents as ordinary files).
+ */
+function structuralIndexRemovals(
+  baseline: readonly { readonly mode: string; readonly key: string }[],
+  worktree: WorkspaceWalk,
+): string[] {
+  return baseline
+    .filter((entry) => {
+      const finalKind = worktree.entries.get(entry.key)
+      if (finalKind !== undefined) {
+        const baselineKind: WorktreeLeafKind = entry.mode === GITLINK_MODE ? 'gitlink' : entry.mode === '120000' ? 'link' : 'file'
+        if (finalKind !== baselineKind) return true
+      } else if (worktree.directories.has(entry.key)) {
+        // An empty uninitialized submodule checkout is indistinguishable from a no-op path and
+        // remains a reference. Nonempty ordinary contents are an actual gitlink-to-directory
+        // transition, even if those children are ignored and therefore not exported.
+        if (entry.mode !== GITLINK_MODE || worktree.nonEmptyDirectories.has(entry.key)) return true
+      }
+
+      for (let slash = entry.key.lastIndexOf('/'); slash > 0; slash = entry.key.lastIndexOf('/', slash - 1)) {
+        if (worktree.entries.has(entry.key.slice(0, slash))) return true
+      }
+      return false
+    })
+    .map((entry) => entry.key)
 }
 
 /** Builds the private final tree and its raw summary and full-index binary patch. */
@@ -639,13 +677,18 @@ export async function extractChanges(budget: CaptureBudget, workspace: CaptureWo
 
   const baselinePaths = new Set(baseline.map((entry) => entry.key))
   const tracked = new Set([...baselinePaths, ...final.map((entry) => entry.key)])
-  const gitlinks = new Set([...baseline, ...final].filter((entry) => entry.mode === GITLINK_MODE).map((entry) => entry.key))
-  const leaves = await walkWorkspace({ budget, root, rootReal, env, tracked, trackedDirectories: parentDirectories(tracked), gitlinks })
+  const worktree = await walkWorkspace({ budget, root, rootReal, env, tracked, trackedDirectories: parentDirectories(tracked) })
+
+  // Index metadata only identifies explicitly staged ignored additions. Structural transitions
+  // come from the real filesystem: remove incompatible baseline entries before any force-add or
+  // refresh, while leaving same-shaped tracked entries for Git to refresh from final contents.
+  const stale = structuralIndexRemovals(baseline, worktree)
+  if (stale.length > 0) await git(['update-index', '--force-remove', '-z', '--stdin'], { input: joinNul(stale) })
 
   // Newly tracked final-index paths that still exist are added even when ignored; their staged
   // blobs are not used. Every baseline path is refreshed from the filesystem, then ordinary
   // add semantics apply to untracked paths. Missing baseline paths remain deletions.
-  const forced = [...new Set(final.map((entry) => entry.key))].filter((key) => !baselinePaths.has(key) && leaves.has(key))
+  const forced = [...new Set(final.map((entry) => entry.key))].filter((key) => !baselinePaths.has(key) && worktree.entries.has(key))
   if (forced.length > 0) {
     await git(['--literal-pathspecs', 'add', '--force', '--pathspec-from-file=-', '--pathspec-file-nul'], { input: joinNul(forced) })
   }
