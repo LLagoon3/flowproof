@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { captureChanges } from '../../packages/flowproof/src/editing/capture.js'
+import type { CaptureResult } from '../../packages/flowproof/src/editing/capture.js'
 import {
   CAPTURE_BYTE_BUDGET,
   CAPTURE_DEADLINE_MS,
@@ -13,6 +15,10 @@ import {
   createCaptureBudget,
   runCaptureGit,
 } from '../../packages/flowproof/src/editing/captureGit.js'
+import { createWorkspaceManager } from '../../packages/flowproof/src/editing/workspace.js'
+import type { CaptureWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
+import { createSecretScanner } from '../../packages/flowproof/src/evidence/secretScan.js'
+import type { SecretScanner } from '../../packages/flowproof/src/evidence/secretScan.js'
 import { GIT_TIMEOUT_MS, MAX_GIT_OUTPUT_BYTES } from '../../packages/flowproof/src/git/repositoryState.js'
 import { createTempDirectory, git, processesMentioning } from '../support/repoFixture.js'
 import type { TempDirectory } from '../support/repoFixture.js'
@@ -261,5 +267,76 @@ describe('binary-safe capture Git runner', () => {
     cleanups.push(async () => budget.dispose())
     await expectStop(runCaptureGit(budget, ['--version'], { cwd: root, env }), 'interrupted')
     expect(budget.consumed).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// Capture over a small real repository
+// ---------------------------------------------------------------------------------------
+
+const SCANNER = createSecretScanner({ markers: ['FPCAPTUREUNITNEVER01'] })
+
+interface Captured {
+  readonly workspacePath: string
+  readonly baselineCommit: string
+  capture(options?: { readonly scanner?: SecretScanner; readonly signal?: AbortSignal; readonly bounds?: { readonly deadlineMs?: number; readonly byteLimit?: number } }): Promise<CaptureResult>
+}
+
+/** A one-commit repository with `files`, cloned into a prepared capture workspace. */
+async function capturable(files: Record<string, string | Buffer>): Promise<Captured> {
+  const parent = await temp('flowproof-capture-unit-repo-')
+  const root = path.join(parent.path, 'repo')
+  git(parent.path, 'init', '--quiet', '--initial-branch=main', 'repo')
+  for (const [name, content] of Object.entries(files)) await writeFile(path.join(root, name), content)
+  git(root, 'add', '--all')
+  git(root, '-c', 'user.email=u@example.invalid', '-c', 'user.name=Unit', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--message', 'base')
+  const head = git(root, 'rev-parse', 'HEAD').trim()
+  const tmp = await temp('flowproof-capture-unit-tmp-')
+  const workspace = createWorkspaceManager({ tmpRoot: tmp.path }).open()
+  cleanups.push(async () => {
+    await workspace.dispose()
+  })
+  await workspace.resolve(root, head)
+  const prepared = await workspace.create({ task: 'unit', declaredProjectCommands: [] })
+  const pinned = await (workspace.prepareCapture as () => Promise<CaptureWorkspace>)()
+  const sessionId = randomUUID()
+  return {
+    workspacePath: prepared.workspacePath,
+    baselineCommit: head,
+    capture: (options = {}) =>
+      captureChanges({
+        sessionId,
+        workspace: pinned,
+        scanner: options.scanner ?? SCANNER,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.bounds === undefined ? {} : { bounds: options.bounds }),
+      }),
+  }
+}
+
+describe('captured candidate snapshot', () => {
+  it('derives the summary and patch from one tree and retains bytes no caller can alias', async () => {
+    const repo = await capturable({ 'a.txt': 'a\n', 'b.bin': Buffer.from([0, 1, 2, 255]) })
+    await writeFile(path.join(repo.workspacePath, 'a.txt'), 'a2\n')
+    await writeFile(path.join(repo.workspacePath, 'b.bin'), Buffer.from([0, 9, 9, 255]))
+
+    const result = await repo.capture()
+    expect(result.status).toBe('captured')
+    if (result.status !== 'captured') return
+    const { candidate } = result
+    const patch = candidate.patch
+    const original = Buffer.from(patch)
+    expect(candidate.files.map((record) => record.path.toString('utf8'))).toEqual(['a.txt', 'b.bin'])
+    for (const record of candidate.files) expect(patch.includes(`diff --git a/${record.path.toString('utf8')} b/`)).toBe(true)
+
+    // Mutating every buffer a caller can obtain leaves the retained snapshot unchanged.
+    patch.fill(0)
+    candidate.files[0]?.path.fill(0)
+    expect(Buffer.compare(candidate.patch, original)).toBe(0)
+    expect(candidate.files[0]?.path.toString('utf8')).toBe('a.txt')
+    expect(() => {
+      ;(candidate as unknown as { patch: Buffer }).patch = Buffer.from('replaced')
+    }).toThrow(TypeError)
+    expect(Object.isFrozen(candidate.files)).toBe(true)
   })
 })

@@ -1,5 +1,9 @@
+import type { SecretScanner } from '../evidence/secretScan.js'
+import { CaptureStopError, createCaptureBudget, extractChanges, readBlobs } from './captureGit.js'
+import type { CaptureStopKind, ExtractionProgress, RawChange } from './captureGit.js'
 import { EXECUTION_OUTCOMES, parseEditingSessionResult } from './contracts.js'
 import type { EditingSessionResult, ParseResult } from './contracts.js'
+import type { CaptureWorkspace } from './workspace.js'
 
 // The opt-in change-capture result of specs/003-capture-editing-candidate. A capturing session
 // resolves `{ session, capture }`: `session` is the unchanged Spec 002 lifecycle result and
@@ -324,4 +328,94 @@ export function validateCapturingSessionResult(value: unknown): ParseResult<Capt
       agrees = completed
   }
   return agrees ? { ok: true, value: value as unknown as CapturingEditingSessionResult } : { ok: false, issues: ['capture.status'] }
+}
+
+// ---------------------------------------------------------------------------------------
+// Capture orchestration
+// ---------------------------------------------------------------------------------------
+
+export interface CaptureChangesInput {
+  /** The wrapped session's identity, copied into the candidate. */
+  readonly sessionId: string
+  /** Trusted state pinned before the editor ran; the editor must have stopped. */
+  readonly workspace: CaptureWorkspace
+  /** The existing trusted secret scanner, created by trusted code. */
+  readonly scanner: SecretScanner
+  /** Cancels capture; reported as `CAPTURE_INTERRUPTED`. */
+  readonly signal?: AbortSignal
+  /** Test-only narrower bounds; capture otherwise uses the fixed 60-second and 32-MiB ceilings. */
+  readonly bounds?: { readonly deadlineMs?: number; readonly byteLimit?: number }
+}
+
+const NULL_MODE = '000000'
+const OPERATIONS: Readonly<Record<RawChange['status'], CandidateOperation>> = Object.freeze({ A: 'added', D: 'deleted', M: 'modified', T: 'modified' })
+
+/** The blob IDs of a change's present, non-gitlink sides. */
+const blobSides = (change: RawChange): string[] =>
+  [
+    [change.oldMode, change.oldObjectId],
+    [change.newMode, change.newObjectId],
+  ]
+    .filter(([mode]) => mode !== NULL_MODE && mode !== GITLINK_MODE)
+    .map(([, id]) => id as string)
+
+function candidateFile(change: RawChange, blobs: ReadonlyMap<string, Buffer>): CandidateFileInput {
+  const side = (mode: string, id: string) => {
+    if (mode === NULL_MODE) return { mode: null, id: null, size: null }
+    const blob = blobs.get(id)
+    if (mode !== GITLINK_MODE && blob === undefined) throw new CaptureStopError('io')
+    return { mode: mode as CandidateMode, id, size: mode === GITLINK_MODE ? null : (blob as Buffer).length }
+  }
+  const before = side(change.oldMode, change.oldObjectId)
+  const after = side(change.newMode, change.newObjectId)
+  return {
+    path: change.path,
+    operation: OPERATIONS[change.status],
+    oldMode: before.mode,
+    newMode: after.mode,
+    oldObjectId: before.id,
+    newObjectId: after.id,
+    oldSize: before.size,
+    newSize: after.size,
+  }
+}
+
+function stopResult(kind: CaptureStopKind, coverage: CaptureCoverage | null): CaptureResult {
+  switch (kind) {
+    case 'limit':
+      return rejectedResult('CAPTURE_LIMIT', coverage)
+    case 'unrepresentable':
+      return rejectedResult('UNREPRESENTABLE_ENTRY', coverage)
+    case 'interrupted':
+      return failedResult('CAPTURE_INTERRUPTED', coverage)
+    default:
+      return failedResult('CAPTURE_IO_FAILED', coverage)
+  }
+}
+
+/**
+ * Captures the stopped editor's main-repository changes against the pinned baseline within one
+ * deadline and byte budget. Returns a complete candidate, no changes, or a safe reason; it never
+ * throws and never returns partial candidate bytes. Every capture process has exited on return.
+ */
+export async function captureChanges(input: CaptureChangesInput): Promise<CaptureResult> {
+  const budget = createCaptureBudget({ ...(input.signal === undefined ? {} : { signal: input.signal }), ...input.bounds })
+  const progress: ExtractionProgress = { gitlinks: 'unknown' }
+  try {
+    const extracted = await extractChanges(budget, input.workspace, progress)
+    const coverage = repositoryCoverage(extracted.hasGitlinks)
+    if (extracted.changes.length === 0) return noChangesResult(coverage)
+    const blobs = await readBlobs(budget, input.workspace, extracted.changes.flatMap(blobSides))
+    const files = extracted.changes.map((change) => candidateFile(change, blobs))
+    // A candidate is released only while the shared deadline and budget still hold.
+    budget.check()
+    return capturedResult(
+      createCandidate({ sessionId: input.sessionId, baselineCommit: input.workspace.baselineCommit, patch: extracted.patch, files, coverage }),
+    )
+  } catch (error) {
+    const coverage = progress.gitlinks === 'unknown' ? null : repositoryCoverage(progress.gitlinks === 'present')
+    return stopResult(budget.stopped ?? (error instanceof CaptureStopError ? error.kind : 'io'), coverage)
+  } finally {
+    budget.dispose()
+  }
 }
