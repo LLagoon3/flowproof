@@ -678,6 +678,63 @@ describe('links, gitlinks, and repository control metadata', () => {
     expectRejected(await linked.capture(), 'UNREPRESENTABLE_ENTRY')
   })
 
+  it('keeps non-ASCII nested repository paths byte-safe and never captures nested worktree content', async () => {
+    const marker = 'FPCAPTURENONASCIINESTED01'
+    const baseline = await commitBaseline(new Map([['a.txt', file('a\n')]]))
+
+    // An external .git pointer under a UTF-8 directory name must be recognized before Git sees it.
+    const outside = await createTempDirectory('flowproof-capture-unicode-external-')
+    cleanups.push(outside.remove)
+    const outsideRepo = path.join(outside.path, 'repo')
+    await nestedRepository(outsideRepo, `${marker}\n`)
+    const external = await openSession(baseline)
+    const externalKey = utf8Path('external/외부')
+    const externalDirectory = at(external, externalKey)
+    await mkdir(externalDirectory, { recursive: true })
+    await writeFile(Buffer.concat([externalDirectory, Buffer.from('/.git')]), `gitdir: ${path.join(outsideRepo, '.git')}\n`)
+    const rejected = await external.capture({ scanner: createSecretScanner({ markers: [marker] }) })
+    expectRejected(rejected, 'UNREPRESENTABLE_ENTRY')
+    expect(JSON.stringify(rejected)).not.toContain(marker)
+
+    // A contained nested repository is a gitlink reference only, even when its working tree is dirty.
+    const contained = await openSession(baseline)
+    const nestedKey = utf8Path('nested/하위')
+    const nestedPath = at(contained, nestedKey).toString('utf8')
+    const head = await nestedRepository(nestedPath, 'baseline nested content\n')
+    await writeFile(path.join(nestedPath, 'dirty.txt'), `${marker}\n`)
+    const candidate = expectCaptured(
+      await contained.capture({ scanner: createSecretScanner({ markers: [marker] }) }),
+    )
+    expect(candidate.files.map((record) => record.path.toString('latin1'))).toEqual([nestedKey])
+    expect(candidate.files[0]).toMatchObject({ newMode: '160000', newObjectId: head })
+    expect(candidate.coverage.note).toMatch(/neither inspected nor captured/)
+    expect(candidate.patch.includes(Buffer.from(marker))).toBe(false)
+    expect(candidate.patch.toString('latin1')).not.toMatch(/nested\.txt|dirty\.txt/)
+  })
+
+  it.each(['HEAD', 'objects', 'refs', 'refs/heads/main'] as const)(
+    'rejects a linked nested Git %s entry before Git can follow it',
+    async (entry) => {
+      const baseline = await commitBaseline(new Map([['a.txt', file('a\n')]]))
+      const outside = await createTempDirectory('flowproof-capture-linked-git-metadata-')
+      cleanups.push(outside.remove)
+      const headTarget = path.join(outside.path, 'HEAD')
+      const directoryTarget = path.join(outside.path, 'linked-directory')
+      await writeFile(headTarget, 'ref: refs/heads/main\n')
+      await mkdir(directoryTarget)
+
+      const session = await openSession(baseline)
+      const nestedPath = at(session, utf8Path('nested/하위')).toString('utf8')
+      await nestedRepository(nestedPath, 'nested content\n')
+      const gitDir = path.join(nestedPath, '.git')
+      const target = entry === 'HEAD' || entry === 'refs/heads/main' ? headTarget : directoryTarget
+      await rm(path.join(gitDir, entry), { recursive: true, force: true })
+      await symlink(target, path.join(gitDir, entry))
+
+      expectRejected(await session.capture(), 'UNREPRESENTABLE_ENTRY')
+    },
+  )
+
   it('rejects an editor-replaced repository directory or index pointer, and tolerates a removed index', async () => {
     const baseline = await commitBaseline(new Map([['a.txt', file('a\n')], ['b.txt', file('b\n')]]))
     const outside = await createTempDirectory('flowproof-capture-external-index-')

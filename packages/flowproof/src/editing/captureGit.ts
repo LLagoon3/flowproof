@@ -399,7 +399,7 @@ export function workspaceEnvironment(workspace: CaptureWorkspace): NodeJS.Proces
 }
 
 /** Reads a small pointer file without following a final symlink; null when absent. */
-async function readPointer(budget: CaptureBudget, target: string): Promise<string | null> {
+async function readPointer(budget: CaptureBudget, target: string | Buffer): Promise<string | null> {
   const info = await lstatOrNull(target)
   if (info === null) return null
   if (!info.isFile() || info.size > MAX_POINTER_BYTES) throw unrepresentable()
@@ -417,24 +417,81 @@ async function readPointer(budget: CaptureBudget, target: string): Promise<strin
  * Resolves `target` (relative to `base`) and requires its real location inside the workspace.
  * An external, missing, or linked-out location is never followed.
  */
-async function containedRealPath(rootReal: string, base: string, target: string): Promise<string> {
-  let resolved: string
+const slash = Buffer.from('/')
+
+/** Joins a raw filesystem path without decoding workspace-relative Git path bytes. */
+const appendPath = (base: Buffer, name: string | Buffer): Buffer =>
+  Buffer.concat([base, base.at(-1) === 0x2f ? Buffer.alloc(0) : slash, typeof name === 'string' ? Buffer.from(name) : name])
+
+/** Normalizes an absolute Linux path bytewise, preserving non-UTF-8 path components. */
+function normalizeAbsolutePath(value: Buffer): Buffer {
+  if (value[0] !== 0x2f) throw unrepresentable()
+  const parts: Buffer[] = []
+  let start = 1
+  for (let end = value.indexOf(0x2f, start); ; end = value.indexOf(0x2f, start)) {
+    const part = value.subarray(start, end === -1 ? value.length : end)
+    if (part.length === 0 || part.equals(Buffer.from('.'))) {
+      // Empty and current-directory components do not change the path.
+    } else if (part.equals(Buffer.from('..'))) {
+      if (parts.length > 0) parts.pop()
+    } else {
+      parts.push(Buffer.from(part))
+    }
+    if (end === -1) break
+    start = end + 1
+  }
+  const normalized: Buffer[] = [slash]
+  parts.forEach((part, index) => {
+    if (index > 0) normalized.push(slash)
+    normalized.push(part)
+  })
+  return Buffer.concat(normalized)
+}
+
+/** Resolves `target` relative to a raw-byte base and requires its real location inside the workspace. */
+async function containedRealPath(rootReal: Buffer, base: Buffer, target: string): Promise<Buffer> {
+  let resolved: Buffer
   try {
-    resolved = await realpath(path.resolve(base, target))
+    const targetBytes = Buffer.from(target)
+    const combined = targetBytes[0] === 0x2f ? targetBytes : appendPath(base, targetBytes)
+    resolved = await realpath(normalizeAbsolutePath(combined), { encoding: 'buffer' })
   } catch {
     throw unrepresentable()
   }
-  if (!resolved.startsWith(`${rootReal}${path.sep}`)) throw unrepresentable()
+  const contained = resolved.equals(rootReal) ||
+    (resolved.length > rootReal.length && resolved.subarray(0, rootReal.length).equals(rootReal) && resolved[rootReal.length] === 0x2f)
+  if (!contained) throw unrepresentable()
   return resolved
 }
 
-/** True when `gitDir` looks like a Git directory; a `commondir` must also stay contained. */
-async function isGitDirectory(budget: CaptureBudget, rootReal: string, gitDir: string): Promise<boolean> {
-  const head = await lstatOrNull(path.join(gitDir, 'HEAD'))
-  const objects = await lstatOrNull(path.join(gitDir, 'objects'))
-  const refs = await lstatOrNull(path.join(gitDir, 'refs'))
-  if (head === null || objects === null || refs === null || !(head.isFile() || head.isSymbolicLink())) return false
-  const common = await readPointer(budget, path.join(gitDir, 'commondir'))
+/** Rejects symlinks and special entries in the reference tree Git may read to resolve `HEAD`. */
+async function validateReferenceTree(budget: CaptureBudget, directory: Buffer): Promise<void> {
+  const entries = await readdir(directory, { withFileTypes: true, encoding: 'buffer' })
+  for (const entry of entries) {
+    budget.consume(entry.name.length + 1)
+    const child = appendPath(directory, entry.name)
+    if (entry.isSymbolicLink()) throw unrepresentable()
+    if (entry.isDirectory()) await validateReferenceTree(budget, child)
+    else if (!entry.isFile()) throw unrepresentable()
+  }
+}
+
+/** True when `gitDir` looks like a Git directory; its metadata links must not escape the clone. */
+async function isGitDirectory(budget: CaptureBudget, rootReal: Buffer, gitDir: Buffer): Promise<boolean> {
+  const headPath = appendPath(gitDir, 'HEAD')
+  const refsPath = appendPath(gitDir, 'refs')
+  const head = await lstatOrNull(headPath)
+  const objects = await lstatOrNull(appendPath(gitDir, 'objects'))
+  const refs = await lstatOrNull(refsPath)
+  if (head === null || objects === null || refs === null) return false
+  // Git may resolve these entries while discovering a nested repository. Do not allow it to
+  // follow a host-controlled symlink, including a linked HEAD or object/ref directory.
+  if (head.isSymbolicLink() || objects.isSymbolicLink() || refs.isSymbolicLink()) throw unrepresentable()
+  if (!head.isFile() || !objects.isDirectory() || !refs.isDirectory()) throw unrepresentable()
+  const packedRefs = await lstatOrNull(appendPath(gitDir, 'packed-refs'))
+  if (packedRefs !== null && (packedRefs.isSymbolicLink() || !packedRefs.isFile())) throw unrepresentable()
+  await validateReferenceTree(budget, refsPath)
+  const common = await readPointer(budget, appendPath(gitDir, 'commondir'))
   if (common !== null) await containedRealPath(rootReal, gitDir, common.trim())
   return true
 }
@@ -443,8 +500,8 @@ async function isGitDirectory(budget: CaptureBudget, rootReal: string, gitDir: s
  * Classifies the `.git` entry of a workspace directory: absent or not a repository (`false`), a
  * contained nested repository (`true`), or a pointer that would be followed outside (`throw`).
  */
-async function nestedRepository(budget: CaptureBudget, rootReal: string, directory: string): Promise<boolean> {
-  const marker = path.join(directory, '.git')
+async function nestedRepository(budget: CaptureBudget, rootReal: Buffer, directory: Buffer): Promise<boolean> {
+  const marker = appendPath(directory, '.git')
   const info = await lstatOrNull(marker)
   if (info === null) return false
   if (info.isDirectory()) return isGitDirectory(budget, rootReal, marker)
@@ -490,14 +547,15 @@ type EntryKind = 'file' | 'link' | 'directory' | 'special'
 async function walkWorkspace(input: {
   readonly budget: CaptureBudget
   readonly root: string
-  readonly rootReal: string
+  readonly rootReal: Buffer
   readonly env: NodeJS.ProcessEnv
   readonly tracked: ReadonlySet<string>
   readonly trackedDirectories: ReadonlySet<string>
   readonly gitlinks: ReadonlySet<string>
 }): Promise<Set<string>> {
   const { budget, root, rootReal, env, tracked, trackedDirectories, gitlinks } = input
-  const absolute = (key: string): string => (key === '' ? root : `${root}/${key}`)
+  const rootBytes = Buffer.from(root)
+  const absolute = (key: string): Buffer => (key === '' ? rootBytes : appendPath(rootBytes, fromKey(key)))
   const leaves = new Set<string>()
   let level: string[] = ['']
   while (level.length > 0) {
@@ -505,7 +563,7 @@ async function walkWorkspace(input: {
     const kept: Array<{ readonly key: string; readonly kind: EntryKind }> = []
     const pending: Array<{ readonly key: string; readonly kind: EntryKind }> = []
     for (const directory of level) {
-      const entries = await readdir(fromKey(absolute(directory)), { withFileTypes: true, encoding: 'buffer' })
+      const entries = await readdir(absolute(directory), { withFileTypes: true, encoding: 'buffer' })
       for (const entry of entries) {
         const name = entry.name
         budget.consume(name.length + 1)
@@ -562,7 +620,7 @@ export async function extractChanges(budget: CaptureBudget, workspace: CaptureWo
   const env = workspaceEnvironment(workspace)
   const git = (args: readonly string[], options: Partial<CaptureGitOptions> = {}): Promise<CaptureGitResult> =>
     runCaptureGit(budget, args, { cwd: root, env, ...options })
-  const rootReal = await realpath(root)
+  const rootReal = await realpath(root, { encoding: 'buffer' })
 
   // Only a real `.git` directory and a regular index file inside the clone are read, and only
   // for path metadata. A replaced pointer to elsewhere is never followed.
