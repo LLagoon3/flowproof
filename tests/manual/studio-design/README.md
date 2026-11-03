@@ -33,8 +33,8 @@ python3 -m http.server 43120 --bind 127.0.0.1 --directory tests/manual/studio-de
 ```
 
 Open `http://127.0.0.1:43120/` in a desktop browser and stop the server with `Ctrl+C` when the
-review ends. Opening `index.html` directly from the file system is not supported, because the page
-policy allows scripts and styles only from its own HTTP origin.
+review ends. Loopback HTTP is the reviewed and verified path; opening `index.html` from the file
+system may render in some browsers, but it was not part of the verification.
 
 If a reviewer needs remote access, use an existing authorized connection to the loopback server.
 Do not expose the server publicly. How the files are hosted is the operator's choice and is not
@@ -72,8 +72,8 @@ Nothing advances on a timer, and no control sends a request.
   output from a model.
 - No product network access: the page's content security policy permits no connections, frames,
   remote fonts, or remote images. There is no live iframe and no product endpoint.
-- No inline styles: panel widths are class-backed steps, matching the production policy
-  `style-src 'self'`.
+- No inline styles: panel widths are stylesheet-backed steps selected by a data attribute,
+  matching the production policy `style-src 'self'`.
 
 ## Review evidence and ignore rules
 
