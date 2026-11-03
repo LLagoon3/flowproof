@@ -205,5 +205,17 @@ overrides. The preview proves no runtime behavior.
   review and no hover-color contrast measurement. The worker did not publish or test a remote
   hosted page. This preview proves no real Studio behavior. The revised owner decision is pending.
 
-Publication and the reviewed source must be recorded by the delivery owner after its independent
-review; this record does not claim T007 re-delivery or T008 acceptance for the revision.
+### Revised handoff (2026-11-04)
+
+The delivery owner reviewed the three correction commits and independently verified the unchanged
+`eab7b55acbca3a14195218821fd6f80ed0991986` preview files in local Chromium: 206 checks, zero
+failures, page errors or external network requests. Both modes/six states at 1440/1280/390/320px,
+closed-by-default inspection controls, request/collapse/resize, verdicts, disclosures and evidence
+were checked. Desktop and mobile screenshots were inspected against the minimalist direction.
+Evidence is under the same ignored revision directory in `parent-minimal/`.
+
+The three checked static files were copied byte-for-byte to the existing owner-facing review
+location. Authenticated HTTPS rendering remains unverified: the existing authentication challenge
+returned HTTP 401 and the managed browser could not authenticate. No authentication or hosting
+configuration changed. T007 is re-offered at this source revision; T008 remains pending after the
+initial rejection. Earlier native-zoom results are not evidence for this revision.
