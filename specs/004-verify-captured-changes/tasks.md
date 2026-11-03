@@ -36,9 +36,19 @@ describe only this branch and are set only with this branch's verification evide
 task is unimplemented here; this branch does not complete the feature. T003, T005-T009 and
 T012-T013 are checked on the evidence recorded in the delivery review. T009 asserts failed
 application at the application layer (no applied or buildable target); reducing that outcome to
-the `application_complete` check is engine work (T010, T016) in slice 2. The full regression gate
-fails on the provider-seam compatibility conflict, which is pending an owner decision, so slice 1
-is not review- or merge-ready.
+the `application_complete` check is engine work (T010, T016) in slice 2. On 2026-11-03 the owner
+authorized the narrow provider-seam exception below and local correction/verification only.
+The previous full regression run failed that guard; post-correction typecheck, build and the full
+regression now pass (46 files, 1,339/1,339 tests). See the delivery review for final gate results.
+
+**Approved compatibility exception (T038)**: `tests/integration/provider-seam.test.ts` may replace
+the blanket ban on reachable `editing/*` modules with exactly `editing/capture.ts`,
+`editing/captureGit.ts`, `editing/contracts.ts` and `editing/workspace.ts`. T012 reuses the binary-safe
+Git runner; the other three modules are reached through type-only imports. The import walk must
+continue to include type-only edges and reject every additional editing module. Direct production
+references to editing session/workspace/contracts/Docker/runtime-profile modules remain forbidden,
+and the Hero/Failure provider and verification behavior remain unchanged. This exception does not
+complete T038's whole-feature audit or authorize another slice, push or PR.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -197,7 +207,7 @@ including the T028-T030 terminal-path cases.
 - [ ] T035 [P] Create new `tests/manual/captured-verification.mjs`, the QA launcher (not a production CLI): accepts only `--case pass`, requires a prior `pnpm build`, imports only built `packages/flowproof/dist/` modules, builds the editor fixture image with the same fixed arguments as `tests/support/editingRuntime.ts`, produces the `canvas-fix` capture against a temporary clone through the deterministic editor/capture path, calls `startCapturedVerificationStudio`, waits for the user to close Studio, prints the cleanup summary (temporary leftovers, processes, target port, original snapshot), and removes its own image tag and temporary clone; no key, login or network fetch (depends on T034).
 - [ ] T036 [P] Sync `specs/004-verify-captured-changes/quickstart.md` with the delivered files: add `tests/ui/captured-verification.test.ts` to the discovery and focused commands, add `pnpm exec playwright test --list tests/e2e/captured-verification.spec.ts`, and record the T035 launcher interface and its `pnpm build` prerequisite; no requirement or scope change.
 - [ ] T037 Confirm discovery: `pnpm exec vitest list tests/contract/captured-verification-contract.test.ts tests/unit/captured-verification.test.ts tests/integration/captured-verification-git.test.ts tests/integration/captured-verification-studio.test.ts tests/ui/captured-verification.test.ts` and `pnpm exec playwright test --list tests/e2e/captured-verification.spec.ts` report nonzero tests for every file; record the counts.
-- [ ] T038 Audit scope and compatibility in the slice diff: no change to `package.json`, `pnpm-lock.yaml` or `packages/flowproof/src/cli.ts`; no change in meaning to `packages/flowproof/src/run.ts`, the legacy schemas in `packages/flowproof/src/contracts/schemas.ts` or `packages/flowproof/src/verify/gates.ts` (at most a pure export of an existing helper); no new route, port, service, container, provider call, cancel endpoint, export or upload path; no `--unsafe-paths`, `--reject` or `--3way` in `packages/flowproof/src/worktree/capturedCandidate.ts`; existing test files changed only additively (`tests/fixtures/editing-agent/agent.mjs`, `tests/support/studioHarness.ts`).
+- [ ] T038 Audit scope and compatibility in the slice diff: no change to `package.json`, `pnpm-lock.yaml` or `packages/flowproof/src/cli.ts`; no change in meaning to `packages/flowproof/src/run.ts`, the legacy schemas in `packages/flowproof/src/contracts/schemas.ts` or `packages/flowproof/src/verify/gates.ts` (at most a pure export of an existing helper); no new route, port, service, container, provider call, cancel endpoint, export or upload path; no `--unsafe-paths`, `--reject` or `--3way` in `packages/flowproof/src/worktree/capturedCandidate.ts`; existing test files changed only additively (`tests/fixtures/editing-agent/agent.mjs`, `tests/support/studioHarness.ts`), except the owner-approved four-module reachability assertion in `tests/integration/provider-seam.test.ts` described above.
 - [ ] T039 Run the unchanged legacy acceptance suites: `pnpm exec vitest run tests/contract/run-result-contract.test.ts tests/contract/editing-capture-contract.test.ts tests/contract/editing-session-contract.test.ts tests/unit/gate-reducer.test.ts tests/integration/editing-session.test.ts tests/integration/editing-capture-session.test.ts tests/integration/editing-capture-git.test.ts tests/integration/studio-api.test.ts tests/ui/state.test.ts tests/ui/proof-trail.test.ts --no-file-parallelism --maxWorkers=1` and `pnpm exec playwright test tests/e2e/hero.spec.ts tests/e2e/failure.spec.ts tests/e2e/browser-close.spec.ts tests/e2e/target-load-failure.spec.ts tests/e2e/secret-safety.spec.ts`.
 - [ ] T040 Run the slice final gate: `pnpm typecheck`, `pnpm build`, `pnpm test --no-file-parallelism --maxWorkers=1`, `pnpm exec playwright test --pass-with-no-tests` and `git diff --check`; record discovered/passed/skipped counts per project and any unrun gate; no live provider, credential or global resource pruning.
 - [ ] T041 Owner visual smoke (human-only, about 2-3 minutes, after T040): after `pnpm build`, run `node tests/manual/captured-verification.mjs --case pass`; confirm the real original failure and candidate select replay are visible, the final result and checks match, and the final pane is labelled captured evidence rather than a navigable live app; close Studio and check the printed cleanup summary. Negative cases stay automated.

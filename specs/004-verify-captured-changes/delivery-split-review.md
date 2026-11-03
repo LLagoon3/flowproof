@@ -99,6 +99,9 @@ is not evidence of a passing suite. These are focused feasibility checks, not co
 
 ## Slice 1 branch
 
+The extraction and initial validation below describe the state before the owner's later
+compatibility decision; see [Approved seam correction](#approved-seam-correction) for current status.
+
 - Branch `feat/004-contracts-pinned-git` starts from `main`/`origin/main` at `b2ed6ad`. The owner
   authorized extraction and local verification of slice 1 only; no later slice, push, PR, review
   request, merge, deployment or dependency-policy exception is authorized.
@@ -150,3 +153,38 @@ including the one failure. The new suites pass inside the full run with the focu
   or skipped. The narrow exception remains owner-pending, so slice 1 is not review- or
   merge-ready.
 - No push, PR, review request, merge or deployment was performed.
+
+## Approved seam correction
+
+On 2026-11-03 the owner authorized the proposed four-module exception and local validation/commit
+on `feat/004-contracts-pinned-git`. The earlier owner-pending blocker above is historical, not a
+request for another decision. No later slice or external action is authorized.
+
+- Only the reachability assertion and its name/comments in `tests/integration/provider-seam.test.ts`
+  change. The source import walk, including type-only imports, is unchanged.
+- The allowed list is exactly `editing/{capture,captureGit,contracts,workspace}.ts`. T012 reuses
+  `captureGit.ts` at runtime; the other modules are reached through type-only edges. Every additional
+  editing module still fails the assertion.
+- The independent direct-reference ban and Hero/Failure provider checks remain unchanged. No
+  editing-session, Docker or runtime-profile access is admitted; product source is unchanged.
+- T038 records this single approved exception but remains unchecked: its whole-feature audit and
+  the later-slice work are not completed by fixing the first slice.
+- Requirements checklist: 16/16; prerequisite script: exit 0, using the explicit feature directory
+  with persistence disabled. The optional before/after-implement Git auto-commit hooks are not run;
+  the existing clean tree and final manual reviewed commit follow `CONTRIBUTING.md`.
+
+### Post-correction validation
+
+Logs use `/tmp/fp-first-pr-seam-approved-*.log`. Product source is unchanged from `74698e4`.
+
+| Check | Result |
+| --- | --- |
+| Focused provider-seam integration suite | exit 0; 1 file, 24/24 passed |
+| `pnpm typecheck`, `pnpm build` | exit 0, exit 0 |
+| `xvfb-run -a pnpm test --no-file-parallelism --maxWorkers=1` | exit 0; 46 files, 1,339/1,339 passed, 0 skipped |
+| `xvfb-run -a pnpm exec playwright test` | exit 0; 8 discovered, 8 passed, 0 skipped |
+| `git diff --check b2ed6ad` | exit 0 |
+
+The previous provider-seam failure is resolved. This is local slice-1 validation, not completion
+of the complete Spec004 task list, human-only T041, a GitHub review, required remote checks or
+merge authorization. The original aggregate branch remains preserved; no push or PR was performed.
