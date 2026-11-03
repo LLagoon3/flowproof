@@ -218,4 +218,5 @@ These results show the proposed values are mechanically usable. They are not own
 | Scope | Visual direction only; no later-slice implementation or repository publication authorized |
 
 This is the owner's actual adoption decision (SC-007), not an inference from automated checks.
-Native 200% zoom and other declared mechanical gaps for this revision remain unverified.
+A subsequent pre-PR native-200% check passed 56 checks on the unchanged accepted source; see
+the preview README. Other declared mechanical gaps remain unverified.

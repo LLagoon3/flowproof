@@ -4,9 +4,10 @@
 
 **Created**: 2026-11-03
 
-**Status**: The owner accepted the scope, workspace direction and preview-first review sequence,
-then approved the Plan direction on 2026-11-03 and explicitly requested Tasks. Tasks are prepared; the owner authorized Analyze corrections and a repeat analysis on 2026-11-03.
-Preview/product implementation, push and PR creation are outside this correction run.
+**Status**: Slice 1's standalone minimalist preview is implemented and its visual direction was
+accepted by the owner on 2026-11-04. The owner authorized publishing this slice as a PR with a
+review/correction loop on 2026-11-04. Production slices, merge and deployment are not authorized.
+The exact preview source and mechanical verification gaps are recorded in `design-system.md`.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements
 and requested a separate specification. Use conversation-plus-canvas references such as Claude
@@ -32,7 +33,7 @@ component dimensions, and technical execution are Plan/design decisions rather t
 
 The owner subsequently accepted the Plan direction and requested Tasks in conversation on
 2026-11-03. Preview deliverables and repository instructions remain tool-neutral; an operator's
-personal tooling or hosting is not a project dependency. Actual preview acceptance is still pending.
+personal tooling or hosting is not a project dependency. The minimalist preview direction was subsequently accepted on 2026-11-04.
 
 ## User Scenarios & Testing *(mandatory)*
 

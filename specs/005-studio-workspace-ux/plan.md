@@ -2,8 +2,9 @@
 
 **Branch**: `feat/005-studio-workspace-ux` | **Date**: 2026-11-03 | **Spec**: [spec.md](./spec.md)
 
-**Status**: Plan direction approved by the owner on 2026-11-03; Tasks requested. Analyze corrections were authorized on
-2026-11-03; this is documentation correction, not implementation. No clickable preview or production UI has been built or accepted yet.
+**Status**: Plan direction approved on 2026-11-03. Slice 1's isolated minimalist preview is
+implemented and its visual direction was accepted on 2026-11-04. The owner authorized a slice 1
+PR and review/correction loop on 2026-11-04; later production slices and merge remain unauthorized.
 
 **Input**: [Approved product direction and acceptance specification](./spec.md#clarifications).
 Baseline: merged Specs 001-004 at `8c40140`; specification clarification recorded separately.

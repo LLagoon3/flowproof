@@ -227,3 +227,18 @@ The owner explicitly adopted the minimalist UI as the direction: “해당 ui를
 This accepts source `eab7b55acbca3a14195218821fd6f80ed0991986` and completes the T008 decision
 record, superseding the earlier pending status. It does not close mechanical verification gaps,
 authorize later-slice work or authorize push, PR creation or merge.
+
+
+### Pre-PR native zoom follow-up (2026-11-04)
+
+The unchanged accepted preview source `eab7b55acbca3a14195218821fd6f80ed0991986` was checked
+at actual native 200% zoom in headed Chromium on a task-owned Xvfb display. OS-delivered Ctrl+0,
+then five Ctrl+= inputs changed the CSS viewport from 1280 x 720 / DPR 1 to 640 x 360 / DPR 2;
+the outer window stayed 1288 x 805. An OS screenshot records the visible 200% browser indicator.
+All 56 checks passed: both modes/six states reflowed without page-wide horizontal overflow,
+start/result comparison and collapse/restore remained reachable, and Ctrl+0 restored the original
+viewport and DPR. The owned browser, loopback server and display were closed. This closes the
+previously recorded native-zoom gap for this static preview, not the later real-Studio tasks.
+Evidence: `.flowproof/review/005-studio-workspace-ux/eab7b55acbca3a14195218821fd6f80ed0991986/parent-native200/`.
+Other declared gaps (screen reader, other browsers, hover contrast and authenticated hosted
+rendering) remain. Owner visual acceptance does not imply those checks passed.

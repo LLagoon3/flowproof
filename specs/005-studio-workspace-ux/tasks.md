@@ -225,3 +225,13 @@ implementation first, test that clean commit, then record its full SHA in a sepa
 commit (the tested revision is the results commit parent, not a self-reference). Record exact tested revision,
 commands/results, screenshots and owner feedback at the appropriate checkpoint. The task-generation
 format/coverage review is not implementation evidence and cannot check off T001-T033.
+
+
+## Slice 1 publication authorization (2026-11-04)
+
+After accepting the minimalist UI, the owner authorized push, PR creation and the repository's
+Codex review/correction loop. Follow CONTRIBUTING.md: at most three remediation rounds after
+the initial review. Merge, later-slice implementation and product deployment remain unauthorized.
+Before publication, the unchanged accepted preview source passed 56 additional actual native-200%
+checks with a visible zoom indicator, unchanged outer window and restored 100% metrics. This closes
+the static preview's prior zoom gap; other gaps are recorded in the preview README.
