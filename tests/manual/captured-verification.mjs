@@ -118,6 +118,7 @@ try {
   process.exitCode = 1
   console.error(error instanceof Error && error.message.startsWith('The prepared target port') ? error.message : 'Captured verification QA could not finish. No human visual acceptance is recorded.')
 } finally {
+  let summary = null
   if (captureHandle) {
     await captureHandle.cancel().catch(() => { cleanupFailed = true })
     await captureHandle.result.catch(() => { cleanupFailed = true })
@@ -130,7 +131,7 @@ try {
       const processes = await processesMentioning(ownerRoot)
       const targetPortListening = await listening()
       const mismatches = snapshot ? gitState.compareSnapshots(snapshot, await gitState.snapshotRepository(clone, path.join(clone, '.git'))) : ['snapshot_unavailable']
-      console.log(JSON.stringify({ temporaryLeftovers: leftovers, processes, targetPortListening, originalSnapshotUnchanged: mismatches.length === 0, mismatches, cleanupComplete: !cleanupFailed && !leftovers.length && !processes.length && !targetPortListening && !mismatches.length }))
+      summary = { temporaryLeftovers: leftovers, processes, targetPortListening, originalSnapshotUnchanged: mismatches.length === 0, mismatches }
       if (leftovers.length || processes.length || targetPortListening || mismatches.length) cleanupFailed = true
     } catch { cleanupFailed = true }
   }
@@ -141,6 +142,8 @@ try {
   if (savedKey !== undefined) process.env.MODEL_API_KEY = savedKey
   process.off('SIGINT', onSignal)
   process.off('SIGTERM', onSignal)
+  // Include tag/clone removal failures in the one final cleanup verdict, not an earlier success.
+  if (ownerRoot) console.log(JSON.stringify({ ...summary, cleanupComplete: !cleanupFailed && summary !== null }))
   if (cleanupFailed) {
     console.error('QA cleanup was incomplete; do not record a successful cleanup.')
     process.exitCode = 1
