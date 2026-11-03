@@ -173,6 +173,12 @@ code {
   min-height: 30rem;
 }
 
+/* The live target's own wrapper: the frame is its only child, so the wrapper is replaced as a whole. */
+.target-pane__live {
+  position: absolute;
+  inset: 0;
+}
+
 .target-pane__frame {
   position: absolute;
   inset: 0;
@@ -181,6 +187,88 @@ code {
   height: 100%;
   border: 0;
   background: #ffffff;
+}
+
+/* Captured verification: the finalized run's static before/after screenshots, not a live target. */
+.target-pane__evidence {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  overflow: auto;
+  background: var(--color-subtle);
+}
+
+.target-pane__evidence-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.5rem;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.target-pane__evidence-title {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.target-pane__evidence-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
+  background: #ffffff;
+}
+
+.target-pane__evidence-note,
+.target-pane__evidence-caption {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+/* Captured verification: what the frame may be presented as, and the measured-target guard. */
+
+.target-pane__state {
+  margin: 0;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-subtle);
+}
+
+.target-pane__state[data-target-presentation='baseline-live'],
+.target-pane__state[data-target-presentation='candidate-live'] {
+  color: var(--color-pass);
+  background: var(--color-pass-surface);
+}
+
+.target-pane__state[data-target-presentation='not-live'],
+.target-pane__state[data-target-presentation='completed-evidence'] {
+  color: var(--color-warn);
+  background: var(--color-warn-surface);
+}
+
+/* Focus moved here is not in the tab order and needs no ring over the measured Canvas. */
+.target-pane__viewport:focus {
+  outline: none;
+}
+
+/* Fully transparent, so the captured Canvas screenshot is unchanged; it only takes pointer input. */
+.target-pane__cover {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  cursor: not-allowed;
 }
 
 /* Agent pane */
@@ -729,4 +817,149 @@ code {
   .studio__side {
     overflow-y: visible;
   }
+}
+
+/* Captured candidate verification */
+
+.captured {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.captured-start__hint,
+.captured-status__coverage,
+.captured-status__scope {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.captured-start__button {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-radius: 0.375rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  cursor: pointer;
+}
+
+.captured-start__button:hover:not(:disabled) {
+  background: var(--color-accent-strong);
+}
+
+.captured-start__button:disabled {
+  background: var(--color-disabled);
+  cursor: not-allowed;
+}
+
+.captured__error {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--color-fail);
+  border-radius: 0.25rem;
+  color: var(--color-fail);
+  background: var(--color-fail-surface);
+}
+
+.captured-status__final {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  background: var(--color-subtle);
+}
+
+.captured-status__final[data-captured-status='passed'] {
+  color: var(--color-pass);
+  background: var(--color-pass-surface);
+}
+
+.captured-status__final[data-captured-status='failed'],
+.captured-status__final[data-captured-status='error'],
+.captured-status__final[data-captured-status='unavailable'] {
+  color: var(--color-fail);
+  background: var(--color-fail-surface);
+}
+
+.captured-status__final[data-captured-status='interrupted'] {
+  color: var(--color-warn);
+  background: var(--color-warn-surface);
+}
+
+.captured-status__verdict {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.captured-status__reason {
+  margin: 0.25rem 0 0;
+}
+
+.captured-status__details {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+
+.captured-status__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.captured-status__row dt {
+  color: var(--color-muted);
+}
+
+.captured-status__row dd {
+  margin: 0;
+  text-align: right;
+}
+
+.captured-checks {
+  overflow-x: auto;
+}
+
+.captured-checks__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.captured-checks__caption {
+  padding-bottom: 0.25rem;
+  text-align: left;
+  color: var(--color-muted);
+}
+
+.captured-checks__table th,
+.captured-checks__table td {
+  padding: 0.25rem 0.375rem;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.captured-checks__table thead th {
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.captured-check[data-status='pass'] > td:first-of-type {
+  font-weight: 600;
+  color: var(--color-pass);
+}
+
+.captured-check[data-status='fail'] > td:first-of-type {
+  font-weight: 600;
+  color: var(--color-fail);
+}
+
+.captured-check[data-status='unevaluable'] > td:first-of-type {
+  font-weight: 600;
+  color: var(--color-warn);
 }

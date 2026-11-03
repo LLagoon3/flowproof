@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { evidenceUrl, studioError, toStudioError } from '../api.js'
 import type { EvidencePhase, EvidenceType, GateId, GateOutcome, PhaseDurations, StudioClient, StudioError } from '../api.js'
 import { selectProofTrail } from '../state.js'
-import type { ProofTrailCapture, ProofTrailEvidence, ProofTrailView, RunView } from '../state.js'
+import type { ProofTrailCapture, ProofTrailEvidence, ProofTrailView, RunView, StudioMode } from '../state.js'
 import { GATE_LABELS, GATE_STATUS_LABELS } from './AgentPanel.js'
 
 // The in-workspace Proof Trail of a finalized run: its final status with the candidate guard that
@@ -14,13 +14,17 @@ import { GATE_LABELS, GATE_STATUS_LABELS } from './AgentPanel.js'
 // timing. The trail comes only from the authoritative result and the Evidence IDs the session
 // holds; artifact contents are read through the closed evidence and candidate-diff routes and
 // rendered as text or same-origin images, never as markup. A phase the run never reached is
-// reported absent.
+// reported absent. A captured verification Studio has no model diagnosis, provider or candidate
+// diff, so it renders no Proof Trail; its strict result is shown by the candidate-verification
+// surface.
 
 export interface ProofTrailProps {
   /** The current run from `studioReducer`; the trail appears once its result is final. */
   readonly run: RunView | null
   /** The same-origin Studio client used for the closed artifact reads. */
   readonly client: StudioClient
+  /** The host-selected Studio mode; the legacy trail is the default. */
+  readonly mode?: StudioMode
 }
 
 type Loaded<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: StudioError }
@@ -337,10 +341,12 @@ function Timing({ trail }: { readonly trail: ProofTrailView }) {
   )
 }
 
-export function ProofTrail({ run, client }: ProofTrailProps) {
+export function ProofTrail({ run, client, mode = 'legacy' }: ProofTrailProps) {
   const titleId = useId()
   const trail = selectProofTrail(run)
   const artifacts = useRunArtifacts(client, trail)
+  // Hooks run first, so the mode, which the catalog decides after the first render, may change.
+  if (mode === 'captured') return null
   return (
     <section className="proof-trail" aria-labelledby={titleId} data-run-id={trail?.runId ?? 'none'}>
       <h2 id={titleId} className="proof-trail__title">

@@ -1,4 +1,4 @@
-import { useEffect, useId, useReducer, useState } from 'react'
+import { useEffect, useId, useMemo, useReducer, useState } from 'react'
 import type { ChangeEvent } from 'react'
 
 import { createStudioClient, toStudioError } from './api.js'
@@ -6,11 +6,14 @@ import type { RunEventSubscription, StudioClient, StudioError } from './api.js'
 import { AgentPanel } from './components/AgentPanel.js'
 import { ProofTrail } from './components/ProofTrail.js'
 import { TargetPane } from './components/TargetPane.js'
-import { canStartRun, initialStudioState, runEventHandlers, studioReducer } from './state.js'
+import { canStartRun, initialStudioState, runEventHandlers, selectCapturedEvidence, selectCapturedTarget, selectStudioMode, studioReducer } from './state.js'
 import type { StudioState } from './state.js'
+import type { CapturedPaneLabel } from './components/TargetPane.js'
 
-// The split Studio workspace: the prepared application framed on the left, the agent pane and the
-// finalized run's Proof Trail on the right, and the prepared-case selector above them.
+// The split Studio workspace: the prepared application framed on the left (in a captured
+// verification Studio, replaced by the finalized run's captured evidence once the target was
+// released), the agent pane and the finalized run's Proof Trail on the right, and the prepared-case
+// selector above them.
 // `studioReducer` alone decides what the session may do; the effects below only keep network work
 // in step with its state. Each request owns an AbortController that its effect aborts on change or
 // unmount, and an aborted request never dispatches, so a stale or post-unmount response cannot
@@ -52,8 +55,19 @@ function casePickerNote(state: StudioState, locked: boolean): string {
   if (state.catalog.status === 'loading') return 'Loading the prepared cases.'
   if (state.catalog.status === 'failed') return 'The prepared cases are not available.'
   if (state.catalog.scenarios.length === 0) return 'No prepared case is registered.'
+  if (selectStudioMode(state) === 'captured') return 'The host fixed this prepared case for one candidate verification.'
   if (locked) return 'The case stays fixed while a run is starting or in progress.'
   return 'Choosing a case resets the chat to its prepared goal.'
+}
+
+/**
+ * The captured frame label and guard. The label comes only from actual run activity; from the start
+ * request on, the frame is guarded for the whole run, so preparation and measurement leave no gap.
+ */
+function capturedTarget(state: StudioState): { readonly label: CapturedPaneLabel | undefined; readonly guarded: boolean } {
+  if (selectStudioMode(state) !== 'captured') return { label: undefined, guarded: false }
+  const guarded = state.pendingStart !== null || state.capturedRun !== undefined
+  return { label: selectCapturedTarget(state.capturedRun) ?? (guarded ? 'not-live' : 'preview'), guarded }
 }
 
 function CasePicker({ state, onSelect }: { readonly state: StudioState; readonly onSelect: (scenarioId: string) => void }) {
@@ -126,8 +140,9 @@ export function App({ client: providedClient }: AppProps) {
     )
   }, [client, pendingStart])
 
-  // Attach one live stream and one result poll to each started run until a new run or unmount.
-  const runId = state.run?.runId ?? null
+  // Attach one live stream and one result poll to each started run until a new run or unmount. A
+  // captured verification Studio has its one run in `capturedRun`; the reducer routes its actions.
+  const runId = state.run?.runId ?? state.capturedRun?.runId ?? null
   useEffect(() => {
     if (runId === null) return
     let subscription: RunEventSubscription | null = null
@@ -154,6 +169,9 @@ export function App({ client: providedClient }: AppProps) {
   }
   const changeRequestText = (text: string): void => setDraft({ scenarioId: state.selectedScenarioId, text })
   const startRun = (text: string): void => dispatch({ type: 'run/requested', requestText: text })
+  const target = capturedTarget(state)
+  // The finalized captured run's evidence replaces the released target; kept stable for the memoized pane.
+  const completedEvidence = useMemo(() => selectCapturedEvidence(state.capturedRun), [state.capturedRun])
 
   return (
     <div className="studio">
@@ -162,10 +180,10 @@ export function App({ client: providedClient }: AppProps) {
         <CasePicker state={state} onSelect={selectScenario} />
       </header>
       <main className="studio__workspace">
-        <TargetPane />
+        <TargetPane capturedLabel={target.label} guarded={target.guarded} completedEvidence={target.label === 'completed-evidence' ? completedEvidence : null} />
         <div className="studio__side">
           <AgentPanel state={state} requestText={requestText} onRequestTextChange={changeRequestText} onStartRun={startRun} />
-          <ProofTrail run={state.run} client={client} />
+          <ProofTrail run={state.run} client={client} mode={selectStudioMode(state)} />
         </div>
       </main>
     </div>
