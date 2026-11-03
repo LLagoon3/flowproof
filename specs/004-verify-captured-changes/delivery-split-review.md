@@ -2,7 +2,8 @@
 
 **Date:** 2026-11-03. **State when written:** local-only feasibility review; further product
 implementation paused. **Current:** slice 1 merged through PR #19 (`16eecc0`); slice 2 is
-extracted and verified locally only, see [Slice 2 branch](#slice-2-branch). Earlier sections are
+published for review as [PR #20](https://github.com/LLagoon3/flowproof/pull/20), see
+[Slice 2 branch](#slice-2-branch). Earlier sections are
 dated history and their counts are not current.
 
 ## Correction and preserved work
@@ -213,8 +214,11 @@ merge authorization. The original aggregate branch remains preserved; no push or
 ## Slice 2 branch
 
 - Authority (2026-11-03): after the PR #19 merge the owner authorized local extraction and
-  verification of slice 2 only, superseding the earlier pause for this slice. No push, PR, bot
-  review, merge, deployment or later slice is authorized.
+  verification of slice 2, superseding the earlier pause. The subsequent request to publish the
+  PR and proceed with review authorizes [PR #20](https://github.com/LLagoon3/flowproof/pull/20),
+  GitHub Codex exact-head reviews, in-scope corrections and follow-up pushes. The initial review
+  may be followed by up to three remediation/review rounds under AGENTS.md. Merge, deployment
+  and later slices remain unauthorized.
 - Branch `feat/004-verification-engine-lifecycle` starts from `main`/`origin/main` at `16eecc0`.
   The aggregate checkout (`feat/004-verify-captured-changes`, `7e21b48`) is untouched.
 - Scope: T001-T002, T004, T010-T011, T014-T016, T028-T029 and T031-T032 from audit snapshot
@@ -273,4 +277,14 @@ Measured on `c7998d3`; the documentation commit changes no product or test file.
 The audit's historical slice-2 focused count (147) plus the 19 PR #19 regressions gives the 166
 measured here. T002 remains unchecked (`canvas-plausible-wrong` is first exercised by T020); T038,
 T040 and T041 remain unchecked whole-feature gates, and T041 is human-only and unperformed. This is
-local slice-2 verification, not review readiness, remote CI or merge authority.
+local slice-2 verification, not remote CI or merge authority.
+
+### Slice 2 PR review
+
+- PR #20 targets `main` from `feat/004-verification-engine-lifecycle`; no later slice is included.
+- Parent revalidation before publication: `pnpm typecheck`, `pnpm build`, and the combined captured
+  contract/unit/Git, legacy worktree and provider-seam gate passed (5 files, 210/210, no skipped
+  cases; `/tmp/fp-slice2-pr-{typecheck,build,focused}.log`). Product and test bytes are unchanged.
+- Publication/review status is recorded before the initial exact-head Codex request. Remote CI
+  and review completion must be observed against the published HEAD; this document does not
+  claim a completed review or authorize merging it.

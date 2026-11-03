@@ -10,8 +10,11 @@ correction; see [delivery-split-review.md](./delivery-split-review.md). On 2026-
 authorized the slice-1 PR review loop: [PR #19](https://github.com/LLagoon3/flowproof/pull/19),
 including push, in-scope corrections and exact-head GitHub Codex reviews. Later that day the owner
 authorized merging PR #19 (merged as `16eecc0`) and local extraction and verification of slice 2
-only, superseding the pause for that slice. Slice 2 push, PR, bot review, merge and deployment, and
-later slices, remain unauthorized.
+only, superseding the pause for that slice. The owner subsequently authorized publishing slice 2
+as [PR #20](https://github.com/LLagoon3/flowproof/pull/20) and its GitHub Codex review loop,
+including in-scope corrections and follow-up pushes. This supersedes the local-only publication
+boundary; merge, deployment and later slices remain unauthorized. The loop allows an initial
+exact-head review and up to three remediation/review rounds, as required by AGENTS.md.
 **Code baseline**: `b2ed6ad8a268457ae2f6797e02f48a028d5c9b9b`; approved Spec commit `a3c51ca`.
 **Approved claim clarification**: `ed450ad`. No independent technical review was performed, and
 owner approval is not recorded as one.

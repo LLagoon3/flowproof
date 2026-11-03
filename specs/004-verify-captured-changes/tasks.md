@@ -31,11 +31,13 @@ On 2026-11-03 the owner subsequently authorized the slice-1 review loop in
 GitHub Codex review requests; merge and later slices were not authorized at that point. Later on
 2026-11-03 the owner authorized merging PR #19 (merged into `main` as `16eecc0`) and local
 extraction and verification of delivery slice 2 only, superseding the earlier pause for that
-slice. Slice 2 push, PR, bot review, merge and deployment, and every later slice, remain
-unauthorized.
+slice. The owner subsequently authorized publishing slice 2 as
+[PR #20](https://github.com/LLagoon3/flowproof/pull/20) and its GitHub Codex review loop, including
+in-scope corrections and follow-up pushes. Merge, deployment and every later slice remain
+unauthorized; AGENTS.md caps remediation at three rounds after the initial review.
 
 **This branch**: `feat/004-verification-engine-lifecycle`, created from `main`/`origin/main` at
-`16eecc0`. The owner authorized extraction and local verification of delivery slice 2 only:
+`16eecc0`. The owner authorized extraction and verification of delivery slice 2:
 T001-T002, T004, T010-T011, T014-T016, T028-T029 and T031-T032, taken from audit snapshot
 `72ad962` while preserving every PR #19 correction (see
 [delivery-split-review.md](./delivery-split-review.md#slice-2-branch)). Checkmarks describe `main`
@@ -63,7 +65,7 @@ continue to include type-only edges and reject every additional editing module. 
 references to editing session/workspace/contracts/Docker/runtime-profile modules remain forbidden,
 and the Hero/Failure provider and verification behavior remain unchanged. This exception does not
 complete T038's whole-feature audit or authorize another slice. Push and review authority was
-limited to PR #19; slice 2 has none. On slice 2 the unchanged guard still passes (24/24):
+initially limited to PR #19; PR #20 now has its own authorized review loop. On slice 2 the unchanged guard still passes (24/24):
 `verify/capturedRun.ts` is not yet reachable from a production entry point.
 
 ## Format: `[ID] [P?] [Story] Description`
@@ -265,11 +267,12 @@ are preserved; a checked parent task is not a statement that either PR part is r
 
 The local audit snapshots are dependency/validation evidence, not published or owner-approved
 PR branches. Do not blindly cherry-pick the interleaved aggregate commits. Preserve the original
-branch. Slice 1 merged through PR #19; slice 2 is prepared locally on
+branch. Slice 1 merged through PR #19; slice 2 is published for review as PR #20 on
 `feat/004-verification-engine-lifecycle`. Do not implement T035-T042 or start slice 3 now. Report
 and stop at the current slice boundary. After a slice PR is separately authorized, reviewed and
 merged, update main and create the next authorized slice branch from it, as required by
-CONTRIBUTING.md. No push, PR, bot review, merge or deployment of slice 2 is authorized.
+CONTRIBUTING.md. Only the current slice-2 publication and review loop is authorized, not its
+merge or deployment, and not work on later slices.
 
 ---
 
