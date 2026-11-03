@@ -276,3 +276,11 @@ rendering) remain. Owner visual acceptance does not imply those checks passed.
 - **Gaps/scope**: No native-200% rerun, screen-reader, other-browser or authenticated hosted test
   for this correction. HTML/CSS, accepted visual direction, production files and later tasks are
   unchanged. These are static synthetic-preview checks, not real Studio verification.
+
+Parent follow-up on the unchanged corrected source `9051d135e61ed74be8c8fe4f764b1af07a7e38b5`:
+211 independent Chromium checks passed, including the reported selected-citation Start regression,
+with zero page/console errors and no external requests. A separate headed actual native-200% rerun
+passed 56 checks, recording the 200% indicator, unchanged 1288 x 805 outer window, 640 x 360 CSS
+viewport / DPR 2, and reset to 1280 x 720 / DPR 1. Evidence is under the same source directory in
+`parent-correction/` and `parent-native200/`. Only static preview files were re-offered, byte-for-byte;
+authenticated hosted rendering, screen readers, other browsers and hover contrast remain unverified.
