@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
 import type { IncomingHttpHeaders } from 'node:http'
 import path from 'node:path'
@@ -7,12 +8,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { STUDIO_EVENT_TYPES, parseChatRequest, parseStudioEvent } from '../../packages/flowproof/src/contracts/index.js'
 import type { RunResult, StudioEvent } from '../../packages/flowproof/src/contracts/index.js'
-import { capturedResult, createCandidate, repositoryCoverage } from '../../packages/flowproof/src/editing/capture.js'
+import { capturedResult, createCandidate, failedResult, noChangesResult, notAttemptedResult, rejectedResult, repositoryCoverage } from '../../packages/flowproof/src/editing/capture.js'
 import { createEvidenceIdAllocator } from '../../packages/flowproof/src/evidence/ids.js'
 import { createRunArtifactStore } from '../../packages/flowproof/src/evidence/store.js'
 import type { RunArtifactStore } from '../../packages/flowproof/src/evidence/store.js'
 import { SCENARIO_REGISTRY } from '../../packages/flowproof/src/scenario/registry.js'
 import { LAUNCH_COOKIE_NAME } from '../../packages/flowproof/src/studio/auth.js'
+import { CAPTURED_LAUNCH_REFUSALS, startCapturedVerificationStudio } from '../../packages/flowproof/src/studio/launch.js'
 import { createRunEventStream } from '../../packages/flowproof/src/studio/events.js'
 import type { RunEventStream } from '../../packages/flowproof/src/studio/events.js'
 import { startStudioServer } from '../../packages/flowproof/src/studio/server.js'
@@ -21,9 +23,11 @@ import { parseCapturedVerificationResult } from '../../packages/flowproof/src/ve
 import type { CapturedVerificationResult } from '../../packages/flowproof/src/verify/capturedContracts.js'
 import { admitCapturedCandidate, executeCapturedRun } from '../../packages/flowproof/src/verify/capturedRun.js'
 import type { AdmittedCandidate, CapturedRunPorts } from '../../packages/flowproof/src/verify/capturedRun.js'
-import { persistPhase, sessionResult } from '../support/capturedCandidate.js'
+import { persistPhase, produceCapturingResult, sessionResult } from '../support/capturedCandidate.js'
 import { createRecordedTransport } from '../support/recordedTransport.js'
 import { REPO_ROOT, createTempClone, git } from '../support/repoFixture.js'
+import { attemptCapturedVerificationHarness } from '../support/studioHarness.js'
+import type { CapturedLaunchAttempt } from '../support/studioHarness.js'
 
 // T019 (server part) for T021: the host-fixed captured verification mode of the guarded Studio
 // server in `packages/flowproof/src/studio/server.ts`. Only the in-process captured launcher
@@ -673,5 +677,127 @@ describe('Captured Studio server: result, events and closed evidence', () => {
       expect(reply.body, target).not.toContain(UNIQUE_PATH)
       expect(reply.body, target).not.toContain('diff --git')
     }
+  })
+})
+
+// Launch admission (T019 launch part, through the T017 harness). These tests need
+// `startCapturedVerificationStudio` from T022 and fail with a named NOT_IMPLEMENTED diagnostic,
+// before any clone, server or browser, until it exists.
+describe('Captured verification launch: invalid input is refused before any side effect', () => {
+  const syntheticComposition = (cleanup?: NonNullable<Parameters<typeof sessionResult>[1]>['cleanup']): unknown => {
+    const candidate = createCandidate({
+      sessionId: randomUUID(),
+      baselineCommit: 'a'.repeat(40),
+      patch: Buffer.from(PATCH_TEXT),
+      files: [{ path: Buffer.from(UNIQUE_PATH), operation: 'added', oldMode: null, newMode: '100644', oldObjectId: null, newObjectId: 'b'.repeat(40), oldSize: null, newSize: 31 }],
+      coverage: repositoryCoverage(false),
+    })
+    return { session: sessionResult(candidate.sessionId, cleanup === undefined ? {} : { cleanup }), capture: capturedResult(candidate) }
+  }
+
+  /** A real complete capture of the clone through the Docker-free T003 producer. */
+  const realCapture = ({ repoRoot, tmpRoot }: { readonly repoRoot: string; readonly tmpRoot: string }): Promise<unknown> =>
+    produceCapturingResult({
+      repositoryRoot: repoRoot,
+      baselineCommit: git(repoRoot, 'rev-parse', 'HEAD').trim(),
+      tmpRoot,
+      edit: (workspace) => writeFile(path.join(workspace, 'apps/demo-chart/src/zz-captured-launch-draft.txt'), 'synthetic captured launch line\n'),
+    })
+
+  function expectRefusedWithoutSideEffect(attempt: CapturedLaunchAttempt): { readonly code: string; readonly message: string } {
+    expect(attempt.launched).toBe(false)
+    if (attempt.launched) throw new Error('The captured Studio launched for invalid input.')
+    expect(attempt.report.tmpLeftovers).toEqual([])
+    expect(attempt.report.processes).toEqual([])
+    expect(attempt.report.demoPortListening).toBe(false)
+    expect(attempt.report.modelApiKeyPresent).toBe(false)
+    expect(attempt.report.snapshot).toEqual(attempt.baseline)
+    expect(attempt.artifacts).toEqual([])
+    expect(attempt.blockedRequests).toEqual([])
+    const error = attempt.error as { code?: unknown; message?: unknown }
+    expect(error).toBeInstanceOf(Error)
+    expect(error.code).toMatch(/^[A-Z][A-Z0-9_]*$/)
+    expect(typeof error.message === 'string' && error.message.length <= 200).toBe(true)
+    for (const leak of ['/tmp', UNIQUE_PATH, 'diff --git', 'zz-captured-launch-draft']) expect(String(error.message)).not.toContain(leak)
+    return { code: String(error.code), message: String(error.message) }
+  }
+
+  it.each<[string, () => unknown]>([
+    ['a no_changes capture', () => ({ session: sessionResult(randomUUID()), capture: noChangesResult(repositoryCoverage(false)) })],
+    ['a rejected capture', () => ({ session: sessionResult(randomUUID()), capture: rejectedResult('SENSITIVE_DATA', repositoryCoverage(false)) })],
+    ['a failed capture', () => ({ session: sessionResult(randomUUID()), capture: failedResult('CAPTURE_IO_FAILED', null) })],
+    ['an editor failure', () => ({ session: sessionResult(randomUUID(), { executionOutcome: 'failed', exitCode: 3, diagnostic: 'failed: the agent exited with code 3.' }), capture: notAttemptedResult() })],
+    [
+      'an upstream cleanup failure',
+      () => syntheticComposition({ status: 'failed', containerRemoved: true, workspaceRemoved: false, originalRepositoryUnchanged: true, reasonCode: 'WORKSPACE_NOT_REMOVED', remainingOwnedResources: ['workspace'] }),
+    ],
+    ['a malformed composition', () => ({ session: {}, capture: { status: 'captured' } })],
+    ['nothing', () => undefined],
+  ])('refuses %s with its fixed admission error', async (_label, build) => {
+    const value = build()
+    const admission = admitCapturedCandidate(value, { objectFormat: 'sha1' })
+    expect(admission.admitted).toBe(false)
+    if (admission.admitted) return
+
+    const refused = expectRefusedWithoutSideEffect(await attemptCapturedVerificationHarness({ capture: () => value }))
+
+    expect(refused).toEqual({ code: admission.error.code, message: admission.error.message })
+  })
+
+  it.each([
+    ['an unregistered scenario', 'canvas-filter-unknown'],
+    ['a registered case that is not prepared', FAILURE],
+  ])('refuses %s even with a real complete capture', async (_label, scenarioId) => {
+    expectRefusedWithoutSideEffect(await attemptCapturedVerificationHarness({ capture: realCapture, scenarioId }))
+  })
+
+  it('refuses an admitted capture whose recorded baseline is not in the original repository', async () => {
+    const refused = expectRefusedWithoutSideEffect(await attemptCapturedVerificationHarness({ capture: () => syntheticComposition() }))
+    expect(refused).toEqual({ code: 'BASELINE_UNAVAILABLE', message: CAPTURED_LAUNCH_REFUSALS.BASELINE_UNAVAILABLE })
+  })
+
+  it('admits and snapshots the capture result synchronously, before any asynchronous launch work', async () => {
+    const clone = await createTempClone()
+    cleanups.push(clone.remove)
+    let reads = 0
+    const captureResult = new Proxy(syntheticComposition() as object, {
+      get: (target, key, receiver) => {
+        reads += 1
+        return Reflect.get(target, key, receiver) as unknown
+      },
+    })
+    const pending = startCapturedVerificationStudio({ repoRoot: clone.path, captureResult, scenarioId: HERO })
+    // The caller's value was read during the call itself, before its first await.
+    const readDuringCall = reads
+    expect(readDuringCall).toBeGreaterThan(0)
+    const error: unknown = await pending.then(
+      () => null,
+      (refusal: unknown) => refusal,
+    )
+    expect(error).toMatchObject({ code: 'BASELINE_UNAVAILABLE', message: CAPTURED_LAUNCH_REFUSALS.BASELINE_UNAVAILABLE })
+    // Nothing after the first await reads the caller's value again.
+    expect(reads).toBe(readDuringCall)
+    expect(existsSync(path.join(clone.path, '.flowproof'))).toBe(false)
+  })
+
+  it.each<[string, Record<string, unknown>]>([
+    ['a model transport', { testTransport: createRecordedTransport() }],
+    ['a provider', { provider: 'meta' }],
+    ['a command', { command: ['node', '-e', 'process.exit(0)'] }],
+    ['a callback', { onRun: () => undefined }],
+    ['a mode override', { mode: 'legacy' }],
+  ])('accepts no %s option and refuses it before any side effect', async (_label, extra) => {
+    const clone = await createTempClone()
+    cleanups.push(clone.remove)
+    const worktrees = git(clone.path, 'worktree', 'list', '--porcelain')
+    const options = { repoRoot: clone.path, captureResult: syntheticComposition(), scenarioId: HERO, ...extra }
+    const error: unknown = await startCapturedVerificationStudio(options as Parameters<typeof startCapturedVerificationStudio>[0]).then(
+      () => null,
+      (refusal: unknown) => refusal,
+    )
+    expect(error).toBeInstanceOf(Error)
+    expect(error).toMatchObject({ code: 'CAPTURED_OPTIONS_INVALID', message: CAPTURED_LAUNCH_REFUSALS.CAPTURED_OPTIONS_INVALID })
+    expect(existsSync(path.join(clone.path, '.flowproof'))).toBe(false)
+    expect(git(clone.path, 'worktree', 'list', '--porcelain')).toBe(worktrees)
   })
 })

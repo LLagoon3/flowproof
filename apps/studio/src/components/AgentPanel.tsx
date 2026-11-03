@@ -3,14 +3,17 @@ import type { ChangeEvent, FormEvent } from 'react'
 
 import { MAX_REQUEST_TEXT_LENGTH, isValidRequestText, studioError } from '../api.js'
 import type { GateId, GateStatus, GateSummary, RunState, StudioError, StudioEventType } from '../api.js'
-import { canStartRun, selectGateRows } from '../state.js'
+import { canStartRun, selectGateRows, selectStudioMode } from '../state.js'
 import type { CandidateAvailability, RunView, StreamStatus, StudioState } from '../state.js'
+import { CapturedVerification } from './CapturedVerification.js'
 
 // The agent pane of the Studio workspace: bounded chat, ordered Agent Activity, announced Evidence
 // IDs, candidate status, the nine verification gates, and the final status. It only renders the
 // state it is given and reports chat intent through callbacks; the workspace owns the client and
 // the run. Every value is rendered as text, errors show only the client-authored message for their
-// stable code, and the final status comes only from the authoritative run result.
+// stable code, and the final status comes only from the authoritative run result. A host-fixed
+// captured verification Studio shows its candidate-verification surface instead: no chat, legacy
+// gates, diagnosis, provider or candidate-diff section.
 
 export interface AgentPanelProps {
   /** The Studio state from `studioReducer`; the panel never changes it. */
@@ -341,6 +344,17 @@ function GateTable({ run }: { readonly run: RunView | null }) {
 export function AgentPanel(props: AgentPanelProps) {
   const titleId = useId()
   const { state } = props
+  if (selectStudioMode(state) === 'captured') {
+    // The case's committed goal starts the one verification; there is no chat to edit it.
+    return (
+      <section className="agent-panel agent-panel--captured" aria-labelledby={titleId}>
+        <h2 id={titleId} className="agent-panel__title">
+          Candidate verification
+        </h2>
+        <CapturedVerification state={state} requestText={props.requestText} onStart={props.onStartRun} />
+      </section>
+    )
+  }
   return (
     <section className="agent-panel" aria-labelledby={titleId}>
       <h2 id={titleId} className="agent-panel__title">

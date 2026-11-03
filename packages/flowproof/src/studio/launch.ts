@@ -20,11 +20,15 @@ import type { RunStagePorts } from '../run.js'
 import { ScenarioLoadError, loadScenario } from '../scenario/loadScenario.js'
 import type { LoadedScenario, ScenarioLoadErrorCode } from '../scenario/loadScenario.js'
 import { SCENARIO_REGISTRY } from '../scenario/registry.js'
+import { optionalGit } from '../git/repositoryState.js'
+import type { CapturedCleanupResource, CapturedVerificationResult } from '../verify/capturedContracts.js'
+import { CAPTURED_ADMISSION_ERRORS, PREPARED_FUNCTIONAL_CHECKS, admitCapturedCandidate, createPreparedCandidatePorts, executeCapturedRun } from '../verify/capturedRun.js'
+import type { AdmittedCandidate, CapturedAdmission, CapturedRunPorts, PreparedBaseline, PreparedCandidatePorts } from '../verify/capturedRun.js'
 import { createWorktreeSession } from '../worktree/session.js'
 import type { WorktreeSession } from '../worktree/session.js'
 import { createRunEventStream } from './events.js'
 import { startStudioServer } from './server.js'
-import type { StudioRunHandle, StudioRunStart } from './server.js'
+import type { CapturedStudioRunStart, StudioRunHandle, StudioRunStart } from './server.js'
 import { DEFAULT_RECONNECT_TIMEOUT_MS, TargetAppError, startTargetApp, trustedProbeReady } from './targetApp.js'
 import type { TargetApp, TargetAppErrorCode, TargetBuilder } from './targetApp.js'
 
@@ -468,6 +472,403 @@ export async function startStudio(options: StartStudioOptions): Promise<StudioIn
       const response = await opened.goto(`${server.origin}/`, { waitUntil: 'load', timeout: READY_TIMEOUT_MS })
       if (response?.status() !== 200) throw new StudioLaunchError('STUDIO_PAGE_FAILED', 'The Studio page did not load.')
       await waitForPreview(opened, app, deadline)
+      return opened
+    })
+    studioPage = page
+
+    let closed: Promise<StudioClosure> | null = null
+    const close = (): Promise<StudioClosure> => {
+      closed ??= (async () => {
+        // Only a run that has not finalized yet is interrupted by this close.
+        const interruptedRun = runActive
+        closingController.abort()
+        await Promise.allSettled([...runs])
+        const released = await release()
+        if (runFinalizeFailed) throw new StudioLaunchError('STUDIO_RUN_FINALIZE_FAILED', 'A run could not be finalized safely.')
+        if (!released) throw new StudioLaunchError('STUDIO_CLEANUP_INCOMPLETE', 'Some Studio resources could not be released.')
+        return Object.freeze({ interruptedRun })
+      })()
+      return closed
+    }
+    // Closing the Studio page or browser, or a page crash, closes the Studio and interrupts its run.
+    const closeQuietly = (): void => {
+      close().catch(() => undefined)
+    }
+    page.once('close', closeQuietly)
+    page.once('crash', closeQuietly)
+    browser.once('disconnected', closeQuietly)
+    if (page.isClosed() || !browser.isConnected()) closeQuietly()
+
+    const { origin, sessionId } = server.session
+    return Object.freeze({
+      origin,
+      sessionId,
+      page,
+      close,
+      toJSON: (): StudioLaunchJson => ({ mode: 'studio', origin, session_id: sessionId }),
+    })
+  } catch (error) {
+    closingController.abort()
+    await release()
+    throw launchError(error, 'STUDIO_START_FAILED', 'The Studio could not be started.')
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Captured verification launch (specs/004-verify-captured-changes, T022)
+// ---------------------------------------------------------------------------------------
+//
+// The sibling launcher for the host-fixed captured verification mode. It admits the completed
+// Spec 003 capture result into an owned frozen snapshot synchronously, before any asynchronous
+// work, refuses anything but the prepared scenario, and checks the repository object format and
+// the recorded baseline commit before any browser, server, build, or artifact exists. It then opens
+// the same Studio as `startStudio()`: the fixed-port target app with the prepared preview, the
+// Studio bundle, the guarded server (in its captured mode, with no credential or transport), and
+// one headed Chromium page with the launch cookie. The one accepted start runs `executeCapturedRun`
+// against that page's one target iframe: the recorded baseline is built in the owned pinned
+// worktree, served and captured in that frame; the same worktree applies, builds, and checks the
+// candidate; then the candidate build is served and replayed in the same frame. Finalization ends
+// that frame and stops target serving before the result is published; afterwards only the guarded
+// result shell, its evidence server and the Studio browser remain until the user closes the Studio.
+// Closing the Studio interrupts an active run, which still finalizes before anything is released.
+
+export interface StartCapturedVerificationStudioOptions {
+  /** The original repository the candidate was captured from. */
+  readonly repoRoot: string
+  /** The completed Spec 003 `{ session, capture }` result; admitted or refused here. */
+  readonly captureResult: unknown
+  /** The exact prepared scenario ID. */
+  readonly scenarioId: string
+}
+
+/** Fixed refusals of captured launch input; each is raised before any browser, server, or artifact. */
+export const CAPTURED_LAUNCH_REFUSALS = {
+  ...CAPTURED_ADMISSION_ERRORS,
+  CAPTURED_OPTIONS_INVALID: 'The captured verification launch accepts only repoRoot, captureResult, and scenarioId.',
+  SCENARIO_NOT_PREPARED: 'The scenario is not the prepared captured verification case.',
+  BASELINE_UNAVAILABLE: 'The recorded baseline commit is not available in the original repository.',
+} as const
+export type CapturedLaunchRefusalCode = keyof typeof CAPTURED_LAUNCH_REFUSALS
+
+/** A refused captured launch; its message is the fixed sentence for its code, never input values or paths. */
+export class CapturedLaunchRefusedError extends Error {
+  readonly code: CapturedLaunchRefusalCode
+
+  constructor(code: CapturedLaunchRefusalCode) {
+    super(CAPTURED_LAUNCH_REFUSALS[code])
+    this.name = 'CapturedLaunchRefusedError'
+    this.code = code
+  }
+}
+
+const CAPTURED_OPTION_KEYS = new Set(['repoRoot', 'captureResult', 'scenarioId'])
+
+interface CapturedLaunchInput {
+  readonly repoRoot: string
+  readonly scenarioId: string
+  readonly candidate: AdmittedCandidate
+}
+
+/** Admits with the object format the baseline length claims; the repository's format is checked after. */
+function admitOwned(captureResult: unknown): CapturedAdmission {
+  const sha1 = admitCapturedCandidate(captureResult, { objectFormat: 'sha1' })
+  if (sha1.admitted || sha1.error.code !== 'BASELINE_FORMAT_MISMATCH') return sha1
+  return admitCapturedCandidate(captureResult, { objectFormat: 'sha256' })
+}
+
+/** Reads every option once, admits the candidate, and checks the prepared scenario, all synchronously. */
+function readCapturedLaunch(options: unknown): CapturedLaunchInput {
+  if (typeof options !== 'object' || options === null || Array.isArray(options)) throw new CapturedLaunchRefusedError('CAPTURED_OPTIONS_INVALID')
+  if (Reflect.ownKeys(options).some((key) => typeof key !== 'string' || !CAPTURED_OPTION_KEYS.has(key))) {
+    throw new CapturedLaunchRefusedError('CAPTURED_OPTIONS_INVALID')
+  }
+  const { repoRoot, captureResult, scenarioId } = options as Readonly<Record<string, unknown>>
+  if (typeof repoRoot !== 'string' || !path.isAbsolute(repoRoot) || typeof scenarioId !== 'string') throw new CapturedLaunchRefusedError('CAPTURED_OPTIONS_INVALID')
+  const admission = admitOwned(captureResult)
+  if (!admission.admitted) throw new CapturedLaunchRefusedError(admission.error.code)
+  const prepared = Object.hasOwn(PREPARED_FUNCTIONAL_CHECKS, scenarioId) && SCENARIO_REGISTRY.some((entry) => entry.scenario_id === scenarioId)
+  if (!prepared) throw new CapturedLaunchRefusedError('SCENARIO_NOT_PREPARED')
+  return { repoRoot, scenarioId, candidate: admission.candidate }
+}
+
+/** The candidate's baseline must be a full commit of the repository's own object format in its object store. */
+async function assertRecordedBaseline(repoRoot: string, candidate: AdmittedCandidate): Promise<void> {
+  const format = (await optionalGit(repoRoot, ['rev-parse', '--show-object-format'])) === 'sha256' ? 'sha256' : 'sha1'
+  if (candidate.baselineCommit.length !== (format === 'sha256' ? 64 : 40)) throw new CapturedLaunchRefusedError('BASELINE_FORMAT_MISMATCH')
+  const resolved = await optionalGit(repoRoot, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${candidate.baselineCommit}^{commit}`])
+  if (resolved !== candidate.baselineCommit) throw new CapturedLaunchRefusedError('BASELINE_UNAVAILABLE')
+}
+
+interface CapturedRunWiring {
+  readonly page: Page
+  /** The Studio's one target frame, as it was when the Studio opened. */
+  readonly frame: Frame
+  readonly target: TargetApp
+  readonly capture: BrowserCapture
+  readonly prepared: PreparedCandidatePorts
+}
+
+/** How long the Studio page may take to report the removed target frame as detached. */
+const FRAME_RELEASE_TIMEOUT_MS = 5_000
+
+/**
+ * Ends the observed target frame: removes exactly its iframe element from the Studio page, which
+ * ends its document, scripts and any pending navigation, and waits until Playwright reports that
+ * frame detached. A closed page has no frame left. True only when the frame is gone; never throws.
+ *
+ * React still holds the removed element in its tree, but it is the only child of the target pane's
+ * keyed live wrapper, which the pane never updates around it once its run is active and replaces as
+ * a whole with the completed evidence (see `TargetPane`), so no DOM operation of the Studio depends
+ * on the element removed here.
+ */
+async function releaseTargetFrame(page: Page, frame: Frame): Promise<boolean> {
+  if (frame.isDetached() || page.isClosed()) return true
+  const detached = page.waitForEvent('framedetached', { predicate: (gone) => gone === frame, timeout: FRAME_RELEASE_TIMEOUT_MS }).then(
+    () => true,
+    () => frame.isDetached() || page.isClosed(),
+  )
+  try {
+    const element = await frame.frameElement()
+    try {
+      // Runs in the Studio page, where the node is the target iframe element.
+      await element.evaluate((node) => (node as unknown as { remove(): void }).remove())
+    } finally {
+      await element.dispose().catch(() => undefined)
+    }
+  } catch {
+    // A frame or page that went away meanwhile is gone too; the wait below decides.
+  }
+  // Joined either way, so no wait for the detachment outlives this release.
+  return (await detached) || frame.isDetached() || page.isClosed()
+}
+
+/**
+ * The captured engine's stages, bound to the Studio page's one target frame, the target app, and
+ * the prepared pinned worktree. Reproduction serves and captures the recorded baseline built in that
+ * worktree; replay serves and captures the candidate build of the same worktree in the same frame.
+ * A changed or detached frame, or a target that cannot load, fails its stage; there is no fallback.
+ *
+ * Finalization releases the target before the result is published: after the last evidence,
+ * `disposeCapture` stops the capture, ends the observed frame and stops target serving, so only the
+ * guarded result shell, its evidence server and the Studio browser remain until the user closes the
+ * Studio. A run aborted during a measured stage (timeout or close) ends the frame at once: that
+ * cancels a pending target load or capture step in it, which would otherwise hold the stage until
+ * the reconnect or capture bound, and the engine still joins the stage before cleanup.
+ */
+function createCapturedRunPorts({ page, frame, target, capture, prepared }: CapturedRunWiring): CapturedRunPorts {
+  const sameFrame = async (): Promise<Frame> => {
+    const current = await studioTargetFrame(page, READY_TIMEOUT_MS)
+    if (current !== frame || frame.isDetached()) throw new StudioLaunchError('STUDIO_PAGE_FAILED', 'The Studio target frame changed during the run.')
+    return frame
+  }
+  // One release, shared by an abort during a measured stage and by the final disposal, which joins it.
+  let frameRelease: Promise<boolean> | null = null
+  const releaseFrame = (): Promise<boolean> => (frameRelease ??= releaseTargetFrame(page, frame))
+  /** Runs a measured stage whose abort ends the frame it drives; the listener never outlives the stage. */
+  const measured = async <T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> => {
+    const onAbort = (): void => {
+      void releaseFrame()
+    }
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      return await run()
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
+  return {
+    reproduceBaseline: (context) => measured(context.signal, async () => {
+      const baseline: { prepared: PreparedBaseline | null } = { prepared: null }
+      await target.serveBuild('known-bad', {
+        build: async () => {
+          baseline.prepared = await prepared.prepareBaseline(context)
+          return { documentRoot: baseline.prepared.documentRoot }
+        },
+      })
+      const sourceRoot = baseline.prepared?.sourceRoot
+      if (sourceRoot === undefined) throw new StudioLaunchError('STUDIO_RUN_INPUT_INVALID', 'The recorded baseline was not prepared.')
+      const observed = await sameFrame()
+      await target.reconnect(observed)
+      // The recorded baseline build is now served and ready in the Studio frame; only once that
+      // same attached frame is confirmed again (a changed frame throws) is the measured phase announced live.
+      await sameFrame()
+      context.frameReady()
+      const { scenario, runId, store, allocator, signal } = context
+      return capture.capturePhase({ phase: 'failure', frame: observed, scenario, runId, store, allocator, sourceRoot, signal })
+    }),
+    applyCandidate: (context) => prepared.applyCandidate(context),
+    build: (context) => prepared.build(context),
+    functionalCheck: (context) => prepared.functionalCheck(context),
+    replay: (context) => measured(context.signal, async () => {
+      const documentRoot = prepared.documentRoot()
+      const sourceRoot = prepared.worktreePath()
+      if (documentRoot === null || sourceRoot === null) throw new StudioLaunchError('STUDIO_RUN_INPUT_INVALID', 'The candidate build is not available.')
+      // The exact build output the trusted check ran against; nothing is rebuilt here.
+      await target.serveBuild('patched', { build: async () => ({ documentRoot }) })
+      const observed = await sameFrame()
+      await target.reconnect(observed)
+      // The candidate build is now served and ready in the same Studio frame; only once that same
+      // attached frame is confirmed again (a changed frame throws) is the measured phase announced live.
+      await sameFrame()
+      context.frameReady()
+      const { scenario, runId, store, allocator, signal } = context
+      return capture.capturePhase({ phase: 'replay', frame: observed, scenario, runId, store, allocator, sourceRoot, signal })
+    }),
+    // Called once every stage settled: stops the capture, ends the observed frame and its document,
+    // then stops target serving and releases its port, all before the result is reduced. A frame
+    // that is still attached or a target that still serves is reported, never assumed released.
+    disposeCapture: async () => {
+      const remaining = new Set<CapturedCleanupResource>()
+      capture.dispose()
+      if (!(await releaseFrame())) remaining.add('target_runtime')
+      try {
+        await target.close()
+      } catch {
+        remaining.add('target_runtime')
+      }
+      if (target.stage !== null) remaining.add('target_runtime')
+      return { remaining: [...remaining] }
+    },
+    disposeWorktree: () => prepared.disposeWorktree(),
+  }
+}
+
+/**
+ * Launches the Studio in its host-fixed captured verification mode for one completed capture
+ * result and the prepared scenario. Invalid input is refused with `CapturedLaunchRefusedError`
+ * before any browser, server, build, or artifact exists; a failed startup releases everything it
+ * acquired and throws `StudioLaunchError`. The returned handle has the `startStudio()` shape.
+ */
+export async function startCapturedVerificationStudio(options: StartCapturedVerificationStudioOptions): Promise<StudioInstance> {
+  // Admission and its owned snapshot happen before any asynchronous work.
+  const { repoRoot: requestedRoot, scenarioId, candidate } = readCapturedLaunch(options)
+  const scenario: LoadedScenario = await step('SCENARIO_UNAVAILABLE', 'The committed case could not be loaded.', () => loadScenario(scenarioId, { repoRoot: requestedRoot }))
+  const repoRoot = scenario.resolved.repoRoot
+  await assertRecordedBaseline(repoRoot, candidate)
+
+  const owned: Array<() => Promise<void>> = []
+  /** Releases owned resources newest first; every step runs even when an earlier one fails. */
+  const release = async (): Promise<boolean> => {
+    let complete = true
+    for (const releaseStep of owned.splice(0).reverse()) {
+      try {
+        await releaseStep()
+      } catch {
+        complete = false
+      }
+    }
+    return complete
+  }
+
+  const closingController = new AbortController()
+  const closing = closingController.signal
+  const runs = new Set<Promise<void>>()
+  let studioPage: Page | null = null
+  let targetFrame: Frame | null = null
+  let target: TargetApp | null = null
+  let runLaunched = false
+  let runActive = false
+  let runFinalizeFailed = false
+
+  // One verification run per launch, against the Studio page's one target frame.
+  const startRun = async ({ request, scenario: runScenario }: CapturedStudioRunStart): Promise<StudioRunHandle> => {
+    const page = studioPage
+    const frame = targetFrame
+    const app = target
+    if (page === null || frame === null || app === null || closing.aborted || runLaunched) {
+      throw new StudioLaunchError('STUDIO_RUN_UNAVAILABLE', 'This Studio session cannot start a run.')
+    }
+    let settle: () => void = () => undefined
+    runs.add(
+      new Promise<void>((resolve) => {
+        settle = () => resolve()
+      }),
+    )
+    let prepared: PreparedCandidatePorts | null = null
+    try {
+      // The trusted check and the original snapshot precede any Git metadata or run artifact.
+      prepared = await createPreparedCandidatePorts({ repoRoot, scenario: runScenario, candidate })
+      if (closing.aborted) throw new StudioLaunchError('STUDIO_CLOSED', 'The Studio closed before the run started.')
+      const store = await createRunArtifactStore({ repoRoot, runId: request.run_id })
+      const events = createRunEventStream({ runId: request.run_id, registry: store })
+      const capture = createBrowserCapture(page)
+      const ports = prepared
+      let result: CapturedVerificationResult | null = null
+      runLaunched = true
+      runActive = true
+      void executeCapturedRun({
+        runId: request.run_id,
+        requestId: request.request_id,
+        scenario: runScenario,
+        candidate,
+        store,
+        events,
+        allocator: createEvidenceIdAllocator(request.run_id),
+        ports: createCapturedRunPorts({ page, frame, target: app, capture, prepared: ports }),
+        // A fresh per-run canary: nothing seeds it, so any finding is a credential shape or secret key.
+        secretMarkers: [`flowproof-canary-${randomBytes(16).toString('hex')}`],
+        // Closing the Studio interrupts the run; it still finalizes before anything is released.
+        signal: closing,
+      })
+        .then(
+          (finalized) => {
+            result = finalized
+          },
+          () => {
+            runFinalizeFailed = true
+          },
+        )
+        .finally(async () => {
+          runActive = false
+          capture.dispose()
+          await ports.disposeWorktree().catch(() => undefined)
+          settle()
+        })
+      return Object.freeze({ runId: request.run_id, events, artifacts: store, result: () => result })
+    } catch (error) {
+      await prepared?.disposeWorktree().catch(() => undefined)
+      settle()
+      throw error
+    }
+  }
+
+  try {
+    const app = await step('TARGET_APP_FAILED', 'The prepared application could not be served.', () => startTargetApp({ scenario }))
+    owned.push(() => app.close())
+    const studioBuild = await step('STUDIO_BUILD_FAILED', 'The Studio bundle could not be built.', () => tempBuild(repoRoot, 'studio-build', owned))
+    const preview = await step('PREVIEW_BUILD_FAILED', 'The prepared preview could not be built.', () => tempBuild(repoRoot, 'preview-build', owned))
+    await step('TARGET_APP_FAILED', 'The prepared application could not be served.', () => app.serve('preview', preview.path))
+    target = app
+
+    // The captured mode reads no credential and selects no model transport.
+    const server = await step('STUDIO_SERVER_FAILED', 'The Studio server could not start.', () =>
+      startStudioServer({ repoRoot, targetOrigin: app.origin, studioRoot: studioBuild.path, captured: { scenarioId, startRun } }),
+    )
+    owned.push(() => server.close())
+
+    // The launcher owns shutdown order, so Playwright installs no signal handlers of its own.
+    const browser = await step('BROWSER_LAUNCH_FAILED', 'The pinned headed Chromium could not be launched.', () =>
+      chromium.launch({ headless: false, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }),
+    )
+    owned.push(() => browser.close())
+
+    const page = await step('STUDIO_PAGE_FAILED', 'The Studio page could not be opened.', async () => {
+      const deadline = Date.now() + READY_TIMEOUT_MS
+      const { viewport } = scenario.scenario.app
+      const context = await browser.newContext({
+        viewport: { width: viewport.width, height: viewport.height },
+        deviceScaleFactor: viewport.device_scale_factor,
+        locale: 'en-US',
+        timezoneId: 'UTC',
+      })
+      await context.addCookies([server.session.launchCookie()])
+      const opened = await context.newPage()
+      const response = await opened.goto(`${server.origin}/`, { waitUntil: 'load', timeout: READY_TIMEOUT_MS })
+      if (response?.status() !== 200) throw new StudioLaunchError('STUDIO_PAGE_FAILED', 'The Studio page did not load.')
+      await waitForPreview(opened, app, deadline)
+      // The frame every run stage must drive and observe.
+      targetFrame = await studioTargetFrame(opened, Math.max(1, deadline - Date.now()))
       return opened
     })
     studioPage = page
