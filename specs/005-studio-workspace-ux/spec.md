@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-03
 
-**Status**: The owner accepted the proposed scope, workspace direction, and design-review
-sequence on 2026-11-03 and authorized the next planning stage. The proposed Plan is subject to
-owner review. Tasks, production implementation, push, and PR creation are not authorized by that approval.
+**Status**: The owner accepted the scope, workspace direction and preview-first review sequence,
+then approved the Plan direction on 2026-11-03 and explicitly requested Tasks. Task generation
+is authorized; preview/product implementation, push and PR creation are not part of this Tasks run.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements
 and requested a separate specification. Use conversation-plus-canvas references such as Claude
@@ -29,6 +29,10 @@ The owner accepted these recommendations together and requested the next stage (
 24880). No additional high-impact product ambiguity requires a new question before planning.
 The usability timings remain the specification's proposed acceptance targets; palette, typeface,
 component dimensions, and technical execution are Plan/design decisions rather than new product scope.
+
+The owner subsequently accepted the Plan direction and requested Tasks (Coding messages 24894
+and 24903). Preview deliverables and repository instructions remain tool-neutral; an operator's
+personal tooling or hosting is not a project dependency. Actual preview acceptance is still pending.
 
 ## User Scenarios & Testing *(mandatory)*
 

@@ -2,8 +2,8 @@
 
 **Branch**: `feat/005-studio-workspace-ux` | **Date**: 2026-11-03 | **Spec**: [spec.md](./spec.md)
 
-**Status**: Proposed Plan for owner review; not permission to implement. The owner accepted the
-product direction and authorized planning. No clickable preview or production UI has been built here.
+**Status**: Plan direction approved by the owner on 2026-11-03; Tasks requested. This run is task
+generation, not implementation. No clickable preview or production UI has been built or accepted yet.
 
 **Input**: [Approved product direction and acceptance specification](./spec.md#clarifications).
 Baseline: merged Specs 001-004 at `8c40140`; specification clarification recorded separately.
@@ -78,7 +78,7 @@ specs/005-studio-workspace-ux/
   quickstart.md
 ```
 
-Tasks and the exact task-range ledger are generated later, not by this Plan. A later
+The exact task-range ledger belongs in [tasks.md](./tasks.md), not in this Plan. A later
 `design-system.md` records approved visual values and the applicable control-state inventory.
 
 ### Source Code (repository root; new paths below are proposals)
