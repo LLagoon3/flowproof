@@ -70,9 +70,10 @@ The launcher currently fixes Studio to the scenario's 1280 x 800 viewport at dev
 Changing its OS window alone does not test the requested sizes. Do not change the launcher or
 scenario for this feature, and do not request Playwright's built-in page/browser fixtures.
 
-1. The operator resets native browser zoom to 100% before each case. The new workspace test uses the existing
-   harness's actual `page.setViewportSize`
-   with 1280 x 720 and 1920 x 1080. Record `innerWidth`, `innerHeight`, zoom, and screenshots.
+1. Each launch starts a fresh browser at native 100%; record zoom. Operator input applies only
+   to the opt-in `native-zoom-review` case (steps 3-4). The new workspace test uses the existing
+   harness's actual `page.setViewportSize` with 1280 x 720 and 1920 x 1080.
+   Record `innerWidth`, `innerHeight`, zoom, and screenshots.
    This is an explicit viewport override for layout, not proof of actual browser zoom.
 2. T010 authors an opt-in `native-zoom-review` case on the same launcher-owned page,
    skipped unless the test-only `FLOWPROOF_ZOOM_REVIEW=1` environment variable is set. It
