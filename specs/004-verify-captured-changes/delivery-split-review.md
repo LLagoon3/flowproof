@@ -559,3 +559,18 @@ snapshot unchanged, no mismatch and `cleanupComplete: true` (`manual-final-smoke
 through SIGINT without starting verification and explicitly records `human_visual_acceptance=False`;
 the separate six headed cases prove the full candidate run. The final documentation commit changes
 no product or test bytes. All automated gates are settled; no owned test/runtime remains running.
+
+### Parent verification of slice 4
+
+The parent inspected all five commits, the aggregate scope and the launcher, UI, manual-QA and
+documentation boundaries. All ten extracted paths match `ebb747d`; the contract/engine/worktree
+code, PR #21 deterministic clock, captured client-state regressions and provider-seam guard are
+unchanged from merged `bcb29e5`. The saved full/legacy/headed/manual log summaries and the
+passing before/after screenshot were checked; screenshot inspection does not complete T041.
+
+Independent checks on the final product bytes: `pnpm typecheck` passed, five captured/legacy
+state-and-guard files passed 435/435 with zero skipped, and all six captured headed cases passed
+under Xvfb, including same-frame success, plausible-wrong/build/load failure and both close paths.
+Logs: `/tmp/fp-slice4-parent-{typecheck,focused,e2e}.log`. Manual-script syntax and
+`git diff --check bcb29e5 HEAD` passed. T041 remains the only unchecked task. This is local
+completion and review, not publication, remote review, deployment or owner visual acceptance.
