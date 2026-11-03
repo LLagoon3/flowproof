@@ -23,10 +23,14 @@ and its GitHub Codex review loop, including in-scope corrections, follow-up push
 PR #21 merged as `bcb29e5261354039c1a1fdf34902615a6b145b9e` after exact-head
 `a405bf12bd142c2565aa458297bb61e7c7806994` Codex review without findings, CI run `41592671435`
 (all 1,630 tests and eight headed cases), GitGuardian success and zero unresolved threads.
-This branch implements and validates local slice 4 only from that merged baseline. No push, PR,
-review trigger, merge or deployment belongs to this extraction. The earlier deployment target
+This branch implements and validates slice 4 only from that merged baseline. After local
+verification and owner QA feedback, the owner authorized publishing
+[PR #22](https://github.com/LLagoon3/flowproof/pull/22) and its GitHub Codex review/correction loop
+on 2026-11-03: initial review plus up to three remediation rounds, in-scope corrections and
+follow-up pushes. Merge and deployment are not included in this request. The earlier deployment target
 remains unspecified and is handled separately by the parent; local build/smoke is not deployment.
-The owner visual smoke T041 remains human-only and is not inferred from automated screenshots.
+The owner reported functional operation but substantial UI/UX concerns for a separate specification;
+T041 is not unconditionally accepted and remains unchecked. Automated screenshots do not replace it.
 **Code baseline**: `b2ed6ad8a268457ae2f6797e02f48a028d5c9b9b`; approved Spec commit `a3c51ca`.
 **Approved claim clarification**: `ed450ad`. No independent technical review was performed, and
 owner approval is not recorded as one.

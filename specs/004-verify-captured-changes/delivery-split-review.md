@@ -1,10 +1,11 @@
 # Spec004 delivery decomposition review
 
 **Date:** 2026-11-03. **State when written:** local-only feasibility review; further product
-implementation paused. **Current:** slices 1 and 2 merged through PR #19 (`16eecc0`) and
-[PR #20](https://github.com/LLagoon3/flowproof/pull/20) (`d385c36`); slice 3 is extracted,
-verified and reviewed locally, and published as [PR #21](https://github.com/LLagoon3/flowproof/pull/21)
-for GitHub Codex review. See [Slice 3 branch](#slice-3-branch). Earlier sections are dated history;
+implementation paused. **Current:** slices 1–3 merged through PR #19 (`16eecc0`),
+[PR #20](https://github.com/LLagoon3/flowproof/pull/20) (`d385c36`) and
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21) (`bcb29e5`). Slice 4 is published for
+GitHub Codex review as [PR #22](https://github.com/LLagoon3/flowproof/pull/22).
+See [Slice 4 branch](#slice-4-branch) and the later owner-feedback/review record. Earlier sections are dated history;
 their authorization boundaries and counts are not current.
 
 ## Correction and preserved work
@@ -574,3 +575,21 @@ under Xvfb, including same-frame success, plausible-wrong/build/load failure and
 Logs: `/tmp/fp-slice4-parent-{typecheck,focused,e2e}.log`. Manual-script syntax and
 `git diff --check bcb29e5 HEAD` passed. T041 remains the only unchecked task. This is local
 completion and review, not publication, remote review, deployment or owner visual acceptance.
+
+### Owner QA feedback and slice-4 publication
+
+The owner exercised the documented manual launcher on product bytes `44eeec7` and reported
+functional operation with substantial UI/UX improvements needed, suggesting a separate
+specification. This is not unconditional visual acceptance: T041 remains unchecked. No particular
+misleading label or blocked core action was reported, and no unspecified UX redesign is added.
+The closed launcher log confirms empty temporary leftovers/processes, target port stopped,
+original snapshot unchanged, no mismatch and `cleanupComplete: true` (`/tmp/fp-owner-qa.log`).
+
+The owner then explicitly authorized slice-4 PR creation and a GitHub Codex review/correction loop.
+Current delivery is [PR #22](https://github.com/LLagoon3/flowproof/pull/22),
+`feat/004-visible-runtime-evidence` to `main`. This supersedes earlier local-only publication
+boundaries, allowing in-scope corrections, follow-up pushes and exact-head re-review. Follow
+AGENTS.md: initial review plus at most three remediation rounds. Merge and deployment remain
+outside this request. The repository contains only PR CI, with no automatic preview/deploy job.
+Current phase: exact-head Codex review and CI pending. This status commit changes documentation
+only; product/test bytes remain those already independently validated through `44eeec7`.

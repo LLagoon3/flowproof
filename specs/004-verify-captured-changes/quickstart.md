@@ -3,10 +3,11 @@
 This guide describes the delivered local slice-4 checkout. Slices 1–3 merged through
 [PR #19](https://github.com/LLagoon3/flowproof/pull/19),
 [PR #20](https://github.com/LLagoon3/flowproof/pull/20) and
-[PR #21](https://github.com/LLagoon3/flowproof/pull/21). Slice 4 is local-only, based on
-`bcb29e5`; publication and review are separate owner-authorized actions. Automated evidence and
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21). Slice 4 is based on `bcb29e5` and published
+for the owner-authorized review loop as [PR #22](https://github.com/LLagoon3/flowproof/pull/22). Automated evidence and
 remaining gaps are recorded in [delivery-split-review.md](./delivery-split-review.md).
-The owner-only visual smoke below remains unperformed unless explicitly recorded otherwise.
+Owner QA reported functional operation with substantial UI/UX concerns; unconditional visual
+acceptance is not recorded. See the report rather than treating automated evidence as owner QA.
 
 ## Prerequisites
 
@@ -102,7 +103,7 @@ tests cover negative cases. This manual smoke is not claimed completed by automa
 
 ## Current stage
 
-The current authorization covers local extraction and validation of slice 4 only. It adds no
+The current authorization covers slice-4 publication and its Codex review/correction loop. It adds no
 production CLI mode, live agent/provider, export, hosting or deployment. T041 requires the owner;
 automation does not record its visual acceptance. See the slice-4 report and task ledger for actual
 discovery, compatibility and final-gate results. The prepared execution trust boundary and excluded

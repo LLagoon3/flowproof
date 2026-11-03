@@ -50,9 +50,12 @@ slice on 2026-11-03. Its latest reviewed head `a405bf1` had no Codex findings, s
 `41592671435` (1,630 tests and eight headed cases), GitGuardian success and zero unresolved
 threads. Current scope is local slice 4: T017, T019 launch, T020, T022, T025-T027, T030,
 T033, T034 presentation and T035-T042. Earlier PR #19/#20/#21 fixes and regressions are preserved;
-only now does headed T020 exercise `canvas-plausible-wrong`. No publication, review request,
-merge or deployment is performed by this local extraction. The human-only T041 remains open;
-automated browser observations and launcher lifecycle checks are not owner acceptance.
+only now does headed T020 exercise `canvas-plausible-wrong`. The owner subsequently authorized
+publishing [PR #22](https://github.com/LLagoon3/flowproof/pull/22) and its GitHub Codex review loop,
+including in-scope corrections and follow-up pushes, with at most three remediation rounds after
+the initial review. Merge and deployment are not included. The owner exercised the QA flow and
+reported functional operation but substantial UI/UX concerns for a separate specification. T041
+remains unchecked, not unconditionally accepted; automation is not owner visual acceptance.
 Evidence and actual gate status are in [the slice-4 report](./delivery-split-review.md#slice-4-branch).
 
 **Earlier partial tasks (history)**: slice 3 delivered T018, T019 server, T021, T023-T024 and
@@ -281,10 +284,10 @@ are preserved; a checked parent task is not a statement that either PR part is r
 
 The audit snapshots are extraction references, not the reviewed baseline. Slices 1–3 merged
 through PR #19 (`16eecc0`), PR #20 (`d385c36`) and PR #21 (`bcb29e5`). The current owner-authorized
-local slice 4 starts from merged main, not the aggregate branch, which remains preserved. It stops
-at the final delivery boundary without push or PR; publication/review requires separate owner
-authorization. No live provider, deployment or further feature is added. T041 remains human-only,
-and T042 explicitly records its absence rather than claiming the entire feature is accepted.
+slice 4 starts from merged main, not the aggregate branch, which remains preserved. Its separately
+authorized publication/review is PR #22; no merge, live provider, deployment or further feature is
+added. T041 remains human-only and unchecked, with the functional report and UI/UX concerns
+recorded separately rather than claiming unconditional feature acceptance.
 
 ---
 
