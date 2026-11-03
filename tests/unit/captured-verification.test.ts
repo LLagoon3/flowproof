@@ -205,6 +205,80 @@ describe('captured verification reduction', () => {
     }
   })
 
+  // Every terminal result is also contract-valid: a passing baseline check cites the before
+  // evidence and a passing replay check the after evidence, whatever the run's termination. A
+  // missing reference turns the passing check into its existing evidence failure, never a pass.
+  const MISSING_EVIDENCE = [
+    [null, AFTER],
+    [BEFORE, null],
+    [null, null],
+  ] as const
+  const TERMINAL = [
+    ['completed', null],
+    ['error', 'VERIFICATION_ERROR'],
+    ['timeout', 'RUN_TIMEOUT'],
+    ['interrupted', 'RUN_INTERRUPTED'],
+  ] as const
+
+  it.each(TERMINAL.flatMap(([termination, reason]) => MISSING_EVIDENCE.map(([before, after]) => [termination, reason, before, after] as const)))(
+    'a run ending as %s with missing evidence fails the passing evidence-dependent checks and stays contract-valid (%#)',
+    async (termination, terminalReason, before, after) => {
+      const mod = await contracts()
+      const reduction = mod.reduceCapturedVerification({ checks: passing(mod), termination, before_evidence: before, after_evidence: after, cleanup: CLEAN })
+      const byId = (id: string) => reduction.checks.find((check) => check.check_id === id)
+      if (before === null) expect(byId('baseline_reproduced')).toMatchObject({ status: 'fail', reason_code: 'BASELINE_EVIDENCE_INCOMPLETE', evidence_ids: [] })
+      else expect(byId('baseline_reproduced')).toMatchObject({ status: 'pass', reason_code: 'BASELINE_REPRODUCED' })
+      for (const id of ['dataset_matches', 'canvas_matches']) {
+        if (after === null) expect(byId(id)).toMatchObject({ status: 'fail', reason_code: 'REPLAY_EVIDENCE_INCOMPLETE', evidence_ids: [] })
+        else expect(byId(id)?.status).toBe('pass')
+      }
+      for (const id of ['input_valid', 'application_complete', 'build_passed', 'tests_passed', 'secret_scan_clean', 'cleanup_complete', 'original_unchanged']) {
+        expect(byId(id)?.status).toBe('pass')
+      }
+      expect(reduction.status).not.toBe('passed')
+      expect(reduction.reason_code).toBe(terminalReason ?? (before === null ? 'BASELINE_NOT_CONFIRMED' : 'CANDIDATE_FAILED'))
+      const parsed = mod.parseCapturedVerificationResult(envelope(reduction, { before, after }, CLEAN))
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true)
+    },
+  )
+
+  it('keeps non-passing evidence-dependent reasons and cleanup facts when evidence is missing', async () => {
+    const mod = await contracts()
+    const reported = replace(
+      replace(without(passing(mod), 'canvas_matches'), mod.capturedCheck('baseline_reproduced', 'BASELINE_NOT_REPRODUCED')),
+      mod.capturedCheck('dataset_matches', 'DATASET_MISMATCH'),
+    )
+    const incomplete: CleanupFacts = { complete: false, remaining_owned_resources: ['worktree'], original_unchanged: false, original_mismatches: ['snapshot'] }
+    for (const [termination, outcome] of [
+      ['completed', 'BASELINE_NOT_CONFIRMED'],
+      ['error', 'VERIFICATION_ERROR'],
+      ['timeout', 'RUN_TIMEOUT'],
+      ['interrupted', 'RUN_INTERRUPTED'],
+    ] as const) {
+      const reduction = mod.reduceCapturedVerification({ checks: reported, termination, before_evidence: null, after_evidence: null, cleanup: incomplete })
+      expect(reduction.reason_code).toBe(outcome)
+      expect(reduction.checks.map((check) => [check.check_id, check.reason_code])).toEqual([
+        ['input_valid', 'INPUT_ADMITTED'],
+        ['baseline_reproduced', 'BASELINE_NOT_REPRODUCED'],
+        ['application_complete', 'APPLICATION_COMPLETE'],
+        ['build_passed', 'BUILD_PASSED'],
+        ['tests_passed', 'TESTS_PASSED'],
+        ['dataset_matches', 'DATASET_MISMATCH'],
+        ['canvas_matches', 'CHECK_NOT_EVALUATED'],
+        ['secret_scan_clean', 'SECRET_SCAN_CLEAN'],
+        ['cleanup_complete', 'CLEANUP_INCOMPLETE'],
+        ['original_unchanged', 'ORIGINAL_INTEGRITY_UNVERIFIED'],
+      ])
+      expect(mod.parseCapturedVerificationResult(envelope(reduction, { before: null, after: null }, incomplete)).ok).toBe(true)
+    }
+
+    // Missing replay evidence alone fails the replay checks before cleanup in canonical order.
+    const leaked = mod.reduceCapturedVerification({ checks: passing(mod), termination: 'completed', before_evidence: BEFORE, after_evidence: null, cleanup: incomplete })
+    expect(leaked).toMatchObject({ status: 'failed', reason_code: 'CANDIDATE_FAILED' })
+    expect(leaked.checks.find((check) => check.check_id === 'cleanup_complete')).toMatchObject({ status: 'fail', reason_code: 'CLEANUP_INCOMPLETE' })
+    expect(mod.parseCapturedVerificationResult(envelope(leaked, { before: BEFORE, after: null }, incomplete)).ok).toBe(true)
+  })
+
   it('lets cleanup or integrity failure override otherwise-passing checks', async () => {
     const mod = await contracts()
     const incomplete: CleanupFacts = { complete: false, remaining_owned_resources: ['worktree'], original_unchanged: true, original_mismatches: [] }

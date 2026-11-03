@@ -346,8 +346,12 @@ export type CapturedParseResult =
   | { readonly ok: true; readonly value: CapturedVerificationResult }
   | { readonly ok: false; readonly error: { readonly code: 'CONTRACT_INVALID' | 'SCHEMA_VERSION_UNSUPPORTED'; readonly issues: readonly CapturedContractIssue[] } }
 
+/** Fields whose keys are untrusted record input; an issue path stops at the field itself. */
+const RECORD_FIELDS: ReadonlySet<PropertyKey> = new Set(['metrics'])
+
 function toIssue(issue: z.core.$ZodIssue): CapturedContractIssue {
-  const path = issue.path.map(String).join('.') || '(root)'
+  const record = issue.path.findIndex((segment) => RECORD_FIELDS.has(segment))
+  const path = (record === -1 ? issue.path : issue.path.slice(0, record + 1)).map(String).join('.') || '(root)'
   const custom = issue.code === 'custom' ? (issue.params as { code?: unknown } | undefined)?.code : undefined
   const code = typeof custom === 'string' && REASON_CODE_PATTERN.test(custom) ? custom : issue.code.toUpperCase()
   return Object.freeze({ path, code })
@@ -355,7 +359,7 @@ function toIssue(issue: z.core.$ZodIssue): CapturedContractIssue {
 
 /**
  * Parses untrusted input against the captured family. Errors carry only field paths and stable
- * codes: never the rejected value, the library message, or unrecognized key names.
+ * codes: never the rejected value, the library message, unrecognized key names, or metric keys.
  */
 export function parseCapturedVerificationResult(input: unknown): CapturedParseResult {
   if (typeof input === 'object' && input !== null && 'schema_version' in input && (input as { schema_version: unknown }).schema_version !== CAPTURED_SCHEMA_VERSION) {
@@ -424,6 +428,20 @@ function factChecks(cleanup: CapturedCleanupFacts): readonly [CapturedCheck, Cap
   return [capturedCheck('cleanup_complete', facts.complete ? 'CLEANUP_COMPLETE' : 'CLEANUP_INCOMPLETE'), capturedCheck('original_unchanged', integrity)]
 }
 
+/**
+ * A passing evidence-dependent check needs its same-run evidence reference. Without it the check
+ * reports its existing evidence failure and cites no evidence, so no terminal result can carry a
+ * pass that the result contract rejects.
+ */
+function evidenceChecked(check: CapturedCheck, input: CapturedReductionInput): CapturedCheck {
+  if (check.status !== 'pass') return check
+  if (check.check_id === 'baseline_reproduced' && input.before_evidence === null) return capturedCheck(check.check_id, 'BASELINE_EVIDENCE_INCOMPLETE')
+  if ((check.check_id === 'dataset_matches' || check.check_id === 'canvas_matches') && input.after_evidence === null) {
+    return capturedCheck(check.check_id, 'REPLAY_EVIDENCE_INCOMPLETE')
+  }
+  return check
+}
+
 const outcome = (reason: CapturedOutcomeReason): Pick<CapturedReduction, 'status' | 'reason_code' | 'message'> => ({
   status: CAPTURED_OUTCOME_REASONS[reason][0],
   reason_code: reason,
@@ -432,8 +450,9 @@ const outcome = (reason: CapturedOutcomeReason): Pick<CapturedReduction, 'status
 
 /**
  * Reduces evaluated checks to the final outcome. A passing result requires all ten checks to pass,
- * with required evidence and complete cleanup. Failed input/checks are `failed`; operational
- * inability, including a partial report, is `error`; timeout and close are `interrupted`.
+ * with required evidence and complete cleanup; a passing check whose evidence is missing fails.
+ * Failed input/checks are `failed`; operational inability, including a partial report, is `error`;
+ * timeout and close are `interrupted`.
  */
 export function reduceCapturedVerification(input: CapturedReductionInput): CapturedReduction {
   const reported = new Map<CapturedCheckId, CapturedCheck>()
@@ -448,7 +467,8 @@ export function reduceCapturedVerification(input: CapturedReductionInput): Captu
     CAPTURED_CHECK_IDS.map((id) => {
       if (id === 'cleanup_complete') return cleanupCheck
       if (id === 'original_unchanged') return integrityCheck
-      return reported.get(id) ?? capturedCheck(id, 'CHECK_NOT_EVALUATED')
+      const check = reported.get(id)
+      return check === undefined ? capturedCheck(id, 'CHECK_NOT_EVALUATED') : evidenceChecked(check, input)
     }),
   )
   const allPass = checks.every((check) => check.status === 'pass') && input.before_evidence !== null && input.after_evidence !== null

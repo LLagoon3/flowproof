@@ -197,6 +197,44 @@ describe('captured verification result contract', () => {
     expect(JSON.stringify(result)).not.toContain(secretish)
   })
 
+  // A metric key is untrusted record input: a rejection names the check's metrics field only,
+  // never the key itself, whether the key or its value is the invalid part.
+  it.each([
+    ['an invalid host-path key', { '/tmp/synthetic-private-marker': true }, ['/tmp/synthetic-private-marker']],
+    ['an invalid home-path key with a text value', { '/home/fp-private/FPCONTRACTMETRICKEY000002': 'FPCONTRACTMETRICVALUE000002' }, ['FPCONTRACTMETRICKEY000002', 'FPCONTRACTMETRICVALUE000002', '/home/fp-private']],
+    ['a valid-form secret key with a text value', { fpcontractmetrickey000003: 'FPCONTRACTMETRICVALUE000003' }, ['fpcontractmetrickey000003', 'FPCONTRACTMETRICVALUE000003']],
+    ['a valid-form secret key with an object value', { fpcontractmetrickey000004: { nested: '/tmp/fp-nested-marker' } }, ['fpcontractmetrickey000004', '/tmp/fp-nested-marker', 'nested']],
+    ['too many valid-form secret keys', Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`fpcontractmetrickey00000${i}`, i])), ['fpcontractmetrickey']],
+  ])('reports %s at the metrics field without its key or value', async (_label, metrics, secrets) => {
+    const { parseCapturedVerificationResult } = await contracts()
+    for (const index of [0, 5]) {
+      const invalid = clone(fixture('captured-verification-result.valid-passed'))
+      const checks = invalid.checks as Record<string, unknown>[]
+      checks[index] = { ...checks[index], metrics }
+      const result = parseCapturedVerificationResult(invalid)
+      const serialized = JSON.stringify(result)
+      for (const secret of secrets) expect(serialized).not.toContain(secret)
+      expect(rejectedPaths(result)).toContain(`checks.${index}.metrics`)
+      if (result.ok) continue
+      for (const issue of result.error.issues) {
+        expect(Object.keys(issue).sort()).toEqual(['code', 'path'])
+        expect(issue.path).toMatch(/^(?:\(root\)|[a-z_]+(?:\.(?:[a-z_]+|[0-9]+))*)$/)
+        expect(issue.path.startsWith(`checks.${index}.metrics.`)).toBe(false)
+        expect(issue.code).toMatch(/^[A-Z][A-Z0-9_]*$/)
+      }
+    }
+  })
+
+  it('keeps accepting valid numeric, boolean, and null metrics', async () => {
+    const { parseCapturedVerificationResult } = await contracts()
+    const valid = clone(fixture('captured-verification-result.valid-passed'))
+    const metrics = { expected_rows: 4, ratio: 0.5, matched: true, skipped: false, first_mismatch_index: null }
+    ;(valid.checks as Record<string, unknown>[])[5] = { ...(valid.checks as Record<string, unknown>[])[5], metrics }
+    const result = parseCapturedVerificationResult(valid)
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    if (result.ok) expect((result.value.checks as Record<string, unknown>[])[5]?.metrics).toEqual(metrics)
+  })
+
   it.each([...VALID, ...INVALID.map(([name]) => name)])('the unchanged legacy parseRunResult rejects %s', (name) => {
     expect(parseRunResult(fixture(name)).ok).toBe(false)
   })
