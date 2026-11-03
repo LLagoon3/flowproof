@@ -231,18 +231,20 @@
   const CAPTURED_IDENTITY = { digest: 'a41c9e07b2d5', baseline: '5d0b7e3f91a2' }
 
   /** One presented state: the run, its accepted events, stream availability and any bound result. */
-  function snapshot(mode, view) {
+  function snapshot(mode, view, legacyCase) {
     if (mode === 'legacy') {
-      if (view === 'unsuccessful') return { mode, view, runId: 'run-sim-legacy-citation', caseId: 'citation', events: LEGACY_CITATION_EVENTS, stream: 'ended', result: LEGACY_UNVERIFIED }
-      const cut = { ready: 0, active: 8, finalizing: 20, disconnected: 15, successful: 21 }[view]
+      const citation = legacyCase === 'citation'
+      const final = isFinal(view)
+      const events = citation ? LEGACY_CITATION_EVENTS : LEGACY_HERO_EVENTS
+      const cut = { ready: 0, active: 8, finalizing: citation ? 13 : 20, disconnected: citation ? 9 : 15 }[view]
       return {
         mode,
         view,
-        runId: view === 'ready' ? null : 'run-sim-legacy-hero',
-        caseId: 'hero',
-        events: LEGACY_HERO_EVENTS.slice(0, cut),
-        stream: view === 'disconnected' ? 'disconnected' : view === 'successful' ? 'ended' : 'open',
-        result: view === 'successful' ? LEGACY_VERIFIED : null,
+        runId: view === 'ready' ? null : `run-sim-legacy-${legacyCase}`,
+        caseId: legacyCase,
+        events: final ? events : events.slice(0, cut),
+        stream: view === 'disconnected' ? 'disconnected' : final ? 'ended' : 'open',
+        result: final ? (citation ? LEGACY_UNVERIFIED : LEGACY_VERIFIED) : null,
       }
     }
     if (view === 'unsuccessful') return { mode, view, runId: 'run-sim-captured-wrong', caseId: null, events: CAPTURED_FAIL_EVENTS, stream: 'ended', result: CAPTURED_FAILED }
@@ -642,7 +644,7 @@
     skipToPanel: $('.skip-link[href="#work-panel"]'),
   }
 
-  let current = snapshot(ui.mode, ui.view)
+  let current = snapshot(ui.mode, ui.view, ui.legacyCase)
 
   const note = (text) => {
     dom.note.textContent = text
@@ -665,11 +667,14 @@
   function renderContext() {
     const snap = current
     if (snap.mode === 'legacy') {
-      const caseId = snap.view === 'ready' ? ui.legacyCase : snap.caseId
+      const caseId = snap.caseId
       const locked = snap.view !== 'ready'
       const select = el(
         'select',
-        { id: 'case-picker', class: 'select', disabled: locked, 'aria-describedby': locked ? 'case-locked' : undefined, 'data-focus-key': 'case-picker', onchange: (changeEvent) => { ui.legacyCase = changeEvent.target.value } },
+        { id: 'case-picker', class: 'select', disabled: locked, 'aria-describedby': locked ? 'case-locked' : undefined, 'data-focus-key': 'case-picker', onchange: (changeEvent) => {
+          ui.legacyCase = changeEvent.target.value
+          setState('legacy', 'ready', `Selected ${LEGACY_CASES[ui.legacyCase].label} (simulated).`)
+        } },
         Object.entries(LEGACY_CASES).map(([value, { label }]) => el('option', { value, selected: value === caseId }, label)),
       )
       fill(
@@ -1004,7 +1009,7 @@
 
   function renderAll({ resetHistory = false } = {}) {
     const focusKey = focusKeyOf(document.activeElement)
-    current = snapshot(ui.mode, ui.view)
+    current = snapshot(ui.mode, ui.view, ui.legacyCase)
     renderControls()
     renderContext()
     renderStatus()
@@ -1021,9 +1026,10 @@
 
   function setState(mode, view, message) {
     ui.mode = mode
-    ui.view = view
+    // Returning from the other mode retains this case's outcome, not its final-state example.
+    ui.view = mode === 'legacy' && isFinal(view) ? (ui.legacyCase === 'citation' ? 'unsuccessful' : 'successful') : view
     renderAll({ resetHistory: true })
-    note(message ?? `Showing ${MODE_NAMES[mode]} · ${VIEW_NAMES[view]} (simulated).`)
+    note(message ?? `Showing ${MODE_NAMES[mode]} · ${VIEW_NAMES[ui.view]} (simulated).`)
   }
 
   function simulateStart() {
@@ -1183,7 +1189,14 @@
   )
   document.querySelectorAll('input[name="view"]').forEach((input) =>
     input.addEventListener('change', () => {
-      if (input.checked) setState(ui.mode, input.value)
+      if (!input.checked) return
+      let message
+      if (ui.mode === 'legacy' && isFinal(input.value)) {
+        const caseId = input.value === 'successful' ? 'hero' : 'citation'
+        if (ui.legacyCase !== caseId) message = `Showing the ${VIEW_NAMES[input.value].toLowerCase()} example: prepared case changed to ${LEGACY_CASES[caseId].label} (simulated).`
+        ui.legacyCase = caseId
+      }
+      setState(ui.mode, input.value, message)
     }),
   )
 
