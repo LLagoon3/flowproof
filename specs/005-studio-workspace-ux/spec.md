@@ -4,13 +4,31 @@
 
 **Created**: 2026-11-03
 
-**Status**: Draft for owner review. Specify is authorized; this document does not record approval
-of its proposed defaults or authorize Plan, Tasks, implementation, push, or PR creation.
+**Status**: The owner accepted the proposed scope, workspace direction, and design-review
+sequence on 2026-11-03 and authorized the next planning stage. Plan is being prepared for owner
+review. Tasks, production implementation, push, and PR creation are not authorized by that approval.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements
 and requested a separate specification. Use conversation-plus-canvas references such as Claude
 Artifacts, Lovable, and v0 to make the result prominent and the AI's observable work understandable.
 Establish the core design system together with the improved workspace, not a standalone visual kit.
+
+## Clarifications
+
+### Session 2026-11-03
+
+- Q: Does the feature stop at design rules or a mockup? → A: Deliver the design preview, the
+  focused core design system, and its application to the real Studio, preserving existing functionality.
+- Q: What workspace direction should the design start from? → A: Work panel on the left and
+  a larger canvas on the right, one light appearance, desktop first, resizable/collapsible panels,
+  and detailed work/checks disclosed on demand.
+- Q: When should the owner review the actual visual direction? → A: Review a clickable design
+  preview before production UI replacement; the contributor proposes specific visual details.
+
+The owner accepted these recommendations together and requested the next stage (Coding message
+24880). No additional high-impact product ambiguity requires a new question before planning.
+The usability timings remain the specification's proposed acceptance targets; palette, typeface,
+component dimensions, and technical execution are Plan/design decisions rather than new product scope.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -199,9 +217,9 @@ inspect available before/after evidence and failed checks, and repeat the journe
 
 ## Assumptions
 
-- These are proposed defaults for owner review, not decisions inferred from the earlier
-  functional smoke test. Existing functionality was observed to work, but visual acceptance was
-  not granted. The usability time limits above are acceptance targets, not measured results.
+- The scope, workspace direction, and preview-first review sequence above were accepted by the
+  owner on 2026-11-03, separately from the earlier functional smoke test. No actual design preview
+  has been accepted yet. The usability time limits are acceptance targets, not measured results.
 - Desktop browser use is primary: check 1280 x 720 and 1920 x 1080 at 100% zoom, and 1280 x 720
   at 200% zoom. Compact layouts may rearrange the panes. Touch-first/mobile design is out of scope.
 - Start with one coherent light appearance and English product copy. Exact palette, typeface,
