@@ -113,6 +113,40 @@ is not evidence of a passing suite. These are focused feasibility checks, not co
   (application-fidelity portion).
 - Excluded: `capturedRun.ts`, process joining and `operationsJoined`, the editor fixture and Canvas
   producer, Studio server/client/UI, harness, launcher, and T035-T042.
-- Pending: the provider-seam compatibility conflict above is expected to apply to this branch
-  because the pinned-baseline session path reaches the four `editing/*` modules. The guard and
-  modules are unchanged. While it fails, slice 1 is not review- or merge-ready.
+- Product source is byte-identical to snapshot `8602163`; the product/test difference is 72
+  deleted lines. The extra blank lines at the end of `tests/unit/captured-verification.test.ts`
+  (1) and `tests/integration/captured-verification-git.test.ts` (2) were removed because they fail
+  `git diff --check`. The browser-port evidence double `persistPhase` and its six imports (69
+  lines) were removed from `tests/support/capturedCandidate.ts`: no slice 1 test uses it, and it
+  belongs with the slice 2 engine tests.
+
+### Slice 1 validation on this branch
+
+Measured at `88015db`, the last product commit; later commits change only these documents.
+
+| Check | Result |
+| --- | --- |
+| `check-prerequisites.sh --json --require-tasks --include-tasks` (feature directory set explicitly, not persisted) | exit 0 |
+| `checklists/requirements.md` | 16/16 checked, unchanged |
+| `pnpm install --offline --frozen-lockfile` | exit 0; dependency directories ignored, no tracked symlink |
+| `pnpm typecheck`, `pnpm build` | exit 0, exit 0 |
+| Slice 1 focused Vitest (4 files) | exit 0; 78 passed: contract 33, reducer 16, Git application 9, legacy `worktree.test.ts` 20 |
+| `pnpm test --no-file-parallelism --maxWorkers=1` under Xvfb | exit 1; 46 files, 1,339 tests: 1,338 passed, 1 failed, 0 skipped |
+| `playwright test --pass-with-no-tests`, headed Chromium under Xvfb | exit 0; 8 discovered, 8 passed |
+| `git diff --check` over `b2ed6ad..HEAD` | exit 0 |
+
+Full-suite projects: contract 9 files/314 tests, unit 21/594, ui 2/158, integration 14/273
+including the one failure. The new suites pass inside the full run with the focused counts above.
+
+- **Blocker, unresolved:** the only failure is the provider-seam guard
+  `editing runtime stays disconnected from the production Hero/Failure flow > is unreachable from
+  the CLI, run, and Studio entry points`, which reports `editing/{capture,captureGit,contracts,workspace}.ts`
+  (provider-seam: 23 passed, 1 failed). On this branch they are reached through
+  `worktree/session.ts` -> `worktree/capturedCandidate.ts`, which imports `editing/captureGit.ts`
+  (value import, required by T012) and `editing/capture.ts` (type-only import, which in turn names
+  `contracts.ts` and `workspace.ts`). The guard counts type-only imports; at runtime only
+  `captureGit.ts` is loaded. No `editing/*` module is reachable from these entry points on
+  `b2ed6ad`. The guard, the four modules and the architecture are unchanged; no test was weakened
+  or skipped. The narrow exception remains owner-pending, so slice 1 is not review- or
+  merge-ready.
+- No push, PR, review request, merge or deployment was performed.
