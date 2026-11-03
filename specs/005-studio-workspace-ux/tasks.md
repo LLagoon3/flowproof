@@ -4,8 +4,8 @@
 [data-model.md](./data-model.md), [UI contract](./contracts/workspace-ui.md), and
 [validation guide](./quickstart.md).
 
-**Status**: Tasks prepared after owner approval of the Plan direction on 2026-11-03. No task
-below is implemented or verified by task generation. Execution is one authorized slice at a time.
+**Status**: Tasks prepared after owner approval of the Plan direction on 2026-11-03. Analyze corrections were authorized on 2026-11-03; no task
+below is implemented or verified by documentation correction. Execution is one authorized slice at a time.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
 Use behavior-first regressions for risky product changes; the static design preview receives
@@ -20,7 +20,7 @@ another slice. All future paths below are proposed until their implementation ta
 **Goal**: Establish a small, portable preview boundary without changing the real application.
 
 - [ ] T001 Record the preview run instructions, allowed synthetic data, two modes, six SC-002 states and no-product-network constraint in `tests/manual/studio-design/README.md`; verify existing ignore rules without changing unrelated tooling (FR-003, FR-013).
-- [ ] T002 Define the seven-control-family visual inventory and review/verification record structure in `specs/005-studio-workspace-ux/design-system.md`, distinguishing proposed values, measured checks and actual owner acceptance (FR-010, SC-007).
+- [ ] T002 Define the seven-control-family (workspace shell, buttons, request field, tabs, status indicators, activity cards, disclosures) visual inventory and review/verification record structure in `specs/005-studio-workspace-ux/design-system.md`, distinguishing proposed values, measured checks and actual owner acceptance (FR-010, SC-007).
 
 ## Phase 2: Foundation — Isolated Clickable Design Preview
 
@@ -28,8 +28,8 @@ another slice. All future paths below are proposed until their implementation ta
 This checkpoint is a design foundation for all stories, not proof of any production story's completion.
 
 - [ ] T003 Build the labelled `Design preview — simulated data` canvas-first shell in `tests/manual/studio-design/index.html` and `tests/manual/studio-design/preview.css`, with left work panel, right larger canvas, light appearance, English copy and compact reflow; no live iframe or product endpoint (FR-001, FR-009-FR-012).
-- [ ] T004 Add mode/state switching, work-card disclosures, result and before/after examples, missing/unreadable evidence states, request draft and panel resize/collapse/restore in `tests/manual/studio-design/preview.js`; all actions alter synthetic presentation only (FR-002-FR-009).
-- [ ] T005 Measure browser rendering, keyboard/focus behavior, text/control contrast, the specified desktop/200%-zoom matrix and compact layout for the preview in `tests/manual/studio-design/`; record observed outcomes and screenshot locations in `tests/manual/studio-design/README.md` (FR-011, FR-012, SC-005).
+- [ ] T004 Add mode/state switching, work-card disclosures, result and before/after examples, missing/unreadable evidence states, request draft and panel resize/collapse/restore in `tests/manual/studio-design/preview.js`; include the external updating collapsed-status/result entry, hidden compact-width separator and legacy target/evidence tab behavior; all actions alter synthetic presentation only (FR-002-FR-009).
+- [ ] T005 Measure browser rendering, keyboard/focus behavior, text/control contrast, the specified desktop matrix and separate native 200%-zoom procedure from `specs/005-studio-workspace-ux/quickstart.md`, plus compact layout for the preview in `tests/manual/studio-design/`; record observed outcomes and screenshot locations in `tests/manual/studio-design/README.md` (FR-011, FR-012, SC-005).
 - [ ] T006 Correct preview defects found by T005 in `tests/manual/studio-design/index.html`, `tests/manual/studio-design/preview.css` and `tests/manual/studio-design/preview.js`; rerun the affected checks and record the final proposed tokens/control states in `specs/005-studio-workspace-ux/design-system.md` (FR-010-FR-012).
 - [ ] T007 Serve the independent files using the portable instructions in `tests/manual/studio-design/README.md`, provide the owner a review location, and record the exact reviewed source revision; no production deployment or repository-specific hosted service is required (SC-007).
 - [ ] T008 Record the owner's actual hierarchy/density/balance decision and any revisions in `specs/005-studio-workspace-ux/design-system.md`; keep this unchecked while feedback is pending or negative, and do not start production UI replacement without accepted direction (SC-007).
@@ -46,11 +46,11 @@ panel without losing a draft, run, frame identity, focus accessibility or select
 ### Tests before risky integration
 
 - [ ] T009 [US1] Add failing preservation and mode-boundary cases in `tests/ui/workspace-presentation.test.ts`, keeping current `tests/ui/state.test.ts` and `tests/ui/captured-verification.test.ts` acceptance assertions intact (FR-002, FR-003, FR-013).
-- [ ] T010 [P] [US1] Add failing real-browser workspace cases in `tests/e2e/workspace-ux.spec.ts` for same iframe element/frame, no reload or duplicate start, pending reads through collapse, keyboard resize/restore and zoom/reflow; use the existing harness rather than a second browser/runtime (FR-001, FR-002, FR-011-FR-013).
+- [ ] T010 [P] [US1] Add failing real-browser workspace cases in `tests/e2e/workspace-ux.spec.ts` for same iframe element/frame, no reload or duplicate start, pending reads through collapse, keyboard resize/restore, 100% viewport reflow, updating collapsed status/result access, and captured resize/collapse during guarded measurement against a matched control (same outcomes, screenshot dimensions and within-run evidence bindings); native 200% zoom is a separate agent check under T015, not a Playwright zoom API; use the existing harness rather than a second browser/runtime (FR-001, FR-002, FR-011-FR-013).
 
 ### Implementation and boundary verification
 
-- [ ] T011 [US1] Implement `apps/studio/src/components/WorkspaceShell.tsx` and local workspace selection in `apps/studio/src/presentation.ts`: `panelWidthStep` is "one of seven integer width choices, default the 24rem choice" and `panelCollapsed` is "boolean; never means run cancellation or event unsubscription"; no persistence or execution-reducer changes (FR-002).
+- [ ] T011 [US1] Implement `apps/studio/src/components/WorkspaceShell.tsx` and local workspace selection in `apps/studio/src/presentation.ts`: `panelWidthStep` is "one of seven integer width choices, default the 24rem choice" and `panelCollapsed` is "boolean; never means run cancellation or event unsubscription"; keep an external updating compact status/result restore entry and hide/unfocus the width separator in stacked layout while retaining its width choice; no persistence or execution-reducer changes (FR-002).
 - [ ] T012 [US1] Apply the accepted color/type/space/surface/focus rules and applicable control states in `apps/studio/src/styles.css`, referencing `specs/005-studio-workspace-ux/design-system.md`; bounded widths use self-hosted CSS classes, with no new dependency, external font or CSP exception (FR-010-FR-012).
 - [ ] T013 [US1] Integrate the stable shell in `apps/studio/src/App.tsx` without alternate layout trees or target reparenting; keep the keyed live wrapper in `apps/studio/src/components/TargetPane.tsx` and mounted work/read owners intact through panel changes (FR-001, FR-002, FR-009, FR-013).
 - [ ] T014 [US1] Adapt the existing case picker/request and fixed-candidate entry surfaces in `apps/studio/src/App.tsx`, `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/CapturedVerification.tsx` to the shared controls; preserve bounded request, one-run admission and no-chat captured mode (FR-003, FR-005, FR-013).
@@ -66,13 +66,13 @@ presentation still functioning. Stop; do not incorporate the activity or evidenc
 **Independent test**: Feed both modes' accepted event/result sequences to pure selectors and inspect
 the panel in a browser, including disconnected activity, unavailable results and focused earlier work.
 
-- [ ] T017 [US2] Add failing grouping/precedence cases in `tests/ui/workspace-presentation.test.ts`: ordered contiguous groups, exact observed finalizing markers and drift fallback, no pass from stream end, result-unavailable vs failed verification, final-result precedence and late events (FR-004-FR-006).
-- [ ] T018 [US2] Extend `apps/studio/src/presentation.ts` with mode-aware `WorkCardView`/`RunPresentation`; `phase` is "existing phase when present; an unknown phase is not invented" and final `verdict` is "absent until a valid bound final result, then the unchanged family-specific verdict" (FR-004, FR-005, FR-013).
+- [ ] T017 [US2] Add failing grouping/precedence cases in `tests/ui/workspace-presentation.test.ts`: ordered contiguous groups, exact observed finalizing markers and drift fallback; add a failing real-producer finalizing-card case in `tests/e2e/workspace-ux.spec.ts` before integration (passed in T021, not proved by copied strings alone), no pass from stream end, result-unavailable vs failed verification, final-result precedence and late events (FR-004-FR-006).
+- [ ] T018 [US2] Extend `apps/studio/src/presentation.ts` with mode-aware `WorkCardView`/`RunPresentation`; `phase` is "existing phase when present; an unknown phase is not invented" and final `verdict` is "absent until a valid bound final result, then the unchanged family-specific verdict"; retain raw phase in details when the card label is `Finalizing`, without engine exports (FR-004, FR-005, FR-013).
 - [ ] T019 [US2] Build `apps/studio/src/components/WorkTimeline.tsx` with stable run/first-sequence card IDs and retained disclosures; `expandedWorkIds` is a "set of stable work-card identities; disclosures survive new activity and collapse" and `followingLatest` is "whether the reader is at the latest work; new events do not force this to true" (FR-004, FR-006).
 - [ ] T020 [US2] Integrate the timeline/state guidance in `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/CapturedVerification.tsx`, remove last-40-events-only rendering, preserve all accepted details, and show only supported start/close/relaunch guidance rather than new cancel/retry/resume actions (FR-004-FR-006, FR-013).
-- [ ] T021 [US2] Add and pass browser regressions in `tests/e2e/workspace-ux.spec.ts` for earlier-card focus/scroll preservation, latest-work affordance, mounted reads through collapse and result arrival without closing details; no forced scrolling or focus theft (FR-002, FR-006).
+- [ ] T021 [US2] Add and pass browser regressions in `tests/e2e/workspace-ux.spec.ts` for earlier-card focus/scroll preservation, latest-work affordance, mounted reads through collapse and result arrival without closing details; also assert finalizing cards from actual captured scan/cleanup producer events using bounded test-local barriers, released in `finally`, with raw phase retained; prepare named debug-only owner-review cases and real six-state captures per quickstart; no forced scrolling or focus theft (FR-002, FR-005, FR-006).
 - [ ] T022 [US2] Apply clear activity-connection warnings, concise live announcements and accessible work-card states in `apps/studio/src/components/WorkTimeline.tsx` and `apps/studio/src/styles.css`; pending or disconnected activity must not imply a verdict or unsupported live target (FR-004, FR-005, FR-009-FR-012).
-- [ ] T023 [US2] Run UI tests, workspace browser cases and existing headed compatibility suites per `specs/005-studio-workspace-ux/quickstart.md`; record results and separately identify pending six-state owner comprehension checks in `specs/005-studio-workspace-ux/tasks.md` (SC-002, SC-004-SC-006).
+- [ ] T023 [US2] Run UI tests, workspace browser cases and existing headed compatibility suites per `specs/005-studio-workspace-ux/quickstart.md`; produce the real-UI six-state screenshot manifest with case/run/event/result references using the quickstart sources; record results and separately identify pending six-state owner comprehension checks in `specs/005-studio-workspace-ux/tasks.md` (SC-002, SC-004-SC-006).
 
 **Checkpoint / slice 3**: Work presentation is independently reviewable with unchanged result/evidence
 consumption. Stop before the final comparison rewrite; UI grouping is not a new execution engine.
@@ -84,20 +84,20 @@ consumption. Stop before the final comparison rewrite; UI grouping is not a new 
 before/after evidence, and prove that captured final review never recreates its released target.
 
 - [ ] T024 [US3] Add failing family-specific summary/evidence cases in `tests/ui/workspace-presentation.test.ts`, retaining `tests/ui/proof-trail.test.ts` and `tests/ui/captured-verification.test.ts` coverage for exact IDs/manifests, provenance, all required rows, unavailable results and wrong-run rejection (FR-007-FR-009, FR-013).
-- [ ] T025 [P] [US3] Extend `tests/e2e/workspace-ux.spec.ts` with final summary/detail navigation, selection retention, missing/not-received/unreadable images and captured no-live-frame-after-finalization assertions (FR-007-FR-009).
+- [ ] T025 [P] [US3] Extend `tests/e2e/workspace-ux.spec.ts` with final summary/detail navigation, selection retention, missing/not-received/unreadable images and captured no-live-frame-after-finalization assertions, same legacy iframe/frame through final canvas evidence tabs, and named debug-only interactive owner-review cases for successful and unsuccessful/unevaluable results in both modes per quickstart (FR-007-FR-009).
 - [ ] T026 [US3] Implement result/comparison adapters in `apps/studio/src/presentation.ts`; `selectedEvidence` is "null or { runId, phase }, where phase is failure or replay" and resets only when its identity becomes invalid; retain nine legacy gates, ten captured checks and separate success claims (FR-007-FR-009).
 - [ ] T027 [US3] Implement `apps/studio/src/components/ResultSummary.tsx` with the exact authoritative verdict, safe explanation, visible unsuccessful/unevaluable checks and accessible detail entry points; captured mode has no invented diagnosis/provenance (FR-007, FR-011).
 - [ ] T028 [US3] Implement `apps/studio/src/components/EvidenceComparison.tsx` with phase/ID labels and distinct available, phase-not-produced, ID-not-received, loading and unreadable states; reuse existing closed reads and escaped text, with no raw-path route or cross-run cache (FR-008, FR-009, FR-013).
-- [ ] T029 [US3] Integrate final comparison in `apps/studio/src/App.tsx` and `apps/studio/src/components/TargetPane.tsx` without replacing the active measured target; retain captured guard/release and legacy target lifetime, and never recreate a target for review (FR-008, FR-009, FR-013).
+- [ ] T029 [US3] Integrate final comparison in `apps/studio/src/App.tsx` and `apps/studio/src/components/TargetPane.tsx` without replacing the active measured target; use final legacy canvas target/evidence tabs that hide/inert the original wrapper without unmounting it; keep one stable artifact owner, retain captured guard/release and legacy target lifetime, and never recreate a target for review (FR-008, FR-009, FR-013).
 - [ ] T030 [US3] Preserve legacy provenance/diff and captured identity/cleanup detail access in `apps/studio/src/components/ProofTrail.tsx` and `apps/studio/src/components/CapturedVerification.tsx`; keep one stable artifact-loading owner and disclosure state through unrelated updates (FR-007-FR-009, FR-013).
-- [ ] T031 [US3] Pass both-mode UI/browser checks and rendered contrast/keyboard/zoom checks in `tests/ui/workspace-presentation.test.ts` and `tests/e2e/workspace-ux.spec.ts`; verify final verdict and selected evidence do not change on late activity or panel changes (SC-003-SC-006).
+- [ ] T031 [US3] Pass both-mode UI/browser checks in `tests/ui/workspace-presentation.test.ts` and `tests/e2e/workspace-ux.spec.ts`, plus rendered contrast/keyboard checks and the separate native-zoom procedure in quickstart; verify final verdict and selected evidence do not change on late activity or panel changes (SC-003-SC-006).
 
 ## Phase 6: Polish and Final Cross-Cutting Verification
 
 These tasks are included in slice 4, not an unrelated fifth PR or a new product feature.
 
 - [ ] T032 Run the full typecheck/build/Vitest/headed commands from `specs/005-studio-workspace-ux/quickstart.md`, retaining all existing failure/load/interruption/cleanup/secret-safety assertions and comparing exact source revision, dependencies and CSP; record observed results in `specs/005-studio-workspace-ux/tasks.md` (FR-013, SC-006).
-- [ ] T033 Record the final visual inventory and actual owner SC-001/SC-003 start/result timings, six SC-002 state answers and SC-007 hierarchy/density/balance feedback in `specs/005-studio-workspace-ux/design-system.md`; separate mechanical checks from human acceptance and keep unresolved feedback explicit (SC-001-SC-003, SC-007).
+- [ ] T033 Record the final visual inventory and actual interactive real-Studio SC-001/SC-003 start/result timings in both modes (including unsuccessful/unevaluable results), six SC-002 real-UI screenshot state answers and SC-007 hierarchy/density/balance feedback in `specs/005-studio-workspace-ux/design-system.md`; separate mechanical checks from human acceptance and keep unresolved feedback explicit (SC-001-SC-003, SC-007).
 
 **Checkpoint / slice 4**: Real result/evidence UX and final compatibility evidence are ready for review.
 Do not mark owner acceptance complete without the owner's actual observations. Any remaining
@@ -142,7 +142,8 @@ merges, using the same feature number. No task group silently combines all produ
 
 1. T001-T002 establish the portable preview contract and inventory; T003-T004 implement it.
    T005 verifies it, T006 corrects/rechecks and records the design, T007 delivers the reviewed revision,
-   T008 records actual visual acceptance. Pending/negative T008 blocks production replacement.
+   T008 records actual visual acceptance. Partial/negative feedback loops through T004-T007 and
+   renewed review; T008 stays unchecked until accepted. Pending/negative T008 blocks production replacement.
 2. US1 requires slice 1 acceptance. T009/T010 define behavior before T011-T014 change production;
    T015/T016 verify the independently usable shell. No backend or project-runner foundation is needed.
 3. US2 reuses the stable shell but is selector-testable without running US3; T017 precedes T018-T022,
@@ -199,6 +200,9 @@ US2 and US3 each improve it while preserving its working baseline. No general co
 new wire schema, runtime enum, public endpoint, live model call or stored preference is required.
 
 Commit each reviewable unit with its relevant behavior checks, rather than a commit per checkbox.
-Leave tasks unchecked until supporting work and verification exist. Record exact tested revision,
+Leave tasks unchecked until supporting work and verification exist. Use ignored
+`test-results/studio-workspace-ux/` for binary evidence and the quickstart evidence manifest. Commit
+implementation first, test that clean commit, then record its full SHA in a separate results-only
+commit (the tested revision is the results commit parent, not a self-reference). Record exact tested revision,
 commands/results, screenshots and owner feedback at the appropriate checkpoint. The task-generation
 format/coverage review is not implementation evidence and cannot check off T001-T033.

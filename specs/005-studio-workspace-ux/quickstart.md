@@ -64,17 +64,51 @@ Check same iframe element/frame through panel resizing, collapse/restore and res
 no start re-submission, iframe reload, or unnecessary artifact reload. Preserve draft and selections,
 keyboard resize/restore, hidden-panel focus exclusion, and existing production CSP.
 
-Run the layout matrix at 1280 x 720 and 1920 x 1080 at 100%, and 1280 x 720 at actual 200% browser
-zoom. Use browser zoom controls and record the effective viewport; CSS transforms, pinch scaling,
-`deviceScaleFactor`, or smaller viewport dimensions alone are not substitutes. The agent can perform
-this mechanical browser check; do not ask the owner to repeat it. Keep the fixed measured chart
-unchanged; local target scrolling is allowed while outer-page controls remain reachable.
+### Reproducible Size and Zoom Matrix (also applies to T005)
+
+The launcher currently fixes Studio to the scenario's 1280 x 800 viewport at device scale 1.
+Changing its OS window alone does not test the requested sizes. Do not change the launcher or
+scenario for this feature, and do not request Playwright's built-in page/browser fixtures.
+
+1. At 100%, the new workspace test uses the existing harness's actual `page.setViewportSize`
+   with 1280 x 720 and 1920 x 1080. Record `innerWidth`, `innerHeight`, zoom, and screenshots.
+   This is an explicit viewport override for layout, not proof of actual browser zoom.
+2. For the actual zoom check, retain that same launcher-owned page/browser on a visible desktop.
+   A test-only CDP session from `page.context().newCDPSession(page)` calls
+   `Emulation.clearDeviceMetricsOverride`; use `Browser.getWindowForTarget` and
+   `Browser.setWindowBounds` to restore normal native-window sizing. At native 100% zoom, adjust
+   window bounds until the measured content area (`innerWidth`/`innerHeight`) is 1280 x 720.
+   Do not replace the context/page or change the target frame. This procedure is mechanical review,
+   not part of the default unattended Playwright suite.
+3. With the outer window unchanged, use OS-delivered browser shortcuts/menu to set actual 200%
+   zoom. Capture the browser's visible 200% indicator and effective CSS viewport (approximately
+   640 x 360, allowing browser rounding). Check reflow, focus, primary/result/evidence/restore
+   controls, and absence of page-wide horizontal overflow; keep the chart at 640 x 360 with local
+   scrolling. Restore 100% and original test viewport afterward, then close only owned resources.
+4. Record browser version, pre/post dimensions, the native zoom indicator and observed outcomes.
+   If CDP/native zoom cannot produce the measured state, record a blocked check, not a pass or
+   an emulated substitute. A required launcher change returns to owner design review.
+
+For the static preview, use its ordinary visible browser page without viewport emulation, size
+the content area at 100%, then follow steps 3-4. CSS transforms, pinch scaling, device scale or
+smaller viewports alone are never 200%-zoom evidence. The agent performs these mechanical checks;
+the owner need not repeat them. In stacked layout the width separator is hidden/unfocusable but
+collapse/restore remains. A collapsed panel's external status must update through final result arrival.
+
+During captured baseline and candidate measurement, change panel width and collapse/restore in
+the real E2E. Compare with a matched control: same verdict/checks, 640 x 360 screenshot dimensions,
+and valid unchanged within-run evidence binding. Different runs may generate different evidence
+IDs. Assert same iframe/frame, no extra navigation/start and unchanged guards throughout.
 
 ## Slice 3: Work-State Presentation
 
 Repeat the UI and workspace browser suites. Include event order, contiguous groups, exact observed
 finalizing markers, finalizing-marker drift fallback, stream disconnect without execution failure,
 result-read failure without a verdict, authoritative result precedence, and late events after result.
+At actual captured scan and cleanup barriers, assert that producer events render the finalizing
+card before the authoritative result is exposed; details retain raw phase. Use bounded test-local
+barriers released in `finally`, without changing engine exports, budgets or production options.
+Copied selector fixtures alone cannot establish producer-string drift coverage.
 
 Focus an older card and scroll away from the end, append work, and verify no removal, forced
 scroll, or focus theft. Collapse and restore while a detail read is pending; it must not cancel
@@ -110,6 +144,43 @@ recorded design preview. Close the session normally after review and inspect its
 The agent checks processes/worktrees/port/integrity; the owner checks comprehension and visual feel.
 For legacy success use the existing recorded Hero browser harness rather than launch a live API call.
 
+### Real-UI Owner Acceptance Material
+
+Extend `tests/e2e/workspace-ux.spec.ts` in T021/T023/T025, using existing support harnesses and
+test-local request/transport barriers. These are planned test cases, not existing manual launcher
+options. The manual captured launcher remains pass-only. Do not add a product fault-injection
+feature, server endpoint, engine delay or new manual launcher case.
+
+| Check / state | Reproducible real-UI source | Owner presentation |
+| --- | --- | --- |
+| SC-001, both ready modes | Existing recorded Hero harness and captured pass harness, before start | Interactive actual primary action, no verbal coaching; timed per mode. |
+| SC-002 ready / active | Same harnesses; observe actual admission/phase events | Unaltered state screenshots with test revision/mode, not annotated answers. |
+| SC-002 finalizing | Actual captured scan/cleanup events; bounded test-local delivery/poll barriers while observing the real producer | Screenshot before valid final result is delivered; record raw event sequence and pending result assertion. |
+| SC-002 disconnected without result | Abort the real events request using the existing route pattern in `browser-close.spec.ts`; hold the test transport/result response until the warning is rendered | Screenshot with no final verdict; release routes/barriers in `finally`. |
+| SC-002 unsuccessful / successful final | Existing legacy failure/Hero and captured plausible-wrong/pass cases, actual persisted results | Screenshots tied to strict result/run IDs; success comes only from the result. |
+| SC-003 successful and unsuccessful/unevaluable, both modes | Existing Hero and rejected-citation legacy cases; captured pass and plausible-wrong/unevaluable cases | Interactive actual final shell, real stored or explicitly missing evidence and all gate/check details. |
+
+For SC-002 use these real Studio screenshots (all six states, with both modes represented), not
+simulated preview screenshots. Record the owner's answer/next action and elapsed time separately
+from the expected answer. Missing captures leave the criterion pending.
+
+For SC-001/SC-003, author named owner-review cases in the workspace E2E using the same harness
+setup and assertions, then run on the owner's visible desktop (not a hidden Xvfb display):
+
+```bash
+pnpm exec playwright test tests/e2e/workspace-ux.spec.ts --debug --grep owner-review
+```
+
+These prospective cases use test-local `page.pause()` before start for SC-001 and after verified
+final result/artifact availability for SC-003. The owner navigates the actual UI while the harness
+is retained. Pauses apply only in explicit debug review, not normal CI, and must never suspend
+engine measurement, cleanup, time budgets or active resources. Resume to run cleanup assertions in
+`finally`; captured target disposal must already be complete before final-shell review. Keep legacy
+iframe mounted while switching canvas evidence tabs and assert element/frame identity on return.
+Record each missing evidence side honestly; never create replay evidence for a run that did not reach it.
+If a source case lacks a needed state/check outcome, add only a test-local case using existing
+contract-valid conditions; inability to reproduce it remains a gap, not permission for product changes.
+
 Record SC-001 and SC-003 per-mode times, the six SC-002 answers/times, and SC-007 visual feedback.
 These small owner checks are not a user-population study. Failed/pending feedback stays unresolved.
 
@@ -123,6 +194,16 @@ focus and non-color status labels. Do not call these measurements a complete acc
 Record the exact tested commit, commands/exit status, discovered cases, screenshots per state,
 mechanical accessibility/contrast/zoom evidence, baseline-compatibility outcomes and owner decision.
 Never reuse earlier Spec 004 counts as this feature's validation or turn preview screenshots into proof.
+
+Store screenshots, traces, zoom evidence and the state-to-case/run manifest under ignored
+`test-results/studio-workspace-ux/`, with per-slice/per-tested-commit subdirectories. Do not commit
+binary evidence, launch tokens, private data or absolute operator hosting paths. Commit concise
+results and repository-relative artifact locations in tasks/design-system records; transfer review
+material through the authorized review surface when needed. If evidence expires, mark it unavailable.
+To avoid a circular commit reference: commit the implementation first, test that clean commit,
+then record its full SHA in a separate results-only commit. The tested revision is that results
+commit's parent, never a claim that the later documentation commit itself was tested. Any code/test
+change after testing requires testing the new committed revision before recording its results.
 
 Each slice is independently reviewable/revertible through the repository PR workflow. Production
 rollback restores presentation code while preserving runtime contracts and prior artifacts; preview

@@ -42,6 +42,11 @@ The finalizing-marker decision and conservative fallback are defined in
   may stack panes without alternate component trees or reparenting the target.
 - Resizing uses bounded CSS-class widths. Dragging and separator arrow keys change the same choice;
   expose the current size and limits accessibly. Collapse/restore has an accessible name and focus.
+  Below 64rem, hide the width separator and exclude it from focus; retain its width choice for the
+  side-by-side layout. Stacked mode still supports collapse/restore.
+- Outside a collapsed panel, show a compact current state derived from the same accepted events
+  and authoritative result; it keeps updating through result arrival. Provide a visible keyboard
+  restore/result entry that restores the panel and focuses the retained result if available.
 - Panel collapse moves focus to the restore control if focus was within the panel. Hidden controls
   cannot receive keyboard input; restoration returns to a meaningful retained panel control.
 - Keep the panel and artifact loader mounted while collapsed. Do not cancel a fetch, subscription,
@@ -63,6 +68,10 @@ The finalizing-marker decision and conservative fallback are defined in
 - On finalized captured runs, no iframe remains; show labelled stored evidence or explicit absence.
   Legacy mode preserves its existing target lifetime and labels the prepared preview separately
   from stored run evidence; do not silently apply the captured disposal policy to legacy.
+  Finalized legacy canvas tabs show target or stored evidence in the same stable canvas parent.
+  Evidence selection hides/inerts the original iframe wrapper without unmounting/reparenting it;
+  selecting target restores that exact element/frame. Do not use the old target/evidence replacement
+  branch for legacy. The active measured target cannot be hidden by an evidence tab.
 - Both sides identify phase and accessible evidence identity. Missing, not-received, loading and
   unreadable images are distinct from a successful screenshot. A failed side does not alter the verdict.
 - Preserve legacy provider/fixture provenance and diff, and captured candidate identity/cleanup.

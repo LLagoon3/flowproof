@@ -17,6 +17,8 @@ The names below describe proposed local presentation types, not changes to exist
 
 - `panelWidthStep`: one of seven integer width choices, default the 24rem choice.
 - `panelCollapsed`: boolean; never means run cancellation or event unsubscription.
+- `canvasTab`: target or evidence; legacy final evidence hides/inerts, never unmounts, the same
+  target wrapper. Active measurements cannot switch away; captured finalization still releases it.
 - `selectedEvidence`: null or `{ runId, phase }`, where phase is `failure` or `replay`.
 - `expandedWorkIds`: set of stable work-card identities; disclosures survive new activity and collapse.
 - `detailsExpanded`: local result/check/provenance disclosure choices, bound to the current run.
@@ -26,6 +28,9 @@ Reset run-bound choices only when run identity changes or the selected item genu
 be valid. Responsive reflow and terminal result arrival do not reset unrelated view preferences.
 No choice persists across launches or changes the execution reducer. Keep hidden panel content
 mounted (but unavailable to focus while collapsed) so its disclosure and read state are retained.
+The compact status outside the hidden panel derives from the same `RunPresentation`, including
+result arrival; its restore/result entry restores the panel and focuses the retained result when
+present. Below 64rem the width separator is hidden/inert and the width choice is retained.
 
 ## WorkCardView (derived)
 
@@ -60,6 +65,9 @@ fixed scan/cleanup `agent_message` markers emitted by `capturedRun.ts`; for lega
 `original_worktree_unchanged` gate signals finalization work has occurred. A `run_finalized` event
 without a result means result pending, not verified. Test these source-marker couplings explicitly;
 if no marker was delivered, use truthful pending/current-phase copy rather than a fabricated phase.
+Producer/consumer drift is checked against actual captured scan/cleanup events in real E2E, not
+only literal copies in selector tests. `Finalizing` is a presentation label; raw event phase remains
+unchanged in details (including `replaying`). No new exported engine strings are required.
 
 ## ResultSummaryView (derived, mode-discriminated)
 

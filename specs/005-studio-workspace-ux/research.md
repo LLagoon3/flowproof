@@ -67,7 +67,9 @@ would duplicate semantics. Fake thinking text and inferred progress percentages 
 When no finalizing event was received, display a generic pending-result message, not a guessed phase.
 Neither mode has a finalizing enum: captured scan/cleanup markers are fixed producer copy, and
 legacy's observed integrity-gate update indicates finalization work. Keep this small allowlist in
-one presentation selector with drift/fallback tests, not a new execution contract.
+one presentation selector with drift/fallback tests, not a new execution contract. Check real
+producer/consumer coupling in captured E2E at the actual scan/cleanup barriers; do not rely only
+on fixture copies or export engine strings. A `Finalizing` label retains raw phase in details.
 
 ## 7. Reuse Evidence Boundaries
 
@@ -77,6 +79,8 @@ reads; preserve phase/run binding, missing states, fixture provenance and escape
 `selectProofTrail` and `ProofTrail.tsx` already load sanitized artifacts and cancellation-safe reads.
 **Alternatives considered**: New raw-path artifact APIs, cross-run caches, diagnosing from screenshot
 appearance, or broad arbitrary asset URLs would widen the trust boundary. No such expansion is needed.
+Finalized legacy comparison uses canvas tabs with the existing target wrapper kept mounted but
+hidden/inert during evidence review; replacing that wrapper would violate the frame-lifetime rule.
 
 ## 8. Validation Without New Services
 
@@ -87,6 +91,10 @@ belongs in the headed suite. Existing recorded Hero exercises legacy success wit
 **Alternatives considered**: Adding a DOM emulator, design SaaS requirement, live model acceptance
 suite, or screenshot pixel equality duplicates facilities or confuses visual taste with correctness.
 Contrast and zoom/layout are mechanical checks, not work delegated to the owner.
+The scenario-fixed launcher viewport needs test-only overrides at 100%; actual 200% zoom needs
+clearing page metrics emulation on the same page and using native browser zoom, as documented in
+quickstart. Existing real harness cases supply rare state captures and interactive final review;
+no production fault-injection feature or second browser is needed.
 
 ## Bounded Research Cross-Check
 

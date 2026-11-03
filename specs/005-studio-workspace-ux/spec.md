@@ -5,8 +5,8 @@
 **Created**: 2026-11-03
 
 **Status**: The owner accepted the scope, workspace direction and preview-first review sequence,
-then approved the Plan direction on 2026-11-03 and explicitly requested Tasks. Task generation
-is authorized; preview/product implementation, push and PR creation are not part of this Tasks run.
+then approved the Plan direction on 2026-11-03 and explicitly requested Tasks. Tasks are prepared; the owner authorized Analyze corrections and a repeat analysis on 2026-11-03.
+Preview/product implementation, push and PR creation are outside this correction run.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements
 and requested a separate specification. Use conversation-plus-canvas references such as Claude
@@ -25,13 +25,13 @@ Establish the core design system together with the improved workspace, not a sta
 - Q: When should the owner review the actual visual direction? → A: Review a clickable design
   preview before production UI replacement; the contributor proposes specific visual details.
 
-The owner accepted these recommendations together and requested the next stage (Coding message
-24880). No additional high-impact product ambiguity requires a new question before planning.
+The owner accepted these recommendations together and requested the next stage in conversation
+on 2026-11-03. No additional high-impact product ambiguity requires a new question before planning.
 The usability timings remain the specification's proposed acceptance targets; palette, typeface,
 component dimensions, and technical execution are Plan/design decisions rather than new product scope.
 
-The owner subsequently accepted the Plan direction and requested Tasks (Coding messages 24894
-and 24903). Preview deliverables and repository instructions remain tool-neutral; an operator's
+The owner subsequently accepted the Plan direction and requested Tasks in conversation on
+2026-11-03. Preview deliverables and repository instructions remain tool-neutral; an operator's
 personal tooling or hosting is not a project dependency. Actual preview acceptance is still pending.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -225,7 +225,9 @@ inspect available before/after evidence and failed checks, and repeat the journe
   owner on 2026-11-03, separately from the earlier functional smoke test. No actual design preview
   has been accepted yet. The usability time limits are acceptance targets, not measured results.
 - Desktop browser use is primary: check 1280 x 720 and 1920 x 1080 at 100% zoom, and 1280 x 720
-  at 200% zoom. Compact layouts may rearrange the panes. Touch-first/mobile design is out of scope.
+  at 200% zoom. Sizes mean the content area at 100%; the last case keeps that window unchanged
+  while actual browser zoom reduces its effective CSS viewport. Compact layouts may rearrange
+  the panes. Touch-first/mobile design is out of scope.
 - Start with one coherent light appearance and English product copy. Exact palette, typeface,
   dimensions, and component implementation are design decisions for Plan and visual review;
   dark-mode switching, localization, and a brand redesign are not required here.
@@ -240,6 +242,11 @@ inspect available before/after evidence and failed checks, and repeat the journe
   mechanics, contrast, layout constraints, and compatibility. Human review is limited to whether
   the owner understands the actions/states/evidence (SC-001-SC-003) and accepts the visual
   hierarchy, density, and balance (SC-007); it does not repeat the mechanical regression checklist.
+- SC-002 may present unaltered screenshots of the real Studio from reproducible test runs,
+  including transient finalization/disconnection. SC-001 and SC-003 require interactive real
+  Studio walkthroughs; screenshots alone cannot prove starting or evidence navigation. Recorded
+  provider responses and test-controlled transport failures remain labelled as test conditions.
+  None of these checks may substitute the isolated simulated design preview for the real UI.
 
 ### Scope and Non-Goals
 
