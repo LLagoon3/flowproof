@@ -240,14 +240,22 @@ describe('editing runtime stays disconnected from the production Hero/Failure fl
     return [...seen].map((file) => path.relative(ENGINE_SOURCE, file)).sort()
   }
 
-  it('is unreachable from the CLI, run, and Studio entry points', async () => {
+  it('allows only the approved capture modules from the CLI, run, and Studio entry points', async () => {
     const reached = await reachableModules(['cli.ts', 'run.ts', 'studio/launch.ts', 'studio/server.ts'])
 
     // The walk really covers the Hero/Failure path, including the shared Git snapshot helper.
     for (const module of ['run.ts', 'model/transport.ts', 'worktree/session.ts', 'git/repositoryState.ts', 'verify/gates.ts']) {
       expect(reached).toContain(module)
     }
-    expect(reached.filter((module) => module.startsWith('editing/'))).toEqual([])
+    // Owner-approved Spec004 exception (T012/T038): reuse the binary-safe capture Git runner.
+    // The walk includes type-only edges; the editing session, Docker and runtime profiles
+    // must stay unreachable. Exact equality rejects every additional editing module.
+    expect(reached.filter((module) => module.startsWith('editing/'))).toEqual([
+      'editing/capture.ts',
+      'editing/captureGit.ts',
+      'editing/contracts.ts',
+      'editing/workspace.ts',
+    ])
   })
 
   it('is not referenced by any production module outside the editing runtime or by the Studio app', async () => {
