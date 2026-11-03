@@ -32,7 +32,7 @@ This checkpoint is a design foundation for all stories, not proof of any product
 - [X] T005 Measure browser rendering, keyboard/focus behavior, text/control contrast, the specified desktop matrix and separate native 200%-zoom procedure from `specs/005-studio-workspace-ux/quickstart.md`, plus compact layout for the preview in `tests/manual/studio-design/`; record observed outcomes and screenshot locations in `tests/manual/studio-design/README.md` (FR-011, FR-012, SC-005).
 - [X] T006 Correct preview defects found by T005 in `tests/manual/studio-design/index.html`, `tests/manual/studio-design/preview.css` and `tests/manual/studio-design/preview.js`; rerun the affected checks and record the final proposed tokens/control states in `specs/005-studio-workspace-ux/design-system.md` (FR-010-FR-012).
 - [X] T007 Serve the independent files using the portable instructions in `tests/manual/studio-design/README.md`, provide the owner a review location, and record the exact reviewed source revision; no production deployment or repository-specific hosted service is required (SC-007).
-- [ ] T008 Record the owner's actual hierarchy/density/balance decision and any revisions in `specs/005-studio-workspace-ux/design-system.md`; keep this unchecked while feedback is pending or negative, and do not start production UI replacement without accepted direction (SC-007).
+- [X] T008 Record the owner's actual hierarchy/density/balance decision and any revisions in `specs/005-studio-workspace-ux/design-system.md`; keep this unchecked while feedback is pending or negative, and do not start production UI replacement without accepted direction (SC-007).
 
 **Checkpoint / slice 1**: Preview and review material only. No production or runtime files change.
 Stop for the actual visual decision; preview screenshots are not verification evidence for real runs.
@@ -42,9 +42,8 @@ Stop for the actual visual decision; preview screenshots are not verification ev
 the 346 desktop/compact and 56 native-200%-zoom rendered checks had 0 failures. The record and the
 ignored evidence location are in `tests/manual/studio-design/README.md`. T007 offers the unchanged
 preview at that exact source revision through the owner-facing review location, with 219 independent
-parent checks passing and the authenticated HTTPS render explicitly unverified. T008 (actual owner
-decision) remains unchecked: the owner rejected the first density on 2026-11-04 and requested a
-minimalist revision. Revised visual acceptance is pending. No T009 or later task has started.
+parent checks passing and the authenticated HTTPS render explicitly unverified. The owner rejected the first density on 2026-11-04, then accepted the minimalist revision
+recorded below (T008). No T009 or later task has started.
 
 **Minimalist revision record (2026-11-04)**: the owner requested correction of slice 1's visual
 density, not production implementation. Tested clean revision
@@ -52,7 +51,9 @@ density, not production implementation. Tested clean revision
 checks with 0 failures; details and gaps are in the preview README. Native 200% zoom was not rerun.
 The delivery owner independently passed 206 local Chromium checks and re-offered the unchanged
 preview files at the existing review location, with authenticated HTTPS rendering unverified.
-T008 remains unchecked after the initial rejection. T009+ remain untouched and unauthorized.
+The owner accepted this revised UI as the direction on 2026-11-04 (T008), after the initial
+rejection. Native 200% zoom remains unverified for the changed revision. T009+ remain untouched
+and unauthorized. Push/PR creation and merge were not requested by this acceptance.
 
 ## Phase 3: User Story 1 — Canvas-First Real Workspace (P1)
 

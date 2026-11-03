@@ -219,3 +219,11 @@ location. Authenticated HTTPS rendering remains unverified: the existing authent
 returned HTTP 401 and the managed browser could not authenticate. No authentication or hosting
 configuration changed. T007 is re-offered at this source revision; T008 remains pending after the
 initial rejection. Earlier native-zoom results are not evidence for this revision.
+
+
+### Owner acceptance (2026-11-04)
+
+The owner explicitly adopted the minimalist UI as the direction: “해당 ui를 기준으로 가자.”
+This accepts source `eab7b55acbca3a14195218821fd6f80ed0991986` and completes the T008 decision
+record, superseding the earlier pending status. It does not close mechanical verification gaps,
+authorize later-slice work or authorize push, PR creation or merge.

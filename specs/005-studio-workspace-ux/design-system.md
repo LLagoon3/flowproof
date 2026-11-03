@@ -1,10 +1,10 @@
 # Studio Core Design System
 
-**Status**: Proposed. These values are implemented in the slice 1 design preview
-([tests/manual/studio-design/](../../tests/manual/studio-design/README.md)) and are not accepted.
-The owner's actual hierarchy, density, and balance decision is recorded in
-[Owner review record](#owner-review-record); until that decision is positive, no production UI
-change may rely on this document.
+**Status**: Minimalist preview direction accepted by the owner on 2026-11-04. The accepted
+source is `eab7b55acbca3a14195218821fd6f80ed0991986` in the
+[slice 1 design preview](../../tests/manual/studio-design/README.md). See the
+[owner review record](#owner-review-record). This accepts the visual direction, not unverified
+mechanical criteria, later-slice implementation, push, PR creation or merge.
 
 This record keeps three kinds of information apart:
 
@@ -64,8 +64,9 @@ Artifacts' spatial simplicity as a reference, not its product features or propri
 | Status | One concise work/result heading; secondary target provenance label; warning distinguishes disconnected activity from an execution verdict |
 | Work/disclosures | One outer Details disclosure, initially closed; flat chronological rows and nested Events disclose preserved raw records; selected disclosure state retained |
 
-All values above are proposed, not visually accepted. Earlier values and results below are retained
-as historical evidence, not as claims about this revision. T008 remains unchecked.
+The owner accepted the minimalist direction above on 2026-11-04. Earlier values and results below
+are retained as historical evidence, not as claims about this revision. T008 records this decision;
+mechanical verification gaps remain explicitly open.
 
 ## 2. Foundations (initial revision, historical)
 
@@ -205,17 +206,16 @@ These results show the proposed values are mechanically usable. They are not own
 
 ## Owner review record
 
-**Decision**: Initial revision rejected on 2026-11-04 for excessive density. A minimalist revision
-is requested; its visual acceptance remains pending.
+**Decision**: Minimalist revision accepted on 2026-11-04. The owner explicitly said,
+“해당 ui를 기준으로 가자.” The initial dense revision remains rejected.
 
 | Field | Value |
 | --- | --- |
-| Source offered for review | `e80e291cc4425cf49089be46e4deb8819007ff03` (unchanged preview files); handoff and delivery gaps in the preview README |
-| Reviewed revision | `e80e291cc4425cf49089be46e4deb8819007ff03` |
+| Source offered and accepted | `eab7b55acbca3a14195218821fd6f80ed0991986` (unchanged preview files) |
 | Review date | 2026-11-04 |
-| Hierarchy | Requested simplification to conversation/input and canvas |
-| Density | Rejected: too many buttons and unnecessary text |
-| Work-to-canvas balance | Pending |
-| Requested revisions | Conversation/input beside a large canvas; remove dashboard clutter |
+| Hierarchy / density / balance | Adopt the revised minimal input/work column beside the large canvas |
+| Requested revisions | No further visual revisions requested in this acceptance |
+| Scope | Visual direction only; no later-slice implementation or repository publication authorized |
 
-Pending or negative feedback is not visual acceptance (SC-007).
+This is the owner's actual adoption decision (SC-007), not an inference from automated checks.
+Native 200% zoom and other declared mechanical gaps for this revision remain unverified.
