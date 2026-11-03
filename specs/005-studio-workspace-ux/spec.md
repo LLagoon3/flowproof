@@ -5,8 +5,8 @@
 **Created**: 2026-11-03
 
 **Status**: The owner accepted the proposed scope, workspace direction, and design-review
-sequence on 2026-11-03 and authorized the next planning stage. Plan is being prepared for owner
-review. Tasks, production implementation, push, and PR creation are not authorized by that approval.
+sequence on 2026-11-03 and authorized the next planning stage. The proposed Plan is subject to
+owner review. Tasks, production implementation, push, and PR creation are not authorized by that approval.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements
 and requested a separate specification. Use conversation-plus-canvas references such as Claude
