@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-03. **State when written:** local-only feasibility review; further product
 implementation paused. **Current:** slices 1 and 2 merged through PR #19 (`16eecc0`) and
-[PR #20](https://github.com/LLagoon3/flowproof/pull/20) (`d385c36`); slice 3 is being extracted
-and verified locally. See [Slice 3 branch](#slice-3-branch). Earlier sections are dated history;
+[PR #20](https://github.com/LLagoon3/flowproof/pull/20) (`d385c36`); slice 3 is extracted,
+verified and reviewed locally. See [Slice 3 branch](#slice-3-branch). Earlier sections are dated history;
 their authorization boundaries and counts are not current.
 
 ## Correction and preserved work
@@ -390,3 +390,14 @@ delivery documents are additional changes, not excluded from review.
 Whole-feature T002, T038, T040 and human-only T041 remain incomplete. Slice-3 automated
 validation does not deliver the actual-frame launcher or visible captured-evidence components. The
 prepared-candidate trust boundary and issue #15 observation-isolation exclusion are unchanged.
+
+### Parent verification of slice 3
+
+On `e1b06c8`, the parent inspected the three commits and aggregate scope, confirmed all three
+product files match `1dc51234`, and verified the merged contract/engine/worktree regression files
+and provider-seam guard are unchanged from `d385c36`. Worker full-suite and headed-suite logs
+were checked through their final summaries. Independent `pnpm typecheck` and the six slice-3
+focused files plus `provider-seam.test.ts` passed: exit 0, seven files, 419/419 tests, zero skipped.
+Logs: `/tmp/fp-slice3-parent-typecheck.log` and `/tmp/fp-slice3-parent-focused.log`.
+`git diff --check d385c36 HEAD` passed. This is local slice completion, not a published PR,
+remote review, whole-feature acceptance or deployment.
