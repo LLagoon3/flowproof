@@ -1,6 +1,10 @@
 # Spec004 delivery decomposition review
 
-**Date:** 2026-11-03. **State:** local-only feasibility review; further product implementation paused.
+**Date:** 2026-11-03. **State when written:** local-only feasibility review; further product
+implementation paused. **Current:** slice 1 merged through PR #19 (`16eecc0`); slice 2 is
+published for review as [PR #20](https://github.com/LLagoon3/flowproof/pull/20), see
+[Slice 2 branch](#slice-2-branch). Earlier sections are
+dated history and their counts are not current.
 
 ## Correction and preserved work
 
@@ -203,3 +207,106 @@ merge authorization. The original aggregate branch remains preserved; no push or
   documentation only.
 - The repository contains only the PR CI workflow, with no preview/deployment job configured.
   Confirm actual check state for each reviewed head; do not treat local results as remote CI.
+- Outcome: the owner then authorized the merge. PR #19 merged into `main` as merge commit `16eecc0`
+  (parents `b2ed6ad` and reviewed head `60616b6`), after its CI and GitGuardian checks succeeded
+  with no unresolved review thread. The phase entries above describe the loop while it ran.
+
+## Slice 2 branch
+
+- Authority (2026-11-03): after the PR #19 merge the owner authorized local extraction and
+  verification of slice 2, superseding the earlier pause. The subsequent request to publish the
+  PR and proceed with review authorizes [PR #20](https://github.com/LLagoon3/flowproof/pull/20),
+  GitHub Codex exact-head reviews, in-scope corrections and follow-up pushes. The initial review
+  may be followed by up to three remediation/review rounds under AGENTS.md. Merge, deployment
+  and later slices remain unauthorized.
+- Branch `feat/004-verification-engine-lifecycle` starts from `main`/`origin/main` at `16eecc0`.
+  The aggregate checkout (`feat/004-verify-captured-changes`, `7e21b48`) is untouched.
+- Scope: T001-T002, T004, T010-T011, T014-T016, T028-T029 and T031-T032 from audit snapshot
+  `72ad962`, compared incrementally against `8602163`. Excluded: the contract module and its
+  tests/fixtures, the provider-seam guard, dependencies, CLI, legacy run/reducer, Studio
+  server/client/harness/launch/UI and T017-T027, T030 and T033-T042.
+- Product commit `c7998d3`: 10 files, +3,960/-30; product source +1,342/-23 (equal to the audit's
+  slice-2 measurement).
+
+### Source differences
+
+- Byte-identical to `72ad962`: `verify/capturedRun.ts`, `worktree/capturedCandidate.ts`,
+  `worktree/session.ts`, `tests/fixtures/captured-verification/{check-filter.mjs,filter-cases.json}`,
+  `tests/fixtures/editing-agent/agent.mjs` (additions only), `tests/support/capturedCanvasCandidate.ts`
+  and `tests/integration/captured-verification-git.test.ts`.
+- `tests/unit/captured-verification.test.ts` equals the snapshot plus the 13 PR #19 regression tests
+  (74 added lines, nothing removed). The shared unit and Git files took the snapshot's
+  `8602163..72ad962` hunks over the merged files, not whole-file restores; their only conflicts
+  were the appended sections at the end of each file.
+- `tests/support/capturedCandidate.ts` regains only the `persistPhase` browser-port evidence
+  helper and its six imports (69 lines) that slice 1 removed; the engine tests use it.
+- `verify/capturedContracts.ts`, the contract tests/fixtures and `provider-seam.test.ts` are
+  unchanged from `16eecc0`, so the PR #19 missing-evidence normalization, metric-key redaction and
+  all 19 regression tests (unit 13, contract 6) remain. No product adaptation was needed.
+
+### Commit boundary
+
+The planned fixture, engine and process-joining commits are one commit. `capturedRun.ts` imports
+`joinProcessGroup`, `BUILD_ENVIRONMENT_KEYS`, `buildBaseline`, the run signal and
+`operationsJoined` from the hardened `worktree/session.ts`, so the engine cannot precede the
+hardening. The tests that prove the checker fixtures, the Canvas cases and process joining (T011,
+T029) all drive the engine, so neither can precede it with its own tests without writing
+intermediate code. Clone-based tests read only committed bytes (`createTempClone` runs
+`git clone`), so they were run on the commit; no failing commit was kept.
+
+### Slice 2 validation
+
+Measured on `c7998d3`; the documentation commit changes no product or test file. Logs use
+`/tmp/fp-slice2-worker-*.log`.
+
+| Check | Result |
+| --- | --- |
+| `check-prerequisites.sh --json --require-tasks --include-tasks` (feature directory explicit, not persisted) | exit 0 |
+| `checklists/requirements.md`; `before/after_implement` hooks | 16/16 checked, unchanged; optional Git auto-commit hooks not run |
+| `pnpm install --offline --frozen-lockfile` | exit 0; no tracked symlink |
+| Focused slice-2 Vitest (3 files) on unchanged `16eecc0` | exit 0; 77 passed: contract 39, unit 29, Git 9 |
+| Same files, tests restored before product | exit 1; 166 discovered: 72 passed, 94 failed (unit 71, Git 23) for the missing `capturedRun.ts`, missing `operationsJoined` and non-aborting disposal |
+| Same files, product restored but uncommitted | exit 1; 149 passed, 17 failed: clone-based Git tests could not see uncommitted fixtures |
+| Focused slice-2 Vitest on `c7998d3` | exit 0; 166/166 passed: contract 39, unit 100, Git 27 (Docker-backed Canvas cases executed), 0 skipped |
+| Legacy `worktree.test.ts` + unchanged `provider-seam.test.ts` | exit 0; 44/44 passed (20 + 24) |
+| `pnpm typecheck`, `pnpm build` | exit 0, exit 0 |
+| `xvfb-run -a pnpm test --no-file-parallelism --maxWorkers=1` | exit 0; 46 files, 1,447/1,447 passed, 0 skipped: contract 9/320, unit 21/678, integration 14/291, ui 2/158 |
+| `xvfb-run -a pnpm exec playwright test`, headed Chromium | exit 0; 8 discovered, 8 passed, 0 skipped |
+| `git diff --check 16eecc0 HEAD` | exit 0 |
+
+The audit's historical slice-2 focused count (147) plus the 19 PR #19 regressions gives the 166
+measured here. T002 remains unchecked (`canvas-plausible-wrong` is first exercised by T020); T038,
+T040 and T041 remain unchecked whole-feature gates, and T041 is human-only and unperformed. This is
+local slice-2 verification, not remote CI or merge authority.
+
+### Slice 2 PR review
+
+- PR #20 targets `main` from `feat/004-verification-engine-lifecycle`; no later slice is included.
+- Parent revalidation before publication: `pnpm typecheck`, `pnpm build`, and the combined captured
+  contract/unit/Git, legacy worktree and provider-seam gate passed (5 files, 210/210, no skipped
+  cases; `/tmp/fp-slice2-pr-{typecheck,build,focused}.log`). Those product and test bytes were
+  unchanged at initial publication; the review correction below supersedes them.
+- Publication/review status is recorded before the initial exact-head Codex request. Remote CI
+  and review completion must be observed against the published HEAD; this document does not
+  claim a completed review or authorize merging it.
+
+### Slice 2 correction round 1
+
+- Initial Codex review completed on `5738a5f` with one P2 finding: interruption tracking ended
+  before asynchronous evidence scanning and cleanup, so a cancelled run could persist `passed`.
+  Initial CI and GitGuardian checks passed on that exact head.
+- Product correction `e63ce9a` keeps the interruption listener through scanning and both disposal
+  operations, then folds the first interruption/deadline into the terminal decision before
+  persistence. Cleanup still completes; earlier operational errors retain precedence. The
+  listener is removed before persistence, including a failed result write.
+- Nine new regressions cover scan/capture/worktree-disposal interruption, first-stop/error
+  precedence and listener release, including real Git disposal. Baseline RED confirmed the
+  reported false success; all new cases are GREEN on the correction.
+- Worker validation on committed `e63ce9a`: typecheck/build passed; focused contract/unit/Git
+  plus worktree/provider-seam passed 219/219 (5 files); full suite passed 1,456/1,456 (46 files,
+  zero skipped); headed Chromium passed 8/8. Logs: `/tmp/fp-pr20-r1-*.log`.
+- Parent independently inspected the correction commit and diff, then passed typecheck and
+  219/219 tests: captured contract/unit/Git 175 plus legacy worktree/provider-seam 44, with no
+  skipped cases (`/tmp/fp-pr20-r1-parent-{typecheck,focused,compat}.log`).
+- This correction remains slice 2 only. A fresh exact-head Codex review and remote CI must be
+  observed after the follow-up push; no clean review, merge, deployment or next slice is claimed.

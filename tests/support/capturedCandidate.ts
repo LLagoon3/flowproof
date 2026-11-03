@@ -4,12 +4,18 @@ import { existsSync } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, readlink, realpath, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import type { CapturedPhase } from '../../packages/flowproof/src/capture/browserCapture.js'
+import { EVIDENCE_TYPES } from '../../packages/flowproof/src/contracts/index.js'
+import type { EvidenceItem, EvidencePhase } from '../../packages/flowproof/src/contracts/index.js'
 import { captureChanges, validateCapturingSessionResult } from '../../packages/flowproof/src/editing/capture.js'
 import type { CaptureResult, CapturingEditingSessionResult } from '../../packages/flowproof/src/editing/capture.js'
 import type { CleanupResult, EditingSessionResult } from '../../packages/flowproof/src/editing/contracts.js'
 import { createWorkspaceManager } from '../../packages/flowproof/src/editing/workspace.js'
 import type { CaptureWorkspace } from '../../packages/flowproof/src/editing/workspace.js'
+import type { EvidenceIdAllocator } from '../../packages/flowproof/src/evidence/ids.js'
 import { createSecretScanner } from '../../packages/flowproof/src/evidence/secretScan.js'
+import { buildEvidenceBundle } from '../../packages/flowproof/src/evidence/store.js'
+import type { RunArtifactStore } from '../../packages/flowproof/src/evidence/store.js'
 import { createTempDirectory } from './repoFixture.js'
 import type { TempDirectory } from './repoFixture.js'
 
@@ -236,6 +242,69 @@ export async function produceCapturingResult(options: ProduceCaptureOptions): Pr
   const validated = validateCapturingSessionResult(result)
   if (!validated.ok) throw new Error(`The synthetic capture composition is invalid at ${validated.issues.join(', ')}.`)
   return validated.value
+}
+
+// ---------------------------------------------------------------------------------------
+// Same-run evidence for browser-port doubles
+// ---------------------------------------------------------------------------------------
+
+const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52])
+
+export interface PhaseContext {
+  readonly runId: string
+  readonly store: RunArtifactStore
+  readonly allocator: EvidenceIdAllocator
+}
+
+/**
+ * Persists a contract-valid phase bundle in the run store exactly as browser capture would, so an
+ * engine test can stand in for the real frame. `consoleText` lets a test seed evidence content.
+ */
+export async function persistPhase(
+  context: PhaseContext,
+  scenarioId: string,
+  phase: EvidencePhase,
+  observed: CapturedPhase['observed'],
+  consoleText = 'No console errors.',
+): Promise<CapturedPhase> {
+  const items: EvidenceItem[] = []
+  let screenshotPath = ''
+  for (const type of EVIDENCE_TYPES.filter((candidate) => phase === 'failure' || candidate !== 'source')) {
+    const id = context.allocator.allocate(phase, type)
+    const artifactPath = `evidence/${phase}/${type}.${type === 'screenshot' ? 'png' : 'json'}`
+    const content =
+      type === 'dataset'
+        ? { observed: observed.dataset }
+        : type === 'chart'
+          ? { observed: observed.chart }
+          : type === 'console'
+            ? { entries: [{ level: 'info', text: consoleText }] }
+            : { type }
+    const persisted = type === 'screenshot' ? await context.store.writePng(artifactPath, PNG) : await context.store.writeJson(artifactPath, content)
+    context.store.register(id, persisted)
+    if (type === 'screenshot') screenshotPath = artifactPath
+    items.push({
+      evidence_id: id,
+      run_id: context.runId,
+      phase,
+      type,
+      captured_at: '2026-11-03T00:00:00.000Z',
+      artifact_path: artifactPath,
+      sha256: persisted.sha256,
+      summary: `Sanitized ${type} evidence.`,
+      provenance: {
+        mechanism: 'test-double',
+        origin: type === 'actions' ? 'scenario' : type === 'source' ? 'repository' : 'browser',
+        trusted: true,
+        source_path: type === 'source' ? 'apps/demo-chart/src/filterData.ts' : null,
+      },
+      redactions: [...persisted.redactions],
+    })
+  }
+  const bundle = buildEvidenceBundle({ runId: context.runId, scenarioId, phase, items })
+  const manifestPath = `evidence/${phase}/manifest.json`
+  context.store.register(phase === 'failure' ? 'failure-manifest' : 'replay-manifest', await context.store.writeJson(manifestPath, bundle))
+  return { phase, bundle, manifestPath, screenshotPath, observed }
 }
 
 // ---------------------------------------------------------------------------------------

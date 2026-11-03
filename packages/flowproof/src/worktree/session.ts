@@ -39,7 +39,8 @@ export const APP_BUILD_OUTPUT_DIR = 'dist'
 
 const MAX_LINKED_ENTRIES = 10_000
 // Variables the committed build may see; nothing else, and never a credential, is inherited.
-const BUILD_ENVIRONMENT_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'COREPACK_HOME', 'PNPM_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME'] as const
+/** Host environment keys a worktree build, and the captured prepared check, may inherit. */
+export const BUILD_ENVIRONMENT_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'COREPACK_HOME', 'PNPM_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME'] as const
 
 export type WorktreeErrorCode =
   | 'WORKTREE_OPTIONS_INVALID'
@@ -200,7 +201,7 @@ interface OwnedWorktree {
    * Idempotent release: stops the build and joins the running operation, runs `afterOperations`,
    * removes and prunes only this worktree, removes the owned output, and compares the baseline.
    */
-  release(afterOperations?: () => Promise<void>): Promise<{ readonly report: WorktreeIntegrityReport; readonly worktreeRemoved: boolean }>
+  release(afterOperations?: () => Promise<void>): Promise<OwnedRelease>
 }
 
 interface OpenOwnedWorktreeOptions extends CreateWorktreeSessionOptions {
@@ -208,6 +209,19 @@ interface OpenOwnedWorktreeOptions extends CreateWorktreeSessionOptions {
   readonly checkout: string | null
   /** Places the worktree in a subdirectory of the owned output, beside other owned state. */
   readonly nested: boolean
+  /** Refuses to create anything once aborted, checked before the first side effect. */
+  readonly signal?: AbortSignal
+}
+
+/** The facts of one owned-worktree release; every step is attempted even after an earlier failure. */
+interface OwnedRelease {
+  readonly report: WorktreeIntegrityReport
+  /** The worktree directory and its own registration are gone. */
+  readonly worktreeRemoved: boolean
+  /** The owned temporary root, and so everything below it, is gone. */
+  readonly outputRemoved: boolean
+  /** Every build process group this worktree started was joined: no live member remained. */
+  readonly operationsJoined: boolean
 }
 
 const FULL_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
@@ -280,7 +294,9 @@ async function openOwnedWorktree(options: OpenOwnedWorktreeOptions): Promise<Own
     throw new WorktreeError('WORKTREE_SCENARIO_MISMATCH', 'The application root is outside the repository.')
   }
 
-  // 3. The detached worktree at the checkout, with linked offline dependencies.
+  // 3. The detached worktree at the checkout, with linked offline dependencies; nothing is
+  // created for an aborted caller.
+  if (options.signal?.aborted) throw new WorktreeError('WORKTREE_CREATE_FAILED', 'The detached worktree was not created for an aborted run.')
   let output: TempOutput
   try {
     output = await createOsTempOutput({ purpose: 'worktree', repoRoot })
@@ -293,18 +309,28 @@ async function openOwnedWorktree(options: OpenOwnedWorktreeOptions): Promise<Own
 
   let activeBuild: ChildProcess | null = null
   let operation: Promise<unknown> | null = null
-  let disposing: Promise<{ readonly report: WorktreeIntegrityReport; readonly worktreeRemoved: boolean }> | null = null
+  let operationsJoined = true
+  let disposing: Promise<OwnedRelease> | null = null
 
-  /** Removes and prunes only this session's worktree, then compares the full baseline. */
-  const cleanUp = async (afterOperations?: () => Promise<void>): Promise<{ readonly report: WorktreeIntegrityReport; readonly worktreeRemoved: boolean }> => {
-    // A running build is killed, and any operation finishes, before its files are removed.
+  /**
+   * Removes and prunes only this session's worktree, then compares the full baseline. Each step is
+   * attempted even when an earlier one failed, and the outcome is observed, never assumed.
+   */
+  const cleanUp = async (afterOperations?: () => Promise<void>): Promise<Omit<OwnedRelease, 'outputRemoved' | 'operationsJoined'>> => {
+    // A running build's whole group is killed and joined, and any operation finishes, before its
+    // files are removed.
     if (activeBuild?.pid !== undefined) killGroup(activeBuild.pid)
     await operation?.catch(() => undefined)
     await afterOperations?.().catch(() => undefined)
     await git(repoRoot, ['worktree', 'remove', '--force', worktreePath]).catch(() => undefined)
-    await pruneOwnEntry()
+    await pruneOwnEntry().catch(() => undefined)
     await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined)
-    const worktreeRemoved = (await lstatOrNull(worktreePath)) === null && (adminEntry === null || !(await adminEntries(gitCommonDir)).includes(adminEntry))
+    let worktreeRemoved: boolean
+    try {
+      worktreeRemoved = (await lstatOrNull(worktreePath)) === null && (adminEntry === null || !(await adminEntries(gitCommonDir)).includes(adminEntry))
+    } catch {
+      worktreeRemoved = false
+    }
     let mismatches: string[]
     try {
       mismatches = compareSnapshots(baseline, await snapshotRepository(repoRoot, gitCommonDir))
@@ -413,8 +439,14 @@ async function openOwnedWorktree(options: OpenOwnedWorktreeOptions): Promise<Own
       child.once('close', (code) => {
         clearTimeout(timer)
         signal?.removeEventListener('abort', onAbort)
-        activeBuild = null
-        resolve(outcome ?? (code === 0 ? 'ok' : 'failed'))
+        const settled = outcome ?? (code === 0 ? 'ok' : 'failed')
+        // The build's exit does not prove its descendants gone: anything still in its group is
+        // killed and joined before the build settles, so no build process outlives it.
+        void (child.pid === undefined ? Promise.resolve(true) : joinProcessGroup(child.pid)).then((joined) => {
+          if (!joined) operationsJoined = false
+          activeBuild = null
+          resolve(settled)
+        })
       })
     })
 
@@ -454,11 +486,11 @@ async function openOwnedWorktree(options: OpenOwnedWorktreeOptions): Promise<Own
     },
     release(afterOperations?: () => Promise<void>) {
       disposing ??= (async () => {
-        try {
-          return await cleanUp(afterOperations)
-        } finally {
-          await output.remove().catch(() => undefined)
-        }
+        const cleaned = await cleanUp(afterOperations)
+        await output.remove().catch(() => undefined)
+        // A temporary entry that could not be removed is reported, never hidden.
+        const outputRemoved = (await lstatOrNull(ownedRoot)) === null
+        return Object.freeze({ ...cleaned, outputRemoved, operationsJoined })
       })()
       return disposing
     },
@@ -523,13 +555,17 @@ export async function createWorktreeSession(options: CreateWorktreeSessionOption
 export interface CreateCapturedWorktreeSessionOptions extends CreateWorktreeSessionOptions {
   /** The candidate's recorded full baseline commit; it may differ from the original HEAD. */
   readonly baselineCommit: string
+  /** The run's signal: once aborted, no worktree or temporary entry is created. */
+  readonly signal?: AbortSignal
 }
 
 export interface CapturedWorktreeDisposal extends WorktreeIntegrityReport {
-  /** The owned worktree directory and its registration are gone. */
+  /** The owned worktree directory, its registration, and the owned temporary root are gone. */
   readonly worktreeRemoved: boolean
   /** The private Git directory, index, and object store are gone. */
   readonly privateStateRemoved: boolean
+  /** Every owned build process group was joined; false when a live member remained. */
+  readonly operationsJoined: boolean
 }
 
 export interface CapturedWorktreeSession {
@@ -541,6 +577,11 @@ export interface CapturedWorktreeSession {
   readonly objectFormat: 'sha1' | 'sha256'
   /** Absolute path of the owned detached worktree at the baseline. */
   readonly path: string
+  /**
+   * Runs the committed build of the unchanged pinned baseline, at most once and only before any
+   * application, so the baseline is reproduced from this same owned worktree.
+   */
+  buildBaseline(options?: BuildOptions): Promise<{ readonly documentRoot: string }>
   /** Applies the exact captured candidate once through private Git state. */
   applyCandidate(candidate: CandidateApplicationInput, options?: { readonly signal?: AbortSignal }): Promise<CandidateApplicationOutcome>
   /** Runs the committed build, only after a complete application. */
@@ -560,7 +601,8 @@ export async function createCapturedWorktreeSession(options: CreateCapturedWorkt
   if (typeof baselineCommit !== 'string' || !FULL_OBJECT_ID.test(baselineCommit)) {
     throw new WorktreeError('WORKTREE_BASELINE_UNAVAILABLE', 'The recorded baseline commit is not available in the repository.')
   }
-  const owned = await openOwnedWorktree({ repoRoot: requestedRoot, scenario, checkout: baselineCommit, nested: true })
+  const signal = (options as Partial<CreateCapturedWorktreeSessionOptions>).signal
+  const owned = await openOwnedWorktree({ repoRoot: requestedRoot, scenario, checkout: baselineCommit, nested: true, ...(signal instanceof AbortSignal ? { signal } : {}) })
   const { objectFormat, objectDirectory } = owned
   const privateGitDir = path.join(owned.ownedRoot, 'candidate-git')
   if (objectFormat === null || objectDirectory === null) {
@@ -575,6 +617,7 @@ export async function createCapturedWorktreeSession(options: CreateCapturedWorkt
     throw new WorktreeError('WORKTREE_CREATE_FAILED', 'The pinned worktree could not be prepared.')
   }
   let state: 'pending' | 'applied' | 'failed' = 'pending'
+  let baselineBuilt = false
   let disposal: Promise<CapturedWorktreeDisposal> | null = null
 
   return Object.freeze({
@@ -584,6 +627,19 @@ export async function createCapturedWorktreeSession(options: CreateCapturedWorkt
     baselineCommit,
     objectFormat,
     path: owned.worktreePath,
+
+    buildBaseline(buildOptions: BuildOptions = {}): Promise<{ readonly documentRoot: string }> {
+      return owned.exclusive(async () => {
+        if (state !== 'pending' || baselineBuilt) {
+          throw new WorktreeError('WORKTREE_APPLY_REPEATED', 'The pinned baseline is built once, before any candidate application.')
+        }
+        baselineBuilt = true
+        if ((await optionalGit(owned.worktreePath, ['rev-parse', 'HEAD'])) !== baselineCommit) {
+          throw new WorktreeError('WORKTREE_HEAD_MOVED', 'The worktree is no longer at the recorded baseline.')
+        }
+        return owned.build(buildOptions)
+      })
+    },
 
     applyCandidate(candidate: CandidateApplicationInput, applyOptions: { readonly signal?: AbortSignal } = {}): Promise<CandidateApplicationOutcome> {
       return owned.exclusive(async () => {
@@ -618,12 +674,20 @@ export async function createCapturedWorktreeSession(options: CreateCapturedWorkt
 
     dispose(): Promise<CapturedWorktreeDisposal> {
       disposal ??= (async () => {
+        // Started first: it stops a running application, whose Git groups are joined, so the
+        // exclusive operation settles before the worktree files are removed.
+        const privateDisposal = application.dispose().catch(() => false)
         let privateStateRemoved = false
-        const { report, worktreeRemoved } = await owned.release(async () => {
-          privateStateRemoved = await application.dispose()
+        const released = await owned.release(async () => {
+          privateStateRemoved = await privateDisposal
         })
         privateStateRemoved = privateStateRemoved && (await lstatOrNull(privateGitDir)) === null
-        return Object.freeze({ ...report, worktreeRemoved, privateStateRemoved })
+        return Object.freeze({
+          ...released.report,
+          worktreeRemoved: released.worktreeRemoved && released.outputRemoved,
+          privateStateRemoved,
+          operationsJoined: released.operationsJoined,
+        })
       })()
       return disposal
     },
@@ -636,4 +700,55 @@ function killGroup(pid: number): void {
   } catch {
     // The process group already exited.
   }
+}
+
+const GROUP_JOIN_MS = 10_000
+const GROUP_POLL_MS = 10
+
+/**
+ * True while the process group has a live member. A killed descendant is reparented to the nearest
+ * reaper, which may reap it late; a zombie can no longer run or touch files, so on Linux its `/proc`
+ * state decides. Elsewhere the signal probe alone decides, conservatively.
+ */
+async function groupAlive(pgid: number): Promise<boolean> {
+  try {
+    process.kill(-pgid, 0)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') return false
+  }
+  if (process.platform !== 'linux') return true
+  let entries: string[]
+  try {
+    entries = await readdir('/proc')
+  } catch {
+    return true
+  }
+  for (const entry of entries) {
+    if (!/^[0-9]+$/.test(entry)) continue
+    try {
+      const stat = await readFile(`/proc/${entry}/stat`, 'latin1')
+      // `pid (comm) state ppid pgrp ...`; comm may contain spaces or parentheses.
+      const [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+      if (Number(pgrp) === pgid && state !== 'Z' && state !== 'X') return true
+    } catch {
+      // The process exited while it was being inspected.
+    }
+  }
+  return false
+}
+
+/**
+ * Kills every remaining member of an owned process group (its leader was spawned detached, so the
+ * group ID is the leader's PID) and waits, bounded, until no live member remains. A direct child's
+ * exit alone does not prove its descendants gone. Returns false when a live member outlasted the
+ * bound. A process that left the group (`setsid`/`setpgid`) is outside this ownership claim.
+ */
+export async function joinProcessGroup(pgid: number): Promise<boolean> {
+  const deadline = performance.now() + GROUP_JOIN_MS
+  while (await groupAlive(pgid)) {
+    killGroup(pgid)
+    if (performance.now() >= deadline) return false
+    await new Promise((resolve) => setTimeout(resolve, GROUP_POLL_MS))
+  }
+  return true
 }
