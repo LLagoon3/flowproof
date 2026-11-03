@@ -235,3 +235,7 @@ the initial review. Merge, later-slice implementation and product deployment rem
 Before publication, the unchanged accepted preview source passed 56 additional actual native-200%
 checks with a visible zoom indicator, unchanged outer window and restored 100% metrics. This closes
 the static preview's prior zoom gap; other gaps are recorded in the preview README.
+
+Publication status: [PR #23](https://github.com/LLagoon3/flowproof/pull/23) is open against `main`
+for slice 1 only. Exact-head CI and Codex review are tracked on that PR; their completion will be
+recorded in PR metadata without changing the reviewed source. Merge remains unauthorized.
