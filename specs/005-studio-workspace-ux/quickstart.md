@@ -70,7 +70,7 @@ The launcher currently fixes Studio to the scenario's 1280 x 800 viewport at dev
 Changing its OS window alone does not test the requested sizes. Do not change the launcher or
 scenario for this feature, and do not request Playwright's built-in page/browser fixtures.
 
-1. Reset native browser zoom to 100% before each case. The new workspace test uses the existing
+1. The operator resets native browser zoom to 100% before each case. The new workspace test uses the existing
    harness's actual `page.setViewportSize`
    with 1280 x 720 and 1920 x 1080. Record `innerWidth`, `innerHeight`, zoom, and screenshots.
    This is an explicit viewport override for layout, not proof of actual browser zoom.
@@ -81,19 +81,25 @@ scenario for this feature, and do not request Playwright's built-in page/browser
    viewport metrics: do not try to clear them through a second CDP session. The feasibility
    [probe in research.md](./research.md#8-validation-without-new-services) confirms that native
    Chromium zoom still reduces the effective CSS viewport.
-3. On a visible desktop, use OS-delivered browser shortcuts/menu to set actual 200% zoom
+3. On a visible desktop, the operator uses OS-delivered browser shortcuts/menu to set actual 200% zoom
    without another viewport or window resize. Capture the browser's visible 200% indicator,
    unchanged outer window bounds and effective CSS viewport (640 x 360, allowing rounding).
    Check reflow, focus, primary/result/evidence/restore controls and absence of page-wide
-   horizontal overflow; the chart remains 640 x 360 with local scrolling. Restore native 100%
-   and the original test viewport in `finally`; close only owned resources. Perform the check
-   before admission or after finalization, never during engine measurement.
+   horizontal overflow; the chart remains 640 x 360 with local scrolling. The operator then
+   resets native zoom to 100% and acknowledges the reset. The repository test restores only
+   the original viewport and closes the owned Studio browser in `finally`, even on timeout.
+   Each launch owns a fresh browser/profile, so a missing reset cannot carry zoom into another
+   launch; a missing reset acknowledgement leaves this case pending or blocked, never passed.
+   Perform the check before admission or after finalization, never during engine measurement.
 4. Run this test-local case with no Inspector, on the agent's desktop, under T015 and T031:
 
    ```bash
    FLOWPROOF_ZOOM_REVIEW=1 pnpm exec playwright test tests/e2e/workspace-ux.spec.ts --grep native-zoom-review
    ```
 
+   The operator supplies zoom/reset input outside repository code (the agent may use its existing
+   desktop tools); do not add Python, X11 or other OS-input helpers/dependencies to repository tests.
+   The ignored throwaway probe helper is research material, not a test dependency or code template.
    Bound every terminal acknowledgement to 120 seconds and the review case to 900 seconds;
    do not disable context/action timeouts or engine budgets. Record browser version, pre/post
    dimensions, native zoom indicator, discovered cases and observed outcomes. If the actual
