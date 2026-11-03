@@ -167,3 +167,43 @@ overrides. The preview proves no runtime behavior.
   policy was changed. Local file rendering is not proof of authenticated hosted rendering.
 - **Owner decision (T008)**: Initial density rejected on 2026-11-04; revision acceptance pending. Offering the preview is not owner acceptance, and no later
   implementation slice has started.
+
+
+## Minimalist revision verification (2026-11-04)
+
+- **Tested revision**: `eab7b55acbca3a14195218821fd6f80ed0991986`, clean before verification.
+  Only HTML/CSS/JS and design/review documentation changed; no production or later-slice files.
+- **Environment**: Linux, Node.js 24.22.1, Playwright 1.64.1, Chromium 156.0.8078.4 headless;
+  a review-owned loopback server with an automatically allocated free port. The saved verification
+  script creates and closes its own server/browser; it needs the operator's existing Playwright
+  installation. No dependencies were installed or modified.
+- **Static checks**: `node --check tests/manual/studio-design/preview.js` and
+  `git diff --check bbcbbe4 eab7b55` exited 0. Source review found no network, timer, storage,
+  HTML-injection or inline-style API added; the restrictive CSP is unchanged.
+- **Rendered checks**: 591 checks, 0 failures. Both modes and all six states at 1440 x 900,
+  1280 x 720, 1920 x 1080, 390 x 844 and 320 x 640; all sizes are viewport overrides at 100%.
+  No page-wide overflow; captured mode never has chat/request fields; exact verdict boundaries,
+  disconnected/pending distinction, initial closed menu/Details, stable target wrapper, keyboard
+  tabs/resize, drag bounds, collapse/restore focus/status, draft and disclosure retention, request
+  bounds, no follow-up composer, all nine gates/ten checks, all evidence states and appended-work
+  reading-position/focus preservation passed. Escape closes the native popover and restores focus.
+- **Density observation**: the default desktop view has three visible buttons: preview options,
+  panel collapse and request send. There is no testing toolbar, status card stack, identifier list,
+  or work log in that initial view. This is an observation, not an acceptance criterion or owner approval.
+- **Contrast/focus**: 1,228 visible text samples across states/menu/expanded details have minimum
+  5.97:1. Composer control border 3.97:1, primary control fill 11.44:1, focus ring 7.39:1 against
+  the work background. Preview options, collapse, send and composer show visible keyboard focus.
+  These focused measurements are not a complete accessibility audit.
+- **Network/errors**: only `/`, `/preview.css` and `/preview.js` were requested; no console or page
+  errors. There is no iframe or real verification target.
+- **Evidence**: ignored
+  `.flowproof/review/005-studio-workspace-ux/eab7b55acbca3a14195218821fd6f80ed0991986/slice1-minimal/`
+  contains `checks.json`, `manifest.json`, `verify.mjs` and 24 screenshots including the initial
+  desktop, all desktop states, compact ready/results, open menu and expanded technical details.
+- **Gaps**: native 200% browser zoom was **not rerun** for this revision; the earlier zoom record
+  is historical and cannot be claimed for these changed files. No screen-reader or non-Chromium
+  review and no hover-color contrast measurement. The worker did not publish or test a remote
+  hosted page. This preview proves no real Studio behavior. The revised owner decision is pending.
+
+Publication and the reviewed source must be recorded by the delivery owner after its independent
+review; this record does not claim T007 re-delivery or T008 acceptance for the revision.

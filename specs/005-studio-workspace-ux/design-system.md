@@ -175,6 +175,16 @@ Applicable states follow SC-007: default, focus, disabled, active, and error, wh
 - Legacy provenance is shown only from the result; the preview states that it does not simulate one.
   Captured results state that no model diagnosis or citations were evaluated.
 
+## Minimalist revision mechanical record
+
+Tested clean revision `eab7b55acbca3a14195218821fd6f80ed0991986`: 591 headless Chromium checks,
+0 failures, at 1440/1280/1920/390/320px widths and the heights recorded in the
+[preview README](../../tests/manual/studio-design/README.md#minimalist-revision-verification-2026-11-04).
+Text contrast minimum 5.97:1 (1,228 samples), composer boundary 3.97:1, primary fill 11.44:1,
+focus 7.39:1. Minimal initial view has three visible buttons and closed inspection controls.
+Native 200% zoom, screen-reader review, other browsers and hover contrast remain unverified for
+this revision. These mechanical results do not establish visual acceptance or real runtime behavior.
+
 ## 6. Measured checks (initial revision, historical)
 
 Tested revision `e80e291cc4425cf49089be46e4deb8819007ff03` (the preview and the values above),

@@ -46,6 +46,13 @@ parent checks passing and the authenticated HTTPS render explicitly unverified. 
 decision) remains unchecked: the owner rejected the first density on 2026-11-04 and requested a
 minimalist revision. Revised visual acceptance is pending. No T009 or later task has started.
 
+**Minimalist revision record (2026-11-04)**: the owner requested correction of slice 1's visual
+density, not production implementation. Tested clean revision
+`eab7b55acbca3a14195218821fd6f80ed0991986` passed JS syntax, diff checks and 591 headless browser
+checks with 0 failures; details and gaps are in the preview README. Native 200% zoom was not rerun.
+The revision has not yet been re-offered by the implementer; T008 remains unchecked after the
+initial rejection. T009+ remain untouched and unauthorized.
+
 ## Phase 3: User Story 1 — Canvas-First Real Workspace (P1)
 
 **Goal**: Apply the accepted shell and core design vocabulary while preserving execution ownership.
