@@ -1,13 +1,12 @@
 # Quickstart: Validate Visible Captured Verification
 
-**Planning guide only.** The new files/launcher below are planned, not implemented. Do not report
-these commands as executed acceptance. Current planning probes are recorded in [research.md](./research.md).
-The owner approved the recommended Plan and distinct result label on 2026-11-02 and authorized
-Tasks plus a read-only Analyze on 2026-11-03, followed that day by local implementation of the
-T001-T042 scope. Implementation is now paused for delivery-boundary correction, not
-authorized as one large PR (see [delivery-split-review.md](./delivery-split-review.md)).
-No independent technical review was performed; the
-earlier pre-Tasks review gate is withdrawn (see [plan.md](./plan.md)).
+This guide describes the delivered local slice-4 checkout. Slices 1–3 merged through
+[PR #19](https://github.com/LLagoon3/flowproof/pull/19),
+[PR #20](https://github.com/LLagoon3/flowproof/pull/20) and
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21). Slice 4 is local-only, based on
+`bcb29e5`; publication and review are separate owner-authorized actions. Automated evidence and
+remaining gaps are recorded in [delivery-split-review.md](./delivery-split-review.md).
+The owner-only visual smoke below remains unperformed unless explicitly recorded otherwise.
 
 ## Prerequisites
 
@@ -19,12 +18,13 @@ earlier pre-Tasks review gate is withdrawn (see [plan.md](./plan.md)).
 Use the repository's existing dependency/toolchain setup; this feature does not install packages
 for candidate-authored lockfiles. A missing dependency is a preparation/build failure.
 
-## 1. Check actual test discovery after implementation
+## 1. Check actual test discovery in this checkout
 
-Before running a focused gate, confirm the planned files exist and Vitest discovers nonzero tests:
+Before running a focused gate, confirm the delivered files exist and Vitest discovers nonzero tests:
 
 ```bash
-pnpm exec vitest list tests/contract/captured-verification-contract.test.ts tests/unit/captured-verification.test.ts tests/integration/captured-verification-git.test.ts tests/integration/captured-verification-studio.test.ts
+pnpm exec vitest list tests/contract/captured-verification-contract.test.ts tests/unit/captured-verification.test.ts tests/integration/captured-verification-git.test.ts tests/integration/captured-verification-studio.test.ts tests/ui/captured-verification.test.ts
+pnpm exec playwright test --list tests/e2e/captured-verification.spec.ts
 ```
 
 A missing file or empty selection is an unimplemented gate, not a pass. Match finalized test names
@@ -53,7 +53,7 @@ Expected evidence:
 ## 3. Visible Studio proof
 
 ```bash
-pnpm exec vitest run tests/integration/captured-verification-studio.test.ts --no-file-parallelism --maxWorkers=1
+pnpm exec vitest run tests/integration/captured-verification-studio.test.ts tests/ui/captured-verification.test.ts --no-file-parallelism --maxWorkers=1
 pnpm exec playwright test tests/e2e/captured-verification.spec.ts
 ```
 
@@ -81,28 +81,28 @@ Record actual discovered/passed/skipped counts, plus any unrun gates. Include or
 capture-only, nine-gate/result/client/server and Hero/Failure acceptance paths. No fixture may
 suppress discovery, globally weaken assertions, run a live provider, or prune unrelated resources.
 
-## 5. Planned owner visual smoke after implementation
+## 5. Owner visual smoke (human-only)
 
-Plan one 2–3-minute success-path review, not a login or repeated manual failure checklist:
+Run one 2–3-minute success-path review after the automated gate, not a login or repeated manual
+failure checklist. Build first; the QA launcher accepts only `--case pass` and imports built
+FlowProof modules, not TypeScript source or test helpers:
 
 ```bash
+pnpm build
 node tests/manual/captured-verification.mjs --case pass
 ```
 
-The future QA launcher uses the deterministic editor/capture path and trusted host launch API; it
-is not a production CLI mode. Its exact interface is finalized with Tasks. Confirm the real original
+The QA launcher uses the deterministic editor/capture path and trusted host launch API; it
+is not a production CLI mode. It clones committed HEAD, links existing prepared dependencies, builds the fixed local fixture
+image and pins its immutable image ID. It never installs candidate dependencies or invokes a model. Confirm the real original
 failure and candidate select replay are visible, final result/checks match, and the final pane is
 labelled captured evidence rather than a navigable live app. Close Studio and check cleanup. Automated
-tests cover negative cases. This manual smoke is planned, not claimed completed.
+tests cover negative cases. This manual smoke is not claimed completed by automated launcher or headed tests.
 
 ## Current stage
 
-Spec and recommended Plan approved on 2026-11-02; Tasks and a read-only Analyze authorized on
-2026-11-03. When this guide was written, no new application code, acceptance test, manual QA
-launcher, provider connection, push or PR had been created. The result-label choice is resolved. No
-independent technical review was performed and owner approval is not claimed as one. No
-implementation authority follows from this guide, the finalized Plan or the Tasks authorization.
-Later on 2026-11-03 the owner separately authorized local implementation covering T001-T042;
-the subsequent delivery-size correction requires reviewable PR slices, not merely small commits.
-Push and PR creation remain unauthorized. Implementation progress and evidence are recorded in
-[tasks.md](./tasks.md); T036 syncs this guide after implementation.
+The current authorization covers local extraction and validation of slice 4 only. It adds no
+production CLI mode, live agent/provider, export, hosting or deployment. T041 requires the owner;
+automation does not record its visual acceptance. See the slice-4 report and task ledger for actual
+discovery, compatibility and final-gate results. The prepared execution trust boundary and excluded
+adversarial observation redesign (issue #15) remain unchanged.
