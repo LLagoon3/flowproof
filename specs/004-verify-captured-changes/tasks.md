@@ -38,7 +38,10 @@ next slice. PR #20 merged into `main` as `d385c36` after no-finding Codex review
 and GitGuardian, and zero unresolved threads on exact reviewed head `639d993`. This supersedes
 the earlier merge/slice-3 restriction; this branch performs local slice-3 implementation and
 verification only. Deployment target clarification is handled separately by the parent session,
-and no deployment is claimed here. No slice-3 push/PR/review or slice-4 work is included.
+and no deployment is claimed here. The owner subsequently authorized publishing slice 3 as
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21) and its GitHub Codex review loop, including
+in-scope corrections, follow-up pushes and exact-head re-reviews. Initial review plus at most
+three remediation rounds follows AGENTS.md. Merge, deployment and slice 4 are not included.
 
 **This branch**: `feat/004-studio-contracts-state`, created from current `main`/`origin/main`
 at `d385c36`. Scope is delivery slice 3 only: T018, T019 server portion, T021, T023-T024 and
@@ -277,12 +280,12 @@ are preserved; a checked parent task is not a statement that either PR part is r
 
 The local audit snapshots are dependency/validation evidence, not published or owner-approved
 PR branches. Do not blindly cherry-pick the interleaved aggregate commits. Preserve the original
-branch. Slice 1 merged through PR #19 and slice 2 through PR #20. Slice 3 is local-only on
+branch. Slice 1 merged through PR #19 and slice 2 through PR #20. Slice 3 is published as PR #21 on
 `feat/004-studio-contracts-state` from merged baseline `d385c36`; its exact task parts are listed
 above. Do not implement T035-T042 or start slice 4 now. Report and stop at this slice boundary.
 After this slice is separately authorized for publication, reviewed and merged, update main and
 create the next authorized slice branch, as required by CONTRIBUTING.md. The current request
-does not authorize slice-3 push/PR/review or work on any later slice.
+authorizes the slice-3 publication/review loop only, not merge, deployment or work on a later slice.
 
 ---
 

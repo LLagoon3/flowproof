@@ -3,7 +3,8 @@
 **Date:** 2026-11-03. **State when written:** local-only feasibility review; further product
 implementation paused. **Current:** slices 1 and 2 merged through PR #19 (`16eecc0`) and
 [PR #20](https://github.com/LLagoon3/flowproof/pull/20) (`d385c36`); slice 3 is extracted,
-verified and reviewed locally. See [Slice 3 branch](#slice-3-branch). Earlier sections are dated history;
+verified and reviewed locally, and published as [PR #21](https://github.com/LLagoon3/flowproof/pull/21)
+for GitHub Codex review. See [Slice 3 branch](#slice-3-branch). Earlier sections are dated history;
 their authorization boundaries and counts are not current.
 
 ## Correction and preserved work
@@ -401,3 +402,15 @@ focused files plus `provider-seam.test.ts` passed: exit 0, seven files, 419/419 
 Logs: `/tmp/fp-slice3-parent-typecheck.log` and `/tmp/fp-slice3-parent-focused.log`.
 `git diff --check d385c36 HEAD` passed. This is local slice completion, not a published PR,
 remote review, whole-feature acceptance or deployment.
+
+### Slice 3 publication and review
+
+The owner subsequently authorized PR publication and a review loop on 2026-11-03. Slice 3 is
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21), `feat/004-studio-contracts-state` to `main`.
+This supersedes the earlier local-only publication boundary, authorizing in-scope corrections,
+follow-up pushes and exact-head GitHub Codex review requests. Follow AGENTS.md: initial review
+plus at most three remediation rounds. Merge, deployment and slice 4 remain outside this loop.
+Current phase: exact-head review and CI pending; local verification above is not remote CI.
+The repository has only the PR CI workflow and no automatic preview/deployment workflow.
+This publication-status commit changes documentation only; all product and test bytes remain
+those independently checked at `e1b06c8`.

@@ -16,8 +16,11 @@ including in-scope corrections and follow-up pushes. This supersedes the local-o
 boundary. The loop allowed an initial exact-head review and up to three remediation/review
 rounds, as required by AGENTS.md. The owner then requested merge, deployment and the next slice:
 PR #20 merged as `d385c36` after a no-finding Codex review and successful CI on exact head
-`639d993`. This branch extracts and verifies slice 3 only from that merged baseline; no slice-3
-push, PR or review request, and no slice 4, is included. Deployment is handled separately by the
+`639d993`. This branch extracts and verifies slice 3 only from that merged baseline. The owner
+subsequently authorized publishing slice 3 as [PR #21](https://github.com/LLagoon3/flowproof/pull/21)
+and its GitHub Codex review loop, including in-scope corrections, follow-up pushes and re-review
+(initial review plus up to three remediation rounds). No merge, deployment or slice 4 is included
+in this review request. Deployment is handled separately by the
 parent session because no deployment target or workflow is configured; it is not claimed here.
 **Code baseline**: `b2ed6ad8a268457ae2f6797e02f48a028d5c9b9b`; approved Spec commit `a3c51ca`.
 **Approved claim clarification**: `ed450ad`. No independent technical review was performed, and
