@@ -43,7 +43,8 @@ the 346 desktop/compact and 56 native-200%-zoom rendered checks had 0 failures. 
 ignored evidence location are in `tests/manual/studio-design/README.md`. T007 offers the unchanged
 preview at that exact source revision through the owner-facing review location, with 219 independent
 parent checks passing and the authenticated HTTPS render explicitly unverified. T008 (actual owner
-decision) remains pending. No T009 or later task has started.
+decision) remains unchecked: the owner rejected the first density on 2026-11-04 and requested a
+minimalist revision. Revised visual acceptance is pending. No T009 or later task has started.
 
 ## Phase 3: User Story 1 — Canvas-First Real Workspace (P1)
 

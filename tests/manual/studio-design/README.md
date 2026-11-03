@@ -13,7 +13,7 @@ The proposed visual values and control inventory are recorded in
 
 | File | Purpose |
 | --- | --- |
-| `index.html` | Static page shell, preview controls, and the labelled `Design preview — simulated data` notice. |
+| `index.html` | Static page shell, preview controls, and the compact `Preview · simulated` label with its overflow menu. |
 | `preview.css` | Proposed tokens, layout, and control states. Self-hosted; no remote fonts or assets. |
 | `preview.js` | Synthetic mode/state data and presentation-only interactions. No network calls. |
 | `README.md` | These instructions and the preview verification record. |
@@ -51,7 +51,7 @@ No production UI or later slice is included. Owner acceptance of the revision is
 
 ## What the preview covers
 
-- **Two modes.** *Legacy prepared case*: case picker, bounded request (1 to 500 characters), and
+- **Two modes.** *Legacy prepared case*: case picker (in Preview options), bounded request (1 to 500 characters), and
   `Start run`. *Captured candidate*: a host-fixed candidate and `Start candidate verification`,
   with no chat, model or provider selection, or candidate generation.
 - **Six SC-002 states** for each mode: ready, active, finalizing, activity disconnected without a

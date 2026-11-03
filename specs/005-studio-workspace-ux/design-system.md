@@ -45,9 +45,27 @@ Artifacts' spatial simplicity as a reference, not its product features or propri
 - Keep panel resizing/collapse, stable target wrapper, final evidence tabs, missing-evidence
   distinctions and all single-run/no-network semantics. This changes presentation, not scope.
 
-The values and inventory below describe the first rejected revision historically; the implemented
-revision's token values and inventory are summarized in the next verification record after checks.
-T008 remains unchecked: rejection of the first preview is not acceptance of the revision.
+### Current minimalist foundations and inventory
+
+| Role | Implemented value / treatment |
+| --- | --- |
+| Background / surface / hover | `#f7f6f2` / `#ffffff` / `#eeece6`; no amber test surface |
+| Text / supporting text | `#292822` / `#625e55`; tertiary `#6b665e` |
+| Decorative / control border | `#dedbd3` / `#857f75` |
+| Primary action / focus | `#3e3932` fill with white text; 2px `#654b3d` outline, 3px offset |
+| Success / danger / warning | `#166534` / `#a32b23` / `#805013`; words and icons carry meaning |
+| Type | System sans, 14px body/1.6; 12–13px supporting controls; Georgia for quiet ready/chart titles only; no external font |
+| Layout | 54px header; 24rem default work column (seven 20–32rem choices), 12px separator; canvas fills remainder; stack below 64rem |
+| Shape and spacing | 12px canvas radius, 16px composer; restrained 4px spacing grid; no work-card surfaces or verdict pills |
+| Shell | Flat work column and bordered artifact; collapse keeps outside status/result and restore focus |
+| Buttons | Single dark send/start action; quiet detail/comparison/tab actions; disabled actions explained; visible focus and hover fill |
+| Request | Borderless textarea within outlined composer; invalid request gets text error; 1–500 characters; no captured-mode field; no follow-up composer after starting |
+| Tabs | Final legacy Target/Evidence only; plain quiet tabs, selected soft fill; keyboard arrows/Home/End |
+| Status | One concise work/result heading; secondary target provenance label; warning distinguishes disconnected activity from an execution verdict |
+| Work/disclosures | One outer Details disclosure, initially closed; flat chronological rows and nested Events disclose preserved raw records; selected disclosure state retained |
+
+All values above are proposed, not visually accepted. Earlier values and results below are retained
+as historical evidence, not as claims about this revision. T008 remains unchecked.
 
 ## 2. Foundations (initial revision, historical)
 
@@ -157,12 +175,12 @@ Applicable states follow SC-007: default, focus, disabled, active, and error, wh
 - Legacy provenance is shown only from the result; the preview states that it does not simulate one.
   Captured results state that no model diagnosis or citations were evaluated.
 
-## 6. Measured checks
+## 6. Measured checks (initial revision, historical)
 
 Tested revision `e80e291cc4425cf49089be46e4deb8819007ff03` (the preview and the values above),
 rendered in Playwright 1.64.1 Chromium 156.0.8078.4 on an isolated display: 346 desktop/compact
 and 56 native-zoom checks, 0 failures. The full record, commands, and evidence location are in the
-[preview README](../../tests/manual/studio-design/README.md#verification-record).
+[preview README](../../tests/manual/studio-design/README.md#verification-record-initial-revision-historical).
 
 | Check | Observed |
 | --- | --- |
@@ -183,9 +201,9 @@ is requested; its visual acceptance remains pending.
 | Field | Value |
 | --- | --- |
 | Source offered for review | `e80e291cc4425cf49089be46e4deb8819007ff03` (unchanged preview files); handoff and delivery gaps in the preview README |
-| Reviewed revision | Pending |
-| Review date | Pending |
-| Hierarchy | Pending |
+| Reviewed revision | `e80e291cc4425cf49089be46e4deb8819007ff03` |
+| Review date | 2026-11-04 |
+| Hierarchy | Requested simplification to conversation/input and canvas |
 | Density | Rejected: too many buttons and unnecessary text |
 | Work-to-canvas balance | Pending |
 | Requested revisions | Conversation/input beside a large canvas; remove dashboard clutter |

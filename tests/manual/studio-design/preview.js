@@ -584,7 +584,7 @@
       'div',
       { class: 'scene', role: 'img', 'aria-label': `Synthetic target scene. Quarterly revenue by region, region North. ${describeScene(sceneKey)}.` },
       el('p', { class: 'scene__heading' }, 'Quarterly revenue by region'),
-      el('p', { class: 'scene__filter' }, 'Region', el('span', { class: 'scene__select' }, 'North', el('span', {}, '▾'))),
+      el('p', { class: 'scene__filter' }, 'North region'),
       chart(sceneKey),
     )
   }
@@ -699,18 +699,7 @@
 
   function renderStatus() {
     const model = statusModel(current)
-    fill(
-      dom.status,
-      el(
-        'div',
-        { class: 'run-status__head' },
-        statusPill(model.tone, model.icon, model.label),
-        model.final ? el('button', { type: 'button', class: 'btn btn--quiet btn--sm', 'data-focus-key': 'go-result', onclick: () => showResult() }, 'Go to result') : null,
-      ),
-      model.warning ? el('p', { class: 'run-status__warning' }, icon('alert'), el('span', {}, model.warning)) : null,
-      model.final ? null : el('p', { class: 'run-status__detail' }, model.detail),
-      el('p', { class: 'run-status__next' }, el('span', { class: 'run-status__next-label' }, 'Next'), el('span', {}, model.next)),
-    )
+    fill(dom.status, model.label)
     fill(dom.collapsedStatus, icon(model.icon), el('span', {}, model.label))
     dom.collapsedStatus.setAttribute('data-tone', model.tone)
     dom.viewResult.hidden = !model.final
@@ -733,72 +722,10 @@
   }
 
   function workCard(card, { simulated = false } = {}) {
-    const titleId = uid('card-title')
-    const metaId = uid('card-meta')
-    const detailsId = uid('card-details')
-    const expanded = ui.expanded.has(card.id)
-    const isCurrent = card.status === 'current' || card.status === 'current-pending'
-    const statusText = {
-      current: 'In progress',
-      'current-pending': 'Verdict pending',
-      'last-observed': 'Last observed before activity disconnected',
-      observed: 'Observed',
-      simulated: 'Appended by the preview control',
-    }[card.status]
-    const details = el(
-      'div',
-      { id: detailsId, class: 'card__details', hidden: !expanded },
-      eventDetails(card),
-      card.note ? el('p', { class: 'card__note' }, card.note) : null,
-    )
-    const toggle = el(
-      'button',
-      {
-        type: 'button',
-        class: 'card__toggle',
-        'aria-expanded': String(expanded),
-        'aria-controls': detailsId,
-        'aria-labelledby': titleId,
-        'aria-describedby': metaId,
-        'data-focus-key': `card:${card.id}`,
-        onclick: () => {
-          const open = !ui.expanded.has(card.id)
-          if (open) ui.expanded.add(card.id)
-          else ui.expanded.delete(card.id)
-          toggle.setAttribute('aria-expanded', String(open))
-          details.hidden = !open
-        },
-      },
-      el('span', { class: 'card__marker' }, icon(simulated ? 'sparkle' : isCurrent ? 'progress' : card.status === 'last-observed' ? 'alert' : 'ring')),
-      el(
-        'span',
-        { class: 'card__body' },
-        el('span', { id: titleId, class: 'card__title' }, card.title),
-        el(
-          'span',
-          { id: metaId, class: 'card__meta-wrap' },
-          el('span', { class: 'card__summary' }, card.summary),
-          card.facts.length > 0 ? el('span', { class: 'card__summary' }, ' ', card.facts.join('. '), '.') : null,
-          el(
-            'span',
-            { class: 'card__meta' },
-            isCurrent ? el('span', { class: 'tag tag--current' }, 'Current') : null,
-            simulated ? el('span', { class: 'tag tag--simulated' }, 'Simulated') : null,
-            card.status === 'last-observed' ? el('span', { class: 'tag tag--warning' }, 'Activity disconnected') : null,
-            el('span', {}, statusText),
-            el('span', { 'aria-hidden': 'true' }, '·'),
-            el('span', {}, `${card.events.length} ${card.events.length === 1 ? 'event' : 'events'} ${card.range}`),
-          ),
-        ),
-      ),
-      el('span', { class: 'chevron' }, icon('chevron')),
-    )
-    return el(
-      'div',
-      { class: 'card', 'data-card-id': card.id, 'data-current': isCurrent ? 'true' : undefined, 'data-simulated': simulated ? 'true' : undefined },
-      el('h3', { class: 'card__heading' }, toggle),
-      details,
-    )
+    return el('section', { class: 'work-row', 'data-card-id': card.id },
+      el('h4', {}, card.title, simulated ? ' · Simulated' : ''),
+      el('p', {}, card.summary),
+      disclosure(card.id, 'Events', null, () => eventDetails(card)))
   }
 
   function disclosure(key, title, count, buildContent) {
@@ -838,71 +765,31 @@
     )
   }
 
-  function resultCard(snap) {
-    const { result } = snap
-    const headingId = uid('result-heading')
-    const legacy = result.family === 'legacy'
-    const rows = legacy
-      ? result.gates.map((gate) => ({ label: GATE_LABELS[gate.id], status: gate.status, code: gate.code, message: null }))
-      : result.checks
-    const unsuccessful = rows.filter((row) => row.status !== 'pass')
-    return el(
-      'section',
-      { id: 'result-summary', class: 'result', 'data-tone': result.tone, 'aria-labelledby': headingId },
-      el('h3', { id: headingId, class: 'result__heading', tabindex: '-1' }, 'Final result'),
-      el('p', { class: 'result__verdict' }, statusPill(result.tone, result.tone === 'success' ? 'check' : 'x', result.verdict, 'status-pill--verdict')),
-      el('p', { class: 'result__explanation' }, result.explanation),
-      !legacy ? el('p', { class: 'detail-note' }, NO_MODEL_STATEMENT) : null,
-      result.reasonCode ? el('p', { class: 'result__code' }, 'Reason ', el('code', {}, result.reasonCode)) : null,
-      unsuccessful.length > 0
-        ? el(
-            'div',
-            { class: 'session-context__field' },
-            el('h4', { class: 'eyebrow' }, legacy ? 'Failed or unevaluable gates' : 'Unsuccessful checks'),
-            el('ul', { class: 'check-list check-list--prominent' }, unsuccessful.map(checkRow)),
-          )
-        : null,
-      el(
-        'div',
-        { class: 'result__actions' },
-        el('button', { type: 'button', class: 'btn btn--secondary btn--sm', 'data-focus-key': 'compare', onclick: () => compareEvidence() }, icon('image'), 'Compare before and after'),
-      ),
-      disclosure(`${snap.runId}:checks`, legacy ? 'All gates' : 'All checks', legacy ? '9 gates' : '10 checks', () =>
-        el('ul', { class: 'check-list', 'aria-label': legacy ? 'All nine gates' : 'All ten checks' }, rows.map(checkRow)),
-      ),
-      legacy
-        ? disclosure(`${snap.runId}:details`, 'Candidate diff and provenance', null, () => [
-            el('p', { class: 'eyebrow' }, 'Candidate diff'),
-            result.diff
-              ? el(
-                  'pre',
-                  { class: 'diff', 'aria-label': 'Candidate diff (synthetic)' },
-                  el('span', { class: 'diff__file' }, 'apps/demo-chart/src/filterData.ts'),
-                  el('span', { class: 'diff__del' }, '-  return rows.filter((row) => row.region.includes(region))'),
-                  el('span', { class: 'diff__add' }, '+  return rows.filter((row) => row.region === region)'),
-                )
-              : el('p', { class: 'detail-note' }, 'No candidate passed validation in this run.'),
-            el('p', { class: 'eyebrow' }, 'Diagnosis provenance'),
-            el('p', { class: 'detail-note' }, 'Studio shows the actual source here: the live model or a labelled fixture. This preview does not simulate a provenance.'),
-          ])
-        : disclosure(`${snap.runId}:details`, 'Candidate identity and cleanup', null, () => [
-            el(
-              'dl',
-              { class: 'facts' },
-              el('dt', {}, 'Candidate digest'),
-              el('dd', {}, el('code', {}, CAPTURED_IDENTITY.digest)),
-              el('dt', {}, 'Baseline commit'),
-              el('dd', {}, el('code', {}, CAPTURED_IDENTITY.baseline)),
-              el('dt', {}, 'Cleanup complete'),
-              el('dd', {}, 'Yes'),
-              el('dt', {}, 'Owned resources left'),
-              el('dd', {}, 'None'),
-              el('dt', {}, 'Original unchanged'),
-              el('dd', {}, 'Yes'),
-            ),
-            el('p', { class: 'detail-note' }, 'Digest and commit are synthetic placeholders.'),
-          ]),
-    )
+  function technicalDetails(snap) {
+    const nodes = [el('p', { class: 'detail-note' }, 'Scope: apps/demo-chart/src/filterData.ts')]
+    for (const card of buildCards(snap)) nodes.push(workCard(card))
+    if (snap.result !== null) {
+      const result = snap.result
+      if (result.reasonCode) nodes.push(el('p', { class: 'detail-note' }, 'Reason: ', codeText(result.reasonCode)))
+      const rows = result.family === 'legacy'
+        ? result.gates.map((gate) => ({ label: GATE_LABELS[gate.id], ...gate }))
+        : result.checks
+      nodes.push(el('h4', {}, result.family === 'legacy' ? 'All gates' : 'All checks'),
+        el('ul', { class: 'check-list', 'aria-label': result.family === 'legacy' ? 'All nine gates' : 'All ten checks' }, rows.map(checkRow)))
+      if (result.family === 'legacy') {
+        nodes.push(el('h4', {}, 'Candidate diff and provenance'), result.diff
+          ? el('pre', { class: 'diff' }, el('span', { class: 'diff__file' }, 'apps/demo-chart/src/filterData.ts'), el('span', { class: 'diff__del' }, '- row.region.includes(region)'), el('span', { class: 'diff__add' }, '+ row.region === region'))
+          : el('p', {}, 'No candidate passed validation.'))
+        nodes.push(el('p', {}, 'The real result supplies model or fixture provenance; this preview does not simulate it.'))
+      } else {
+        nodes.push(el('h4', {}, 'Candidate identity and cleanup'), el('dl', { class: 'facts' },
+          el('dt', {}, 'Candidate digest'), el('dd', {}, CAPTURED_IDENTITY.digest),
+          el('dt', {}, 'Baseline'), el('dd', {}, CAPTURED_IDENTITY.baseline),
+          el('dt', {}, 'Cleanup'), el('dd', {}, 'Complete; no owned resources remain; original unchanged.')),
+          el('p', {}, NO_MODEL_STATEMENT), el('p', {}, 'Identifiers are synthetic placeholders.'))
+      }
+    }
+    return nodes
   }
 
   function renderHistory() {
@@ -911,47 +798,29 @@
     ui.unseen = 0
     const nodes = []
     if (snap.view === 'ready') {
-      nodes.push(
-        el(
-          'div',
-          { class: 'empty-state' },
-          el('p', { class: 'empty-state__title' }, 'No work yet'),
-          el('p', {}, 'Observed work appears here after you start. Nothing runs until then.'),
-        ),
-      )
+      nodes.push(el('div', { class: 'empty-state' },
+        el('p', { class: 'empty-state__title' }, snap.mode === 'legacy' ? 'Ready to investigate.' : 'Candidate ready.'),
+        el('p', {}, snap.mode === 'legacy' ? 'Canvas filter · prepared case' : 'Canvas filter · host-fixed candidate')))
     } else {
-      nodes.push(
-        snap.mode === 'legacy'
-          ? el(
-              'div',
-              { class: 'request-bubble' },
-              el('span', { class: 'request-bubble__label' }, 'Your request · received as #1'),
-              el('p', { class: 'request-bubble__text' }, requestValid(ui.draft) ? ui.draft : DEFAULT_REQUEST),
-            )
-          : el(
-              'div',
-              { class: 'request-bubble' },
-              el('span', { class: 'request-bubble__label' }, 'Start'),
-              el('p', { class: 'request-bubble__text' }, 'Verify the fixed captured candidate with the case’s committed goal.'),
-            ),
-      )
-      for (const card of buildCards(snap)) nodes.push(workCard(card))
-      if (snap.stream === 'disconnected') {
-        nodes.push(
-          el(
-            'div',
-            { class: 'notice', role: 'note' },
-            icon('alert'),
-            el(
-              'div',
-              {},
-              el('p', { class: 'notice__title' }, 'Live activity disconnected'),
-              el('p', { class: 'notice__text' }, 'Earlier work stays visible. Missed activity is not reconstructed. The result is read separately and appears here when it is available.'),
-            ),
-          ),
-        )
+      if (snap.mode === 'legacy') nodes.push(el('div', { class: 'request-bubble' },
+        el('p', { class: 'request-bubble__text' }, requestValid(ui.draft) ? ui.draft : DEFAULT_REQUEST)))
+      const model = statusModel(snap)
+      if (snap.result !== null) {
+        const result = snap.result
+        const rows = result.family === 'legacy' ? result.gates.map((gate) => ({ label: GATE_LABELS[gate.id], ...gate })) : result.checks
+        nodes.push(el('section', { id: 'result-summary', class: 'result', 'data-tone': result.tone },
+          el('h3', { class: 'result__heading', tabindex: '-1' }, icon(model.icon), result.verdict),
+          el('p', { class: 'result__explanation' }, result.explanation),
+          rows.some((row) => row.status !== 'pass') ? el('p', { class: 'failed-checks' }, rows.filter((row) => row.status !== 'pass').map((row) => `${row.label}: ${OUTCOME_LABELS[row.status]}`).join(' · ')) : null,
+          el('button', { type: 'button', class: 'btn btn--quiet', 'data-focus-key': 'compare', onclick: () => compareEvidence() }, 'Compare before and after', icon('chevron'))))
+      } else {
+        const cards = buildCards(snap)
+        nodes.push(el('div', { class: 'work-summary' },
+          el('h3', {}, icon(model.icon), model.label),
+          el('p', {}, cards[cards.length - 1]?.summary ?? model.detail),
+          snap.stream === 'disconnected' ? el('p', { class: 'connection-warning' }, 'Live activity disconnected. No final result received.') : null))
       }
-      if (snap.result !== null) nodes.push(resultCard(snap))
+      nodes.push(disclosure(`${snap.runId}:technical`, 'Details', null, () => technicalDetails(snap)))
     }
     fill(dom.history, nodes)
   }
@@ -961,79 +830,30 @@
   function renderComposer() {
     const snap = current
     if (snap.view !== 'ready') {
-      const running = isRunning(snap.view)
-      const text =
-        snap.mode === 'legacy'
-          ? running
-            ? 'This launch’s one run is in progress. Closing the Studio interrupts it.'
-            : 'This Studio ran its one run. Close the Studio to finish, or launch a new Studio to run again.'
-          : running
-            ? 'The candidate verification is in progress. Closing the Studio interrupts it.'
-            : 'This Studio ran its one candidate verification. Close the Studio to finish.'
-      fill(dom.composer, el('div', { class: 'composer composer--locked' }, icon('lock'), el('p', {}, text)))
+      const text = isRunning(snap.view) ? 'Wait for the result. Closing Studio interrupts this run.' : 'This run is complete. Close Studio when finished.'
+      fill(dom.composer, el('p', { class: 'session-note' }, text))
       return
     }
     if (snap.mode === 'captured') {
-      fill(
-        dom.composer,
-        el(
-          'div',
-          { class: 'composer' },
-          el('p', { class: 'composer__label' }, 'Fixed candidate'),
-          el('p', { class: 'composer__text' }, 'Verifies the captured candidate at its recorded baseline with the trusted build, functional check, and replay.'),
-          el('p', { class: 'composer__note' }, 'No chat, model selection, or candidate editing in this mode.'),
-          el('button', { type: 'button', class: 'btn btn--primary btn--block', 'data-focus-key': 'start', onclick: () => simulateStart() }, 'Start candidate verification'),
-        ),
-      )
+      fill(dom.composer, el('button', { type: 'button', class: 'btn btn--primary candidate-start', 'data-focus-key': 'start', onclick: () => simulateStart() }, 'Start candidate verification'))
       return
     }
-    const hintId = 'request-hint'
-    const countId = 'request-count'
-    const problemId = 'request-problem'
-    const field = el('textarea', {
-      id: 'request-field',
-      class: 'composer__field',
-      rows: '2',
-      spellcheck: 'true',
-      'aria-describedby': `${hintId} ${countId}`,
-      'data-focus-key': 'request',
-    })
+    const field = el('textarea', { id: 'request-field', class: 'composer__field', rows: '3', placeholder: 'Describe the issue…', 'aria-label': 'Request', 'data-focus-key': 'request' })
     field.value = ui.draft
-    const count = el('span', { id: countId, class: 'composer__count' })
-    const problem = el('p', { id: problemId, class: 'field-error', hidden: true })
-    const start = el('button', { type: 'submit', class: 'btn btn--primary', 'data-focus-key': 'start' }, 'Start run')
-    const form = el(
-      'form',
-      {
-        class: 'composer',
-        novalidate: true,
-        'aria-label': 'Request',
-        onsubmit: (submitEvent) => {
-          submitEvent.preventDefault()
-          if (requestValid(ui.draft)) simulateStart()
-        },
-      },
-      el('label', { class: 'composer__label', for: 'request-field' }, 'Request'),
-      field,
-      problem,
-      el('div', { class: 'composer__foot' }, el('div', { class: 'composer__meta' }, el('p', { id: hintId, class: 'composer__hint' }, 'The prepared case fixes the scenario, source scope, and gates.'), count), start),
-    )
+    const problem = el('p', { id: 'request-problem', class: 'field-error', hidden: true })
+    const start = el('button', { type: 'submit', class: 'btn btn--primary send-button', 'aria-label': 'Start run', 'data-focus-key': 'start' }, '↑')
+    const form = el('form', { class: 'composer', novalidate: true, 'aria-label': 'Request', onsubmit: (e) => { e.preventDefault(); if (requestValid(ui.draft)) simulateStart() } }, field, problem,
+      el('div', { class: 'composer__foot' }, el('span', { class: 'composer__context' }, 'Canvas filter'), start))
     const sync = () => {
       const valid = requestValid(ui.draft)
-      count.textContent = `${ui.draft.length} of ${MAX_REQUEST_LENGTH} characters`
-      count.setAttribute('data-over', String(ui.draft.length > MAX_REQUEST_LENGTH))
-      fill(problem)
-      if (!valid) problem.append(icon('alert'), el('span', {}, ui.draft.length > MAX_REQUEST_LENGTH ? `The request is limited to ${MAX_REQUEST_LENGTH} characters.` : `Enter a request of 1 to ${MAX_REQUEST_LENGTH} characters.`))
+      problem.textContent = ui.draft.length > MAX_REQUEST_LENGTH ? 'The request is limited to 500 characters.' : 'Enter a request to start.'
       problem.hidden = valid
-      form.setAttribute('data-invalid', String(!valid))
       field.setAttribute('aria-invalid', String(!valid))
-      field.setAttribute('aria-describedby', valid ? `${hintId} ${countId}` : `${problemId} ${hintId} ${countId}`)
+      if (valid) field.removeAttribute('aria-describedby')
+      else field.setAttribute('aria-describedby', 'request-problem')
       start.disabled = !valid
     }
-    field.addEventListener('input', () => {
-      ui.draft = field.value
-      sync()
-    })
+    field.addEventListener('input', () => { ui.draft = field.value; sync() })
     sync()
     fill(dom.composer, form)
   }
@@ -1051,7 +871,7 @@
   function renderFrame() {
     const snap = current
     const sceneKey = snap.mode === 'captured' && snap.view !== 'ready' ? 'fixed' : 'defect'
-    const children = [el('div', { class: 'frame-chrome' }, el('span', { class: 'frame-chrome__host' }, 'localhost:43119'), el('span', { class: 'frame-chrome__tag' }, 'Synthetic scene')), scene(sceneKey)]
+    const children = [scene(sceneKey)]
     if (snap.mode === 'captured' && snap.view === 'active') {
       children.push(el('div', { class: 'frame-guard', 'aria-hidden': 'true' }, el('span', { class: 'frame-guard__label' }, icon('shield'), 'Input guarded during measurement')))
     }
@@ -1080,13 +900,13 @@
       el(
         'div',
         { class: 'evidence-side__head' },
-        el('div', {}, el('p', { class: 'evidence-side__phase' }, side.phase === 'failure' ? 'Failure phase' : 'Replay phase'), el('h4', { class: 'evidence-side__title' }, title)),
+        el('div', {},  el('h4', { class: 'evidence-side__title' }, title)),
         statusPill(state.tone, state.icon, state.label),
       ),
       media,
       el(
         'figcaption',
-        { class: 'evidence-side__meta' },
+        { class: 'evidence-side__meta visually-hidden' },
         side.state === 'available' || side.state === 'loading' || side.state === 'unreadable'
           ? [el('span', {}, side.state === 'available' ? 'Stored screenshot, not live' : 'Evidence ID'), codeText(side.id)]
           : el('span', {}, 'No stored screenshot is shown'),
@@ -1208,7 +1028,7 @@
 
   function simulateStart() {
     setState(ui.mode, 'active', 'Simulated start: switched to the Active state. No request was sent and no run started.')
-    dom.status.focus()
+    dom.history.focus()
   }
 
   // ----------------------------------------------------------------------------------------
@@ -1269,7 +1089,7 @@
   function jumpToLatest() {
     dom.history.scrollTop = dom.history.scrollHeight
     updateJump()
-    const toggles = dom.history.querySelectorAll('.card__toggle, .result__heading')
+    const toggles = dom.history.querySelectorAll('.disclosure__toggle, .result__heading')
     const last = toggles[toggles.length - 1]
     if (last !== undefined) last.focus({ preventScroll: true })
   }
@@ -1441,5 +1261,5 @@
   }).observe(dom.history)
 
   renderAll({ resetHistory: true })
-  note('Simulated data only. Choose a mode and state above; nothing here starts a run.')
+  note('Presentation only. Controls do not send requests or start real runs.')
 })()
