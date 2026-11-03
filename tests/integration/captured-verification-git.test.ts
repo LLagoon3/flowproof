@@ -1398,6 +1398,24 @@ describe('captured owned-resource release on terminal paths', () => {
   )
 
   it(
+    'finalizes a close during worktree disposal as interrupted, never passed, and still releases everything it owned',
+    async () => {
+      const mod = await capturedRunModule()
+      const clone = await canvasClone()
+      const { capture } = await captureExactFilterFix(clone)
+      const worktreesBefore = git(clone.root, 'worktree', 'list', '--porcelain')
+      const close = new AbortController()
+      // Closes after every stage passed, just before the owned worktree is disposed.
+      const run = await runOwned(mod, clone, capture, { signal: close.signal, beforeDisposal: async () => close.abort() })
+      expect(close.signal.aborted).toBe(true)
+      expect(run.result).toMatchObject({ status: 'interrupted', reason_code: 'RUN_INTERRUPTED' })
+      for (const id of ['application_complete', 'build_passed', 'tests_passed', 'dataset_matches', 'canvas_matches']) expect(checkOf(run.result, id)?.status, id).toBe('pass')
+      await expectReleased(clone, run, worktreesBefore)
+    },
+    DOCKER_TEST_TIMEOUT,
+  )
+
+  it(
     'stops a running application on disposal instead of waiting for it, then removes everything it owned',
     async () => {
       const mod = await worktreeModule()

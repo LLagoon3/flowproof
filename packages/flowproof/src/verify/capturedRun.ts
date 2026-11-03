@@ -496,7 +496,7 @@ export interface ExecuteCapturedRunOptions {
   readonly ports: CapturedRunPorts
   /** Seeded markers for the whole-run secret scan. */
   readonly secretMarkers: readonly string[]
-  /** Existing close/process interruption; finalizes `interrupted`. */
+  /** Existing close/process interruption; finalizes `interrupted` when it fires before the terminal boundary. */
   readonly signal?: AbortSignal
 }
 
@@ -693,6 +693,8 @@ const elapsedMs = (mark: number): number => Math.max(0, Math.round(performance.n
  * every stage boundary, before a stage's output is accepted, on readiness, on interruption, and at
  * the terminal boundary, so a starved timer never lets a late stage or run pass. The first of
  * timeout and interruption to happen decides the outcome; every stage is joined before cleanup.
+ * Interruption is tracked until the terminal boundary, so a close during scan or cleanup still
+ * finalizes the run as interrupted once cleanup completed.
  */
 export async function executeCapturedRun(options: ExecuteCapturedRunOptions): Promise<CapturedVerificationResult> {
   const { scanner, ports } = readRunOptions(options)
@@ -884,11 +886,11 @@ export async function executeCapturedRun(options: ExecuteCapturedRunOptions): Pr
     // An engine-side failure outside a stage stops the run; unreached checks stay unevaluable.
     termination = 'error'
   } finally {
-    // Every stage settled. Finalization still counts toward the total window, checked below.
+    // Every stage settled. Finalization still counts toward the total window, and an interruption
+    // during it still counts too; both are decided at the terminal boundary below.
     clearTimeout(runTimer)
     clearTimeout(windowTimer)
     windowEnd = null
-    options.signal?.removeEventListener('abort', onInterrupt)
   }
 
   // Whole-run scan of the raw candidate, every persisted evidence artifact, and the activity so far.
@@ -974,12 +976,15 @@ export async function executeCapturedRun(options: ExecuteCapturedRunOptions): Pr
   }
 
   /**
-   * The terminal boundary: a run that otherwise completed but crossed its total window, scan and
-   * cleanup included, is a timeout. An earlier error or interruption keeps its own reason.
+   * The terminal boundary: a run that otherwise completed but was interrupted or crossed its total
+   * window, scan and cleanup included, finalizes with whichever of the two happened first. An
+   * earlier error, timeout, or interruption keeps its own reason.
    */
-  const crossedTotal = (): boolean => {
-    if (termination !== 'completed' || performance.now() < totalEnd) return false
-    termination = 'timeout'
+  const stoppedBeforeTerminal = (): boolean => {
+    if (termination !== 'completed') return false
+    checkDeadline()
+    if (stopReason === null) return false
+    termination = stopReason
     return true
   }
   // The final result is scanned too, together with the complete activity, before it is persisted;
@@ -992,9 +997,11 @@ export async function executeCapturedRun(options: ExecuteCapturedRunOptions): Pr
       return 0
     }
   }
-  crossedTotal()
+  stoppedBeforeTerminal()
   let finalFindings = scanFinal()
-  if (crossedTotal()) finalFindings = scanFinal()
+  if (stoppedBeforeTerminal()) finalFindings = scanFinal()
+  // The outcome is decided; a later close cannot change what is persisted and returned.
+  options.signal?.removeEventListener('abort', onInterrupt)
   findings += finalFindings
   const secretScan = scanIncomplete
     ? capturedCheck('secret_scan_clean', 'SECRET_SCAN_INCOMPLETE')

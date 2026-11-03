@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { getEventListeners } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -542,6 +543,8 @@ async function run(
     readonly markers?: readonly string[]
     readonly before?: (h: Harness) => void
     readonly signal?: AbortSignal
+    /** Wraps the run's store, to observe or fail its reads and writes. */
+    readonly store?: (store: RunArtifactStore) => RunArtifactStore
   } = {},
 ): Promise<{ readonly result: CapturedResult; readonly h: Harness }> {
   const h = await harness()
@@ -552,7 +555,7 @@ async function run(
     requestId: h.requestId,
     scenario: HERO,
     candidate,
-    store: h.store,
+    store: options.store?.(h.store) ?? h.store,
     events: h.events,
     allocator: createEvidenceIdAllocator(h.runId),
     ports: fakePorts(h, options.overrides),
@@ -1454,6 +1457,152 @@ describe('captured terminal paths, deadlines, and cleanup (T028)', () => {
       }),
     })
     expect(early.result).toMatchObject({ status: 'interrupted', reason_code: 'RUN_INTERRUPTED' })
+  })
+
+  it.each(['scan', 'disposeCapture', 'disposeWorktree'] as const)(
+    'finalizes an otherwise-passing run as interrupted when the close arrives during its %s step, still finishing every cleanup step once',
+    async (step) => {
+      const mod = await capturedRun()
+      const candidate = admitted(mod, composition(syntheticCandidate()))
+      const controller = new AbortController()
+      /** Closes the run while this finalization step is running; the step still settles afterwards. */
+      const closeDuring = async (current: typeof step): Promise<void> => {
+        if (current !== step || controller.signal.aborted) return
+        controller.abort()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      const { result, h } = await run(mod, {
+        candidate,
+        signal: controller.signal,
+        // The whole-run scan reads every persisted evidence artifact asynchronously.
+        store: (store) => ({
+          ...store,
+          read: async (id: string) => {
+            await closeDuring('scan')
+            return store.read(id)
+          },
+        }),
+        overrides: {
+          disposeCapture: async () => {
+            await closeDuring('disposeCapture')
+            return { remaining: [] }
+          },
+          disposeWorktree: async () => {
+            await closeDuring('disposeWorktree')
+            return { remaining: [], original: { verified: true, unchanged: true, mismatches: [] } }
+          },
+        },
+      })
+      expect(controller.signal.aborted).toBe(true)
+      expect(result).toMatchObject({
+        status: 'interrupted',
+        reason_code: 'RUN_INTERRUPTED',
+        cleanup: { complete: true, remaining_owned_resources: [], original_unchanged: true, original_mismatches: [] },
+      })
+      // Every stage finished before the close and keeps its evaluated outcome; nothing is dropped.
+      for (const id of ['baseline_reproduced', 'application_complete', 'build_passed', 'tests_passed', 'dataset_matches', 'canvas_matches', 'secret_scan_clean']) {
+        expect(statusOf(result, id), id).toBe('pass')
+      }
+      await expectTerminal(result, h, candidate, null)
+    },
+  )
+
+  it.each<[string, (clock: { advance(ms: number): void }, controller: AbortController) => Partial<CapturedRunPorts>, string, string]>([
+    [
+      'a close during cleanup that the total deadline passes only afterwards',
+      (clock, controller) => ({
+        disposeCapture: async () => {
+          controller.abort()
+          return { remaining: [] }
+        },
+        disposeWorktree: async () => {
+          clock.advance(TOTAL_MS + 1)
+          return { remaining: [], original: { verified: true, unchanged: true, mismatches: [] } }
+        },
+      }),
+      'interrupted',
+      'RUN_INTERRUPTED',
+    ],
+    [
+      'a close during cleanup after the total deadline already passed',
+      (clock, controller) => ({
+        disposeCapture: async () => {
+          clock.advance(TOTAL_MS + 1)
+          controller.abort()
+          return { remaining: [] }
+        },
+      }),
+      'interrupted',
+      'RUN_TIMEOUT',
+    ],
+    [
+      'a close during cleanup after a failed check',
+      (_clock, controller) => ({
+        build: async () => ({ built: false, reason: 'BUILD_FAILED' }),
+        disposeCapture: async () => {
+          controller.abort()
+          return { remaining: [] }
+        },
+      }),
+      'interrupted',
+      'RUN_INTERRUPTED',
+    ],
+    [
+      'a close during cleanup after an operational error',
+      (_clock, controller) => ({
+        build: async () => {
+          throw new Error(PRIVATE_LOCATOR)
+        },
+        disposeCapture: async () => {
+          controller.abort()
+          return { remaining: [] }
+        },
+      }),
+      'error',
+      'VERIFICATION_ERROR',
+    ],
+  ])('at the terminal boundary, reports the earliest stop for %s', async (_name, make, status, reason) => {
+    const mod = await capturedRun()
+    const clock = fakeMonotonicClock()
+    const controller = new AbortController()
+    const candidate = admitted(mod, composition(syntheticCandidate()))
+    const { result, h } = await run(mod, { candidate, signal: controller.signal, overrides: make(clock, controller) })
+    expect(result).toMatchObject({ status, reason_code: reason })
+    // A check evaluated before the stop keeps its own outcome.
+    if (reason !== 'VERIFICATION_ERROR') expect(statusOf(result, 'application_complete')).toBe('pass')
+    await expectTerminal(result, h, candidate, null)
+  })
+
+  it('releases its interruption listener once the run finalized, also after an error or a failed persistence', async () => {
+    const mod = await capturedRun()
+    const listeners = (signal: AbortSignal): number => getEventListeners(signal, 'abort').length
+    const passed = new AbortController()
+    expect((await run(mod, { signal: passed.signal })).result.status).toBe('passed')
+    expect(listeners(passed.signal)).toBe(0)
+
+    const errored = new AbortController()
+    const failing = run(mod, {
+      signal: errored.signal,
+      overrides: {
+        build: async () => {
+          throw new Error(PRIVATE_LOCATOR)
+        },
+      },
+    })
+    expect((await failing).result.status).toBe('error')
+    expect(listeners(errored.signal)).toBe(0)
+
+    const unpersisted = new AbortController()
+    await expect(
+      run(mod, {
+        signal: unpersisted.signal,
+        store: (store) => ({
+          ...store,
+          writeJson: (artifactPath: string, value: unknown) => (artifactPath === 'result.json' ? Promise.reject(new Error('synthetic write failure')) : store.writeJson(artifactPath, value)),
+        }),
+      }),
+    ).rejects.toThrow('synthetic write failure')
+    expect(listeners(unpersisted.signal)).toBe(0)
   })
 
   it('runs no stage for a run interrupted before it started, and still scans and cleans up', async () => {
