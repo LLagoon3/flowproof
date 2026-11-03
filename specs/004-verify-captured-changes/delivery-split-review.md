@@ -414,3 +414,20 @@ Current phase: exact-head review and CI pending; local verification above is not
 The repository has only the PR CI workflow and no automatic preview/deployment workflow.
 This publication-status commit changes documentation only; all product and test bytes remain
 those independently checked at `e1b06c8`.
+
+### Slice 3 CI correction 1
+
+Codex completed its initial review of `aaea755` without findings. CI run `41591935207` failed
+one of 1,630 tests: the elapsed-total-window application case expected `RUN_TIMEOUT` for the
+application, but got `CHECK_NOT_EVALUATED`. Its fake clock added advances to live elapsed time;
+after advancing to ten milliseconds before the deadline, baseline evidence I/O could consume
+that margin and correctly stop the engine before application ever began.
+
+The parent reproduced the same failure by temporarily delaying baseline evidence by 25 ms.
+The test-only clock now advances solely under test control, so the same delay passes without
+altering engine behavior or assertions. The temporary delay was removed after the RED/GREEN
+probe. The complete captured unit suite passes 108/108 with zero skipped; typecheck and
+diff-check pass. Logs: `/tmp/fp-pr21-clock-{red,delayed-green,unit,typecheck}.log`. The filtered
+probe selected one case and skipped the other 107; it is not reported as a full-suite pass.
+No product source, test expectation or real-timer test changed. Exact-head re-review and full CI
+must complete after this correction; the initial clean review is not approval of a later SHA.
