@@ -188,3 +188,18 @@ Logs use `/tmp/fp-first-pr-seam-approved-*.log`. Product source is unchanged fro
 The previous provider-seam failure is resolved. This is local slice-1 validation, not completion
 of the complete Spec004 task list, human-only T041, a GitHub review, required remote checks or
 merge authorization. The original aggregate branch remains preserved; no push or PR was performed.
+
+## Slice 1 PR review loop
+
+- Current delivery: [PR #19](https://github.com/LLagoon3/flowproof/pull/19),
+  `feat/004-contracts-pinned-git` -> `main`. The owner authorized this review loop on 2026-11-03,
+  superseding the earlier local-only authorization records above.
+- Authorized: push/PR creation, exact-head GitHub Codex review, valid in-scope correction commits,
+  follow-up pushes and re-review. Follow `AGENTS.md`: initial review plus at most three remediation
+  rounds; independently verify findings and stop for an out-of-scope decision or unavailable review.
+- Not authorized: merge, manual deployment or starting another delivery slice.
+- Current phase: initial exact-head review and CI verification pending. Local typecheck/build,
+  1,339 Vitest tests and 8 browser E2E cases passed before publication; this status commit changes
+  documentation only.
+- The repository contains only the PR CI workflow, with no preview/deployment job configured.
+  Confirm actual check state for each reviewed head; do not treat local results as remote CI.

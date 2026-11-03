@@ -26,7 +26,9 @@ one-PR grouping was an incorrect application of the local implementation authori
 implementation covering T001-T042 with `speckit-implement`. Further implementation was then paused
 for delivery-boundary correction. The aggregate work and its checkmarks are preserved on
 `feat/004-verify-captured-changes` (`7e21b48`); those checkmarks are not carried into this branch.
-Push and PR creation are not authorized.
+On 2026-11-03 the owner subsequently authorized the slice-1 review loop in
+[PR #19](https://github.com/LLagoon3/flowproof/pull/19), including push, in-scope corrections and
+GitHub Codex review requests. Merge and later slices remain unauthorized.
 
 **This branch**: `feat/004-contracts-pinned-git`, created from `main` at `b2ed6ad`. The owner
 authorized extraction and local verification of delivery slice 1 only: T003, T005-T009 and
@@ -48,7 +50,8 @@ Git runner; the other three modules are reached through type-only imports. The i
 continue to include type-only edges and reject every additional editing module. Direct production
 references to editing session/workspace/contracts/Docker/runtime-profile modules remain forbidden,
 and the Hero/Failure provider and verification behavior remain unchanged. This exception does not
-complete T038's whole-feature audit or authorize another slice, push or PR.
+complete T038's whole-feature audit or authorize another slice. Push and review authority is
+limited to PR #19 as recorded above.
 
 ## Format: `[ID] [P?] [Story] Description`
 

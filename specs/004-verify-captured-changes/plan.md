@@ -5,8 +5,10 @@
 **Input**: Owner-approved scope, defaults and recommended Plan.
 **Status**: Finalized with owner approval on 2026-11-02. The owner authorized Tasks and a read-only
 Analyze on 2026-11-03, and later that day local implementation covering T001-T042. Further
-implementation is paused for the owner-requested delivery-boundary correction; see
-[delivery-split-review.md](./delivery-split-review.md). Push and PR creation remain unauthorized.
+implementation outside slice 1 is paused after the owner-requested delivery-boundary correction;
+see [delivery-split-review.md](./delivery-split-review.md). On 2026-11-03 the owner authorized the
+slice-1 PR review loop: [PR #19](https://github.com/LLagoon3/flowproof/pull/19), including push,
+in-scope corrections and exact-head GitHub Codex reviews. Merge and later slices remain unauthorized.
 **Code baseline**: `b2ed6ad8a268457ae2f6797e02f48a028d5c9b9b`; approved Spec commit `a3c51ca`.
 **Approved claim clarification**: `ed450ad`. No independent technical review was performed, and
 owner approval is not recorded as one.
