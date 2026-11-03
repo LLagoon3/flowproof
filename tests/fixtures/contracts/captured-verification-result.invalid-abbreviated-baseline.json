@@ -1,0 +1,152 @@
+{
+  "kind": "captured-verification",
+  "schema_version": "1.0.0",
+  "run_id": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+  "request_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "scenario_id": "canvas-filter-hero",
+  "editing_session_id": "11111111-2222-4333-8444-555555555555",
+  "baseline_commit": "0123456",
+  "candidate_patch_sha256": "4b7a1c0e9d2f3a5b6c8d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d",
+  "coverage": {
+    "scope": "main_repository",
+    "note": null
+  },
+  "status": "passed",
+  "reason_code": null,
+  "message": null,
+  "checks": [
+    {
+      "check_id": "input_valid",
+      "status": "pass",
+      "reason_code": "INPUT_ADMITTED",
+      "message": "The completed captured candidate, its editing-session identity, and complete upstream cleanup were admitted.",
+      "evidence_ids": [],
+      "metrics": {}
+    },
+    {
+      "check_id": "baseline_reproduced",
+      "status": "pass",
+      "reason_code": "BASELINE_REPRODUCED",
+      "message": "The baseline observation shows the prepared defect, and the failure evidence is complete.",
+      "evidence_ids": [
+        "ev_failure_dataset_001",
+        "ev_failure_chart_001"
+      ],
+      "metrics": {
+        "dataset_differs": true,
+        "canvas_differs": true
+      }
+    },
+    {
+      "check_id": "application_complete",
+      "status": "pass",
+      "reason_code": "APPLICATION_COMPLETE",
+      "message": "The candidate applied once at its recorded baseline, and every versioned effect matched its captured summary.",
+      "evidence_ids": [],
+      "metrics": {
+        "files": 5
+      }
+    },
+    {
+      "check_id": "build_passed",
+      "status": "pass",
+      "reason_code": "BUILD_PASSED",
+      "message": "The registered application build completed and produced servable output.",
+      "evidence_ids": [],
+      "metrics": {}
+    },
+    {
+      "check_id": "tests_passed",
+      "status": "pass",
+      "reason_code": "TESTS_PASSED",
+      "message": "The trusted prepared functional check executed every case and matched every expected outcome.",
+      "evidence_ids": [],
+      "metrics": {
+        "discovered": 6,
+        "executed": 6,
+        "passed": 6
+      }
+    },
+    {
+      "check_id": "dataset_matches",
+      "status": "pass",
+      "reason_code": "DATASET_MATCHED",
+      "message": "The observed filtered rows exactly match the committed dataset oracle.",
+      "evidence_ids": [
+        "ev_replay_dataset_001"
+      ],
+      "metrics": {
+        "expected_rows": 4,
+        "observed_rows": 4,
+        "first_mismatch_index": null
+      }
+    },
+    {
+      "check_id": "canvas_matches",
+      "status": "pass",
+      "reason_code": "CANVAS_MATCHED",
+      "message": "The rendered bar count, labels, and values exactly match the committed chart oracle.",
+      "evidence_ids": [
+        "ev_replay_chart_001"
+      ],
+      "metrics": {
+        "expected_bars": 4,
+        "observed_bars": 4,
+        "label_mismatches": 0,
+        "value_mismatches": 0
+      }
+    },
+    {
+      "check_id": "secret_scan_clean",
+      "status": "pass",
+      "reason_code": "SECRET_SCAN_CLEAN",
+      "message": "The whole-run secret scan found no seeded marker or credential.",
+      "evidence_ids": [],
+      "metrics": {
+        "surfaces": 21,
+        "findings": 0
+      }
+    },
+    {
+      "check_id": "cleanup_complete",
+      "status": "pass",
+      "reason_code": "CLEANUP_COMPLETE",
+      "message": "Every owned target, operation, worktree, and private Git state was released.",
+      "evidence_ids": [],
+      "metrics": {}
+    },
+    {
+      "check_id": "original_unchanged",
+      "status": "pass",
+      "reason_code": "ORIGINAL_UNCHANGED",
+      "message": "After cleanup the original repository equals its pre-run snapshot.",
+      "evidence_ids": [],
+      "metrics": {}
+    }
+  ],
+  "before_evidence": {
+    "manifest_path": "evidence/failure/manifest.json",
+    "screenshot_path": "evidence/failure/screenshot.png"
+  },
+  "after_evidence": {
+    "manifest_path": "evidence/replay/manifest.json",
+    "screenshot_path": "evidence/replay/screenshot.png"
+  },
+  "cleanup": {
+    "complete": true,
+    "remaining_owned_resources": [],
+    "original_unchanged": true,
+    "original_mismatches": []
+  },
+  "started_at": "2026-11-03T01:00:00.000Z",
+  "completed_at": "2026-11-03T01:02:30.000Z",
+  "total_duration_ms": 150000,
+  "phase_durations_ms": {
+    "reproduce": 20000,
+    "apply": 3000,
+    "build": 40000,
+    "test": 2000,
+    "replay": 25000,
+    "finalize": 5000
+  }
+}
