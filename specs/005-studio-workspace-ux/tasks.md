@@ -31,7 +31,7 @@ This checkpoint is a design foundation for all stories, not proof of any product
 - [X] T004 Add mode/state switching, work-card disclosures, result and before/after examples, missing/unreadable evidence states, request draft and panel resize/collapse/restore in `tests/manual/studio-design/preview.js`; include the external updating collapsed-status/result entry, hidden compact-width separator and legacy target/evidence tab behavior; all actions alter synthetic presentation only (FR-002-FR-009).
 - [X] T005 Measure browser rendering, keyboard/focus behavior, text/control contrast, the specified desktop matrix and separate native 200%-zoom procedure from `specs/005-studio-workspace-ux/quickstart.md`, plus compact layout for the preview in `tests/manual/studio-design/`; record observed outcomes and screenshot locations in `tests/manual/studio-design/README.md` (FR-011, FR-012, SC-005).
 - [X] T006 Correct preview defects found by T005 in `tests/manual/studio-design/index.html`, `tests/manual/studio-design/preview.css` and `tests/manual/studio-design/preview.js`; rerun the affected checks and record the final proposed tokens/control states in `specs/005-studio-workspace-ux/design-system.md` (FR-010-FR-012).
-- [ ] T007 Serve the independent files using the portable instructions in `tests/manual/studio-design/README.md`, provide the owner a review location, and record the exact reviewed source revision; no production deployment or repository-specific hosted service is required (SC-007).
+- [X] T007 Serve the independent files using the portable instructions in `tests/manual/studio-design/README.md`, provide the owner a review location, and record the exact reviewed source revision; no production deployment or repository-specific hosted service is required (SC-007).
 - [ ] T008 Record the owner's actual hierarchy/density/balance decision and any revisions in `specs/005-studio-workspace-ux/design-system.md`; keep this unchecked while feedback is pending or negative, and do not start production UI replacement without accepted direction (SC-007).
 
 **Checkpoint / slice 1**: Preview and review material only. No production or runtime files change.
@@ -40,8 +40,10 @@ Stop for the actual visual decision; preview screenshots are not verification ev
 **Slice 1 record (2026-11-03)**: T001-T006 were implemented and mechanically verified at tested revision
 `e80e291cc4425cf49089be46e4deb8819007ff03`: `node --check` and `git diff --check` passed, and
 the 346 desktop/compact and 56 native-200%-zoom rendered checks had 0 failures. The record and the
-ignored evidence location are in `tests/manual/studio-design/README.md`. T007 (owner review location
-and reviewed revision) and T008 (actual owner decision) remain pending. No T009 or later task has started.
+ignored evidence location are in `tests/manual/studio-design/README.md`. T007 offers the unchanged
+preview at that exact source revision through the owner-facing review location, with 219 independent
+parent checks passing and the authenticated HTTPS render explicitly unverified. T008 (actual owner
+decision) remains pending. No T009 or later task has started.
 
 ## Phase 3: User Story 1 — Canvas-First Real Workspace (P1)
 

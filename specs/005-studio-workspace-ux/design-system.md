@@ -152,10 +152,11 @@ These results show the proposed values are mechanically usable. They are not own
 
 ## Owner review record
 
-**Decision**: Pending. No preview has been reviewed or accepted.
+**Decision**: Pending. The preview has been offered; no owner review or acceptance is recorded.
 
 | Field | Value |
 | --- | --- |
+| Source offered for review | `e80e291cc4425cf49089be46e4deb8819007ff03` (unchanged preview files); handoff and delivery gaps in the preview README |
 | Reviewed revision | Pending |
 | Review date | Pending |
 | Hierarchy | Pending |

@@ -33,8 +33,8 @@ python3 -m http.server 43120 --bind 127.0.0.1 --directory tests/manual/studio-de
 ```
 
 Open `http://127.0.0.1:43120/` in a desktop browser and stop the server with `Ctrl+C` when the
-review ends. Loopback HTTP is the reviewed and verified path; opening `index.html` from the file
-system may render in some browsers, but it was not part of the verification.
+review ends. Loopback HTTP is the primary verified path. The parent reviewer also verified the
+unchanged files directly in Chromium; other browsers and file-origin behavior are not guaranteed.
 
 If a reviewer needs remote access, use an existing authorized connection to the loopback server.
 Do not expose the server publicly. How the files are hosted is the operator's choice and is not
@@ -138,5 +138,23 @@ holds `manifest.json`, `desktop-checks.json`, `zoom-checks.json`, per-state scre
 review was done, and hover colors were not contrast-measured. The 100% sizes use viewport
 overrides. The preview proves no runtime behavior.
 
-**Pending**: T007 (serving the preview to the owner and recording the reviewed revision) and T008
-(the owner's actual hierarchy, density, and balance decision).
+## Review handoff (T007)
+
+- **Source offered for owner review**: `e80e291cc4425cf49089be46e4deb8819007ff03`. The HTML,
+  CSS, and JavaScript are unchanged at the handoff source commit
+  `79afa85e0f7f96fb35dd9ae05bb211428f8556a7`.
+- The three static files were copied byte-for-byte to an existing authenticated static host.
+  The owner-facing location is delivered in the source conversation; the portable local review
+  location is `http://127.0.0.1:43120/` using the command above. Hosting is not a project dependency.
+- **Independent parent checks**: 219 checks, 0 failures, using offline Chromium on the unchanged
+  files with HTTP requests blocked. Both modes and all six states at the four 100% sizes above,
+  verdict boundaries, keyboard panel widths, collapse/restore and result focus, request bounds,
+  nine gates and ten checks, keyboard tabs, and evidence states passed. Desktop and compact
+  screenshots were inspected. Evidence is in `parent-review/` below the ignored evidence location.
+  These checks do not independently repeat native zoom; the worker's zoom evidence was inspected.
+- **Delivery gap**: The managed browser rejected loopback navigation under its existing policy.
+  The public HTTPS page and both assets require existing Basic authentication (401); no authenticated
+  HTTPS render or interaction was verified by the parent. No browser, server, or authentication
+  policy was changed. Local file rendering is not proof of authenticated hosted rendering.
+- **Owner decision (T008)**: Pending. Offering the preview is not owner acceptance, and no later
+  implementation slice has started.
