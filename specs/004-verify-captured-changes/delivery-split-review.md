@@ -1,0 +1,118 @@
+# Spec004 delivery decomposition review
+
+**Date:** 2026-11-03. **State:** local-only feasibility review; further product implementation paused.
+
+## Correction and preserved work
+
+The owner recalled the existing CONTRIBUTING.md policy after the earlier oversized PR: use
+reviewable phase/checkpoint PRs, keep implementation and its tests together, execute only the
+current slice, validate/report/stop, and start the next authorized slice from updated main after
+the preceding PR merges. Small commits are not a substitute. The old one-PR ledger was an
+incorrect application of local implementation authority, not an intentional large-PR exception.
+
+- Preserved aggregate source: `b63a94f4dc6eff0490214954f4840322f54d7b8d` on `feat/004-verify-captured-changes`.
+- Audit baseline: `78d6f81ce11bfc85e047c308455dc66caf361c92`; local main/origin-main at inspection: `b2ed6ad`.
+- Original code, commits and task checkmarks are preserved. Only delivery documentation changed.
+- No push, PR, bot request, merge or deployment. The temporary detached audit commits are not PR branches.
+
+## Four sequential checkpoints
+
+Exact task/part assignments are in [tasks.md](./tasks.md#delivery-slices).
+
+| Slice | Purpose | Changed files | Added / removed | Product source added / removed |
+| --- | --- | --- | --- | --- |
+| 1 | Strict result / pinned Git application | 18 | +3979 / -35 | +945 / -35 |
+| 2 | Engine / owned-resource lifecycle | 9 | +3888 / -30 | +1342 / -23 |
+| 3 | Studio contracts / state | 5 | +2547 / -52 | +845 / -52 |
+| 4 | Visible runtime / captured evidence | 10 | +2557 / -27 | +1161 / -25 |
+
+These are measured incremental audit-tree diffs, not a promise that final PR diffs cannot change
+during review. Files can appear in more than one slice. Remaining lines are tests, fixtures and
+helpers; they are not excluded from review. The first actual PR also carries the existing Spec004
+artifacts: main-to-audit-baseline is **8 files, +1,411 lines**, plus this delivery correction. Its
+total will therefore exceed the roughly 4,000-line implementation increment; do not present
+product-source counts as total PR size.
+
+The first narrowed checkpoint uses the basic worktree/application implementation at `16357f7`.
+Process joining and the new `operationsJoined` disposal fact, including its assertions, move with
+the ownership/terminal-path tests into slice 2. No final assertion is deleted or skipped.
+The server and launch portions of T019 are separated; strict result/state selectors are in slice
+3, with their visible presentation in slice 4. This avoids requiring later runtime/UI code merely
+to compile and test an earlier PR. Do not blindly cherry-pick the old interleaved commits.
+
+## Independent parent validation
+
+| Audit snapshot | Typecheck | Build | Focused tests |
+| --- | --- | --- | --- |
+| 1, narrowed | exit 0 | exit 0 | 4 files; 78 passed |
+| 2 | exit 0 | exit 0 | 3 files; 147 passed |
+| 3 | exit 0 | exit 0 | 6 files; 393 passed |
+| 4 | exit 0 | exit 0 | 4 files; 346 passed |
+
+- Snapshot 1: captured contract, reducer, exact Git application and unchanged legacy worktree tests.
+- Snapshot 2: captured contract, unit and real Git/Canvas/terminal-path tests, without Studio changes.
+- Snapshot 3: server-only captured integration, captured client/state, and legacy API/state/Proof Trail/worktree.
+- Snapshot 4: full captured launch integration, captured client/state and legacy state/Proof Trail.
+- Snapshot 4 headed Chromium under Xvfb: **14 passed**, comprising captured verification 6 and
+  unchanged Hero/Failure/browser-close/load-failure/secret-safety 8. No skipped cases.
+- Snapshot 4 product source and tests are byte-identical to the preserved aggregate head:
+  `git diff <source-head> <snapshot-4> -- apps packages tests` is empty.
+- Snapshot 4 aggregate `git diff --check`: exit 0.
+
+Validation used the actual named files and checked discovered counts; a nonexistent filename
+is not evidence of a passing suite. These are focused feasibility checks, not completion of T040.
+
+## Failures retained, not hidden
+
+- The initial audit accidentally staged dependency-directory symlinks because the existing
+  directory-only ignore pattern does not ignore symlinks. Test-clone setup then failed 17 cases
+  with EEXIST. Recreated the audit checkout with explicit dependency exclusions; product code and
+  assertions were not changed to conceal that environment failure. Original failure logs retained.
+- Narrowing slice 1 initially left two `operationsJoined` equality expectations behind: 5 expanded
+  cases failed because that fact is introduced in slice 2. Moved those expectations with the
+  matching implementation; slice 2 retains the complete final test file. No acceptance criterion
+  was weakened in the final product tree.
+- Known compatibility gate reproduced independently on snapshot 3: provider-seam has **23 passed,
+  1 failed**, reporting exactly `editing/{capture,captureGit,contracts,workspace}.ts` reachable
+  from production entry points. It is an unresolved Spec004 dependency-policy conflict, not an
+  unrelated green baseline and not proof the slices are merge-ready. The guard and four modules
+  were not changed; the previously requested narrow exception remains owner-pending.
+
+## Stop / continuation boundary
+
+- The decomposition is concrete, locally exercised preparation, not completion or publication of four PRs.
+- Prepare only slice 1 as the next delivery; its scope/compatibility and actual PR-base diff must
+  be reviewed before claiming readiness. Do not resume T035-T042 or the other slices now.
+- Only after an explicitly authorized first PR is reviewed and merged, sync current main and
+  create the next authorized slice branch. Do not open four stacked PRs or merge them together.
+- T035-T042 remain uncompleted; the full final gate was not rerun in this review. T041 remains
+  human-only and unperformed. Do not mark the whole feature accepted.
+
+## Local evidence references
+
+- Audit directory: `/tmp/flowproof-pr-boundary-audit-i1f8u_eo`.
+- Per-snapshot logs: `slice-1-narrowed-{typecheck,build,focused}.log`,
+  `slice-{2,3,4}-{typecheck,build,focused}.log`, `slice-3-seam.log`,
+  `slice-4-headed.log` and `slice-4-diff-check.log`.
+- `state.json` stores exact snapshot hashes and the discarded setup attempt.
+- Temporary audit snapshots require no changes to the feature branch or its history.
+
+## Slice 1 branch
+
+- Branch `feat/004-contracts-pinned-git` starts from `main`/`origin/main` at `b2ed6ad`. The owner
+  authorized extraction and local verification of slice 1 only; no later slice, push, PR, review
+  request, merge, deployment or dependency-policy exception is authorized.
+- Scope: these Spec004 artifacts and T003, T005-T009 and T012-T013, using the product and test
+  bytes of narrowed snapshot `8602163` rather than the interleaved aggregate commits:
+  `packages/flowproof/src/verify/capturedContracts.ts`,
+  `packages/flowproof/src/worktree/capturedCandidate.ts`,
+  `packages/flowproof/src/worktree/session.ts`, `tests/contract/captured-verification-contract.test.ts`,
+  `tests/unit/captured-verification.test.ts` (reducer portion), the 11
+  `tests/fixtures/contracts/captured-verification-result.*.json` fixtures,
+  `tests/support/capturedCandidate.ts` and `tests/integration/captured-verification-git.test.ts`
+  (application-fidelity portion).
+- Excluded: `capturedRun.ts`, process joining and `operationsJoined`, the editor fixture and Canvas
+  producer, Studio server/client/UI, harness, launcher, and T035-T042.
+- Pending: the provider-seam compatibility conflict above is expected to apply to this branch
+  because the pinned-baseline session path reaches the four `editing/*` modules. The guard and
+  modules are unchanged. While it fails, slice 1 is not review- or merge-ready.
