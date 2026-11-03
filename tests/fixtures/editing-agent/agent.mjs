@@ -148,6 +148,79 @@ function finishCapture() {
   process.exit(Number(options.code ?? 0))
 }
 
+// Captured-verification Canvas candidates (specs/004-verify-captured-changes). They run against a
+// clone of the FlowProof repository and change the prepared demo app with ordinary file operations
+// only. Verification tests compare the outcome with independently expected bytes; nothing here
+// claims that a candidate is correct.
+
+const DEMO = 'apps/demo-chart'
+const FILTER_MODULE = `${DEMO}/src/filterData.ts`
+const BUGGY_FILTER = 'return rows.filter((row) => row.region.includes(region))'
+const FILTER_IMPORT = "import type { SalesRow } from './data.js'\n"
+
+/** The versioned helper of the multi-file fix: exact region matching. */
+const REGION_MATCH_SOURCE = [
+  '// Exact region matching, so overlapping names such as North and Northeast stay separate.',
+  'export function matchesRegion(rowRegion: string, selectedRegion: string): boolean {',
+  '  return rowRegion === selectedRegion',
+  '}',
+  '',
+].join('\n')
+const REGION_NOTES = 'Region filtering compares names exactly; overlapping names such as North and Northeast stay separate.\n'
+/** A small synthetic binary asset: NUL, high bytes, and no valid UTF-8 text. */
+const REGION_SWATCH = Buffer.from([0x89, 0x52, 0x47, 0x00, 0x01, 0xff, 0xfe, 0x00, 0x10, 0x80, 0x0a, 0x00])
+
+/** Replaces the buggy filter with a call to `matchesRegion` imported from `specifier`. */
+function useRegionHelper(specifier) {
+  edit(FILTER_MODULE, FILTER_IMPORT, `${FILTER_IMPORT}import { matchesRegion } from '${specifier}'\n`)
+  edit(FILTER_MODULE, BUGGY_FILTER, 'return rows.filter((row) => matchesRegion(row.region, region))')
+}
+
+/** Multi-file fix: a new versioned helper module, a binary asset, a text note, and a mode change. */
+function canvasFix() {
+  writeFileSync(`${WORKSPACE}/${DEMO}/src/regionMatch.ts`, REGION_MATCH_SOURCE)
+  useRegionHelper('./regionMatch.ts')
+  mkdirSync(`${WORKSPACE}/${DEMO}/assets`, { recursive: true })
+  writeFileSync(`${WORKSPACE}/${DEMO}/assets/region-swatch.bin`, REGION_SWATCH)
+  writeFileSync(`${WORKSPACE}/${DEMO}/src/REGION-MATCHING.md`, REGION_NOTES)
+  chmodSync(`${WORKSPACE}/README.md`, 0o755)
+  report('canvas fix applied')
+}
+
+/** The same fix, but its helper lives under an ignored `dist/` directory, so capture omits it. */
+function canvasHiddenDependency() {
+  mkdirSync(`${WORKSPACE}/${DEMO}/src/dist`, { recursive: true })
+  writeFileSync(`${WORKSPACE}/${DEMO}/src/dist/regionMatch.ts`, REGION_MATCH_SOURCE)
+  useRegionHelper('./dist/regionMatch.ts')
+  report('canvas hidden dependency applied')
+}
+
+/** A change that leaves the registered build unable to parse the filter module. */
+function canvasBuildFail() {
+  edit(FILTER_MODULE, BUGGY_FILTER, 'return rows.filter((row) => row.region === region')
+  report('canvas build failure applied')
+}
+
+/** Fixes the filter but changes the rendered data, so the chart looks normal yet is wrong. */
+function canvasPlausibleWrong() {
+  edit(FILTER_MODULE, BUGGY_FILTER, 'return rows.filter((row) => row.region === region)')
+  edit(`${DEMO}/src/data.ts`, "row('North', 'Q4', 150)", "row('North', 'Q4', 105)")
+  report('canvas plausible wrong applied')
+}
+
+/** Leaves the defect, rewrites the candidate's copies of the prepared check, and adds a test script. */
+function canvasSelfCertify() {
+  const fixtures = `${WORKSPACE}/tests/fixtures/captured-verification`
+  const passing = JSON.stringify({ check: 'prepared-region-filter', discovered: 6, executed: 6, passed: 6, failed: 0 })
+  writeFileSync(`${fixtures}/check-filter.mjs`, `process.stdout.write(${JSON.stringify(`${passing}\n`)})\n`)
+  writeFileSync(`${fixtures}/filter-cases.json`, `${JSON.stringify({ rows: [], cases: [] })}\n`)
+  const manifest = `${WORKSPACE}/${DEMO}/package.json`
+  const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+  pkg.scripts = { ...pkg.scripts, test: 'node -e "process.exit(0)"' }
+  writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`)
+  report('canvas self certification applied')
+}
+
 const SEEDED_MARKERS = [
   'MODEL_API_KEY=sk-fpseededmarkerapikey000001',
   'Authorization: Bearer FPSEEDEDBEARERTOKEN000001',
@@ -172,6 +245,26 @@ switch (scenario) {
     break
   case 'sensitive':
     sensitiveEdit()
+    finishCapture()
+    break
+  case 'canvas-fix':
+    canvasFix()
+    finishCapture()
+    break
+  case 'canvas-hidden-dependency':
+    canvasHiddenDependency()
+    finishCapture()
+    break
+  case 'canvas-build-fail':
+    canvasBuildFail()
+    finishCapture()
+    break
+  case 'canvas-plausible-wrong':
+    canvasPlausibleWrong()
+    finishCapture()
+    break
+  case 'canvas-self-certify':
+    canvasSelfCertify()
     finishCapture()
     break
   case 'fail':

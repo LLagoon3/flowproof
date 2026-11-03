@@ -144,6 +144,8 @@ export function createPrivateCandidateApplication(options: PrivateCandidateAppli
   let created = false
   let running: Promise<unknown> | null = null
   let disposing: Promise<boolean> | null = null
+  // Disposal stops a running application itself instead of waiting for its caller's signal.
+  const disposed = new AbortController()
 
   const run = async (candidate: CandidateApplicationInput, signal: AbortSignal | undefined): Promise<CandidateApplicationOutcome> => {
     const baseline = candidate.baselineCommit
@@ -152,7 +154,7 @@ export function createPrivateCandidateApplication(options: PrivateCandidateAppli
     const files = [...candidate.files]
     if (typeof baseline !== 'string' || !OBJECT_ID[objectFormat].test(baseline)) return { applied: false, reason: 'BASELINE_UNAVAILABLE' }
     if (patch.length === 0 || files.length === 0) return { applied: false, reason: 'APPLICATION_REJECTED' }
-    const budget = createCaptureBudget(signal === undefined ? {} : { signal })
+    const budget = createCaptureBudget({ signal: signal === undefined ? disposed.signal : AbortSignal.any([signal, disposed.signal]) })
     try {
       try {
         await mkdir(privateGitDir, { mode: 0o700 })
@@ -216,7 +218,9 @@ export function createPrivateCandidateApplication(options: PrivateCandidateAppli
 
     dispose(): Promise<boolean> {
       disposing ??= (async () => {
-        // Every Git process of an application settles before its state is removed.
+        // A running application is stopped; every Git process group of it is joined (the capture
+        // Git runner joins each group) before its state is removed.
+        disposed.abort()
         await running
         if (created) await rm(privateGitDir, { recursive: true, force: true }).catch(() => undefined)
         return !(await exists(privateGitDir))

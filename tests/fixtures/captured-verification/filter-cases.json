@@ -1,0 +1,55 @@
+{
+  "description": "Synthetic region-filter cases for the trusted prepared functional check. Region names overlap on purpose; every value is invented.",
+  "rows": [
+    { "region": "North", "quarter": "Q1", "revenue": 11 },
+    { "region": "Northeast", "quarter": "Q1", "revenue": 21 },
+    { "region": "North", "quarter": "Q2", "revenue": 12 },
+    { "region": "Northwest", "quarter": "Q1", "revenue": 31 },
+    { "region": "Northeast", "quarter": "Q2", "revenue": 22 },
+    { "region": "South", "quarter": "Q1", "revenue": 41 },
+    { "region": "Southeast", "quarter": "Q1", "revenue": 51 },
+    { "region": "South", "quarter": "Q2", "revenue": 42 },
+    { "region": "West", "quarter": "Q1", "revenue": 61 }
+  ],
+  "cases": [
+    {
+      "case_id": "north-excludes-overlapping-names",
+      "region": "North",
+      "expected": [
+        { "region": "North", "quarter": "Q1", "revenue": 11 },
+        { "region": "North", "quarter": "Q2", "revenue": 12 }
+      ]
+    },
+    {
+      "case_id": "northeast-exact-match",
+      "region": "Northeast",
+      "expected": [
+        { "region": "Northeast", "quarter": "Q1", "revenue": 21 },
+        { "region": "Northeast", "quarter": "Q2", "revenue": 22 }
+      ]
+    },
+    {
+      "case_id": "south-excludes-southeast",
+      "region": "South",
+      "expected": [
+        { "region": "South", "quarter": "Q1", "revenue": 41 },
+        { "region": "South", "quarter": "Q2", "revenue": 42 }
+      ]
+    },
+    {
+      "case_id": "west-single-row",
+      "region": "West",
+      "expected": [{ "region": "West", "quarter": "Q1", "revenue": 61 }]
+    },
+    {
+      "case_id": "prefix-is-not-a-region",
+      "region": "Nor",
+      "expected": []
+    },
+    {
+      "case_id": "absent-region",
+      "region": "Central",
+      "expected": []
+    }
+  ]
+}
