@@ -40,6 +40,15 @@ If a reviewer needs remote access, use an existing authorized connection to the 
 Do not expose the server publicly. How the files are hosted is the operator's choice and is not
 a project service.
 
+## Minimalist revision direction (2026-11-04)
+
+The owner rejected the first preview's information density. The revised default screen reduces the
+workspace to a request/work column and a large canvas. Preview-only mode/state/evidence controls
+move into a closed overflow menu. Technical scope, activity events, check rows and identity remain
+available in one collapsed `Details` disclosure instead of multiple competing cards. The header's
+small `Preview · simulated` label keeps the synthetic nature visible without a testing toolbar.
+No production UI or later slice is included. Owner acceptance of the revision is still pending.
+
 ## What the preview covers
 
 - **Two modes.** *Legacy prepared case*: case picker, bounded request (1 to 500 characters), and
@@ -59,7 +68,7 @@ a project service.
   24rem), collapse and restore with an updating external status and result entry, work-card
   disclosures, and a latest-work affordance when the reader is away from the newest activity.
 
-The controls in the amber preview bar exist only in this preview. `Append simulated activity`
+The controls in the closed Preview overflow menu exist only in this preview. `Append simulated activity`
 adds one clearly labelled synthetic card per click so reading-position behavior can be inspected.
 Nothing advances on a timer, and no control sends a request.
 
@@ -93,7 +102,7 @@ The owner reviews comprehension and visual direction only; mechanical checks are
 
 The owner's decision is recorded in `design-system.md`, not inferred from these checks.
 
-## Verification record
+## Verification record (initial revision, historical)
 
 Mechanical checks only (T005/T006). They are not owner acceptance (T008) and not evidence that
 the real Studio behaves this way.
@@ -156,5 +165,5 @@ overrides. The preview proves no runtime behavior.
   The public HTTPS page and both assets require existing Basic authentication (401); no authenticated
   HTTPS render or interaction was verified by the parent. No browser, server, or authentication
   policy was changed. Local file rendering is not proof of authenticated hosted rendering.
-- **Owner decision (T008)**: Pending. Offering the preview is not owner acceptance, and no later
+- **Owner decision (T008)**: Initial density rejected on 2026-11-04; revision acceptance pending. Offering the preview is not owner acceptance, and no later
   implementation slice has started.

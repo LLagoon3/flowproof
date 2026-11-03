@@ -24,7 +24,32 @@ package, theme system, or published design library. The values live as CSS custo
 `tests/manual/studio-design/preview.css`; a later production slice may copy them into
 `apps/studio/src/styles.css` only after accepted direction.
 
-## 2. Foundations (proposed)
+## Owner-directed revision (2026-11-04)
+
+The owner rejected the initial preview's density: too many always-visible buttons, status blocks,
+IDs and explanatory text obscured the conversation/canvas structure. The revision uses Claude
+Artifacts' spatial simplicity as a reference, not its product features or proprietary assets.
+
+- Default view: one quiet header, a left request/work column and a larger right canvas.
+- A compact `Preview · simulated` label and one overflow button replace the amber test toolbar.
+  Mode, six states, case selection, evidence examples and synthetic-activity controls live inside
+  that closed-by-default menu; they are not product actions.
+- Legacy ready view has a compact prepared-case title and bottom request composer. No fake sent
+  request or AI reasoning is invented. Captured mode has only its fixed-candidate start action,
+  never a request field or conversational message.
+- Active/final states show a concise observed summary or exact verdict. One `Details` disclosure
+  holds chronological observed work, raw events, scope, all gates/checks and provenance/identity.
+  Failed/unevaluable check names remain visible beside the unsuccessful verdict.
+- Use warm offwhite surfaces, restrained type, flat activity rows and generous empty space.
+  Remove decorative badges, repeated status copy, localhost chrome and always-visible counters.
+- Keep panel resizing/collapse, stable target wrapper, final evidence tabs, missing-evidence
+  distinctions and all single-run/no-network semantics. This changes presentation, not scope.
+
+The values and inventory below describe the first rejected revision historically; the implemented
+revision's token values and inventory are summarized in the next verification record after checks.
+T008 remains unchecked: rejection of the first preview is not acceptance of the revision.
+
+## 2. Foundations (initial revision, historical)
 
 ### Color roles
 
@@ -152,7 +177,8 @@ These results show the proposed values are mechanically usable. They are not own
 
 ## Owner review record
 
-**Decision**: Pending. The preview has been offered; no owner review or acceptance is recorded.
+**Decision**: Initial revision rejected on 2026-11-04 for excessive density. A minimalist revision
+is requested; its visual acceptance remains pending.
 
 | Field | Value |
 | --- | --- |
@@ -160,8 +186,8 @@ These results show the proposed values are mechanically usable. They are not own
 | Reviewed revision | Pending |
 | Review date | Pending |
 | Hierarchy | Pending |
-| Density | Pending |
+| Density | Rejected: too many buttons and unnecessary text |
 | Work-to-canvas balance | Pending |
-| Requested revisions | Pending |
+| Requested revisions | Conversation/input beside a large canvas; remove dashboard clutter |
 
 Pending or negative feedback is not visual acceptance (SC-007).

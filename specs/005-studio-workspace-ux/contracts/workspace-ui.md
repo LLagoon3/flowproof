@@ -90,7 +90,9 @@ The finalizing-marker decision and conservative fallback are defined in
 ## 6. Preview Contract
 
 An isolated preview must exercise both modes and the six SC-002 states, plus missing evidence and
-collapsed/compact views. It always carries a visible `Design preview — simulated data` notice.
+collapsed/compact views. It always carries a compact visible `Preview · simulated` label; the
+closed overflow menu expands this to `Design preview — simulated data`. Preview inspection
+controls stay inside that menu rather than competing with the product workspace.
 No model/API request, Docker run, executable candidate, real production token, or live target iframe
 is needed. Buttons change only synthetic presentation state. It cannot prove runtime correctness.
 
