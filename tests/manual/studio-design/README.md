@@ -248,3 +248,31 @@ previously recorded native-zoom gap for this static preview, not the later real-
 Evidence: `.flowproof/review/005-studio-workspace-ux/eab7b55acbca3a14195218821fd6f80ed0991986/parent-native200/`.
 Other declared gaps (screen reader, other browsers, hover contrast and authenticated hosted
 rendering) remain. Owner visual acceptance does not imply those checks passed.
+
+### PR review correction: prepared-case binding (2026-11-04)
+
+- **Tested revision**: `9051d135e61ed74be8c8fe4f764b1af07a7e38b5`, clean before verification.
+  Corrects the invalid-citation selection silently becoming Hero after Start. The selected case
+  now determines run identity, intermediate events and final result. The existing final-example
+  controls explicitly name their fixtures in legacy mode; captured labels remain unchanged.
+- **Checks**: `node --check tests/manual/studio-design/preview.js` and `git diff --check` passed.
+  A focused standalone browser regression passed 191 checks with no console/page errors: both
+  ready case choices through Start, active/finalizing/disconnected states, locked picker/run-card
+  identity, mode round trips including the opposite captured final outcome, return to Ready and
+  another synthetic Start. Citation has no application/replay or `Verified Fix`; its final result
+  is `Unverified`, with the citation failure, three unevaluable gates and no replay screenshot.
+  Direct final-example choices show the explicit fixture label within the open menu viewport and
+  announce their case switch in the existing menu note.
+- **Regression**: The existing minimalist all-state browser harness passed 591 checks on the same
+  revision: both modes/six states at five 100% viewport sizes, verdict boundaries, control/focus,
+  evidence and contrast checks. Minimum measured text contrast remains 5.97:1 across 1,228 samples.
+  Both runs requested only the three static files; their owned browsers and loopback servers closed.
+- **Environment/evidence**: Existing Playwright 1.64.1 / Chromium 156.0.8078.4, headless Linux;
+  no dependency changes. Ignored
+  `.flowproof/review/005-studio-workspace-ux/9051d135e61ed74be8c8fe4f764b1af07a7e38b5/pr23-case-binding/`
+  holds the focused script, checks and four screenshots; adjacent `pr23-all-states/` holds the
+  all-state checks, measurements and screenshots. The all-state script is the unchanged
+  `slice1-minimal/verify.mjs` recorded above, with `REVIEW_DIR` set to that output directory.
+- **Gaps/scope**: No native-200% rerun, screen-reader, other-browser or authenticated hosted test
+  for this correction. HTML/CSS, accepted visual direction, production files and later tasks are
+  unchanged. These are static synthetic-preview checks, not real Studio verification.
