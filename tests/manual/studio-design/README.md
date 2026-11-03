@@ -95,4 +95,48 @@ The owner's decision is recorded in `design-system.md`, not inferred from these 
 
 ## Verification record
 
-Not yet run. Results for the tested revision are recorded here after T005.
+Mechanical checks only (T005/T006). They are not owner acceptance (T008) and not evidence that
+the real Studio behaves this way.
+
+- **Tested revision**: `e80e291cc4425cf49089be46e4deb8819007ff03`. The preview files were
+  exported from that commit with `git archive` and served unchanged from a temporary directory.
+- **Environment**: Linux, Node.js v24.22.1, the repository-pinned Playwright 1.64.1 with Chromium
+  156.0.8078.4, headed on an isolated Xvfb display; loopback server
+  `python3 -m http.server 43120 --bind 127.0.0.1`. A throwaway script outside the repository drove
+  the browser; it is kept with the evidence, not here.
+- **Static checks**: `node --check tests/manual/studio-design/preview.js` and
+  `git diff --check 84727e4 e80e291` both exited 0. The scripts use no timers, network APIs, HTML
+  parsing, inline styles, or storage.
+- **Rendered checks**: 346 desktop/compact checks and 56 native-zoom checks, 0 failures.
+
+| Area | Observed outcome |
+| --- | --- |
+| Sizes | 1280 x 720 and 1920 x 1080 side by side; 390 x 844 and 320 x 640 stacked with the separator hidden. These four use Playwright viewport sizes at 100%. Every mode and state has no page-wide horizontal overflow, and the start, collapse, `Go to result`, result, `Compare before and after`, and legacy tab controls scroll into view without being covered. |
+| Native 200% zoom | Ordinary browser window, no viewport emulation, content area sized to 1280 x 720 at 100%. OS-level Ctrl+0 then five Ctrl+= key events (XTest on the run's own display) gave Chromium's visible 200% indicator, a 640 x 360 CSS viewport, DPR 2, and an unchanged 1280 x 807 outer window. Stacked layout, all twelve mode/state views, collapse/restore, and visible focus passed. Ctrl+0 restored 1280 x 720 at DPR 1. |
+| Modes and states | Both modes, all six SC-002 states. `Verified Fix` appears only in the successful legacy state and `Candidate verification passed` only in the successful captured state. Nine gates and ten checks are available on demand. Captured mode has no request, chat, model, or provider control. No iframe exists. |
+| Panel | Default 24rem; keyboard and drag select exactly 20, 22, 24, 26, 28, 30, and 32rem, clamped at both ends. Collapse inerts the panel and moves focus to `Show work panel`. The external status updates to the final verdict, and `View result` restores the panel and focuses the retained result. Restore returns focus to the previous panel control. |
+| Preservation | The request draft survives resizing, collapse/restore, and a mode round trip. Empty and over-500-character requests disable Start with a visible reason. Card disclosures and focus survive appended activity, collapse, resizing, and state changes on the same run. |
+| Tabs and evidence | Finalized legacy `Target` / `Evidence` tabs work with arrows, Home, and End; the target wrapper is hidden and inert, then returns as the same element. Evidence examples show available, phase not produced, ID not received, loading, and unreadable sides. Evidence tabs are absent while active. |
+| Reading position | With the reader away from the latest work, three appended items keep scroll position and focus, and the affordance reads `3 new updates · Jump to latest`. Jumping reaches the end, and a reader at the end keeps following. No activity is appended while disconnected. |
+| Contrast | Measured on computed rendered colors with composited backgrounds, in every state with details expanded, plus evidence, error, and collapsed views. 2,744 enabled text samples have a minimum of 4.96:1; disabled text has a minimum of 4.66:1. 323 control boundaries, fills, and icons have a minimum of 3.52:1. In the four recorded Tab traversals, every stop shows a 2px focus indicator at 6.75:1 or more. The synthetic target scene stands in for the target app and was excluded. |
+| Network | Only `/`, `/preview.css`, and `/preview.js` were requested from the loopback server. No console errors, warnings, or policy violations occurred, and the page policy blocked a probe `fetch` to its own origin. |
+
+Corrections made before the tested commit (T006): absent nodes no longer print `null`; the final
+verdict is not repeated in the state card; the latest-work control no longer overlaps result
+controls; result and evidence headings keep a scroll margin; unavailable preview controls keep a
+3:1 boundary; the work-panel skip link is hidden while the panel is collapsed; and the `file://`
+statement above was corrected.
+
+**Evidence**: ignored
+`.flowproof/review/005-studio-workspace-ux/e80e291cc4425cf49089be46e4deb8819007ff03/slice1/`. It
+holds `manifest.json`, `desktop-checks.json`, `zoom-checks.json`, per-state screenshots in
+`matrix-1280x720/`, `matrix-1920x1080/`, `compact-390x844/`, `compact-320x640/`, and
+`native-zoom-200/` (desktop captures, including the visible zoom indicator), plus `keyboard/`,
+`activity/`, and `contrast/` records. It is local review material and is not committed.
+
+**Gaps**: Only Chromium was tested. This is not a complete accessibility audit: no screen-reader
+review was done, and hover colors were not contrast-measured. The 100% sizes use viewport
+overrides. The preview proves no runtime behavior.
+
+**Pending**: T007 (serving the preview to the owner and recording the reviewed revision) and T008
+(the owner's actual hierarchy, density, and balance decision).

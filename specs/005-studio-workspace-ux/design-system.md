@@ -134,8 +134,21 @@ Applicable states follow SC-007: default, focus, disabled, active, and error, wh
 
 ## 6. Measured checks
 
-Not yet run. T005 records the tested revision, commands, and outcomes here and in the
+Tested revision `e80e291cc4425cf49089be46e4deb8819007ff03` (the preview and the values above),
+rendered in Playwright 1.64.1 Chromium 156.0.8078.4 on an isolated display: 346 desktop/compact
+and 56 native-zoom checks, 0 failures. The full record, commands, and evidence location are in the
 [preview README](../../tests/manual/studio-design/README.md#verification-record).
+
+| Check | Observed |
+| --- | --- |
+| Enabled text contrast | Minimum 4.96:1 across 2,744 rendered samples in all states (requirement 4.5:1) |
+| Disabled text | Minimum 4.66:1 (exempt, still readable) |
+| Control boundaries, fills, and meaningful icons | Minimum 3.52:1 across 323 samples (requirement 3:1) |
+| Focus indicator | 2px, at least 6.75:1 against its background at every Tab stop recorded |
+| Layout | No page-wide horizontal overflow at 1280 x 720, 1920 x 1080, 390 x 844, 320 x 640, and native 200% (640 x 360 CSS viewport) |
+| Keyboard | Seven panel widths, collapse/restore, tabs, and disclosures operable by keyboard; skip links lead the Tab order; the hidden panel and stacked separator leave the focus order |
+
+These results show the proposed values are mechanically usable. They are not owner acceptance.
 
 ## Owner review record
 
