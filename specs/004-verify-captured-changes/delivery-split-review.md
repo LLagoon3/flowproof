@@ -284,7 +284,29 @@ local slice-2 verification, not remote CI or merge authority.
 - PR #20 targets `main` from `feat/004-verification-engine-lifecycle`; no later slice is included.
 - Parent revalidation before publication: `pnpm typecheck`, `pnpm build`, and the combined captured
   contract/unit/Git, legacy worktree and provider-seam gate passed (5 files, 210/210, no skipped
-  cases; `/tmp/fp-slice2-pr-{typecheck,build,focused}.log`). Product and test bytes are unchanged.
+  cases; `/tmp/fp-slice2-pr-{typecheck,build,focused}.log`). Those product and test bytes were
+  unchanged at initial publication; the review correction below supersedes them.
 - Publication/review status is recorded before the initial exact-head Codex request. Remote CI
   and review completion must be observed against the published HEAD; this document does not
   claim a completed review or authorize merging it.
+
+### Slice 2 correction round 1
+
+- Initial Codex review completed on `5738a5f` with one P2 finding: interruption tracking ended
+  before asynchronous evidence scanning and cleanup, so a cancelled run could persist `passed`.
+  Initial CI and GitGuardian checks passed on that exact head.
+- Product correction `e63ce9a` keeps the interruption listener through scanning and both disposal
+  operations, then folds the first interruption/deadline into the terminal decision before
+  persistence. Cleanup still completes; earlier operational errors retain precedence. The
+  listener is removed before persistence, including a failed result write.
+- Nine new regressions cover scan/capture/worktree-disposal interruption, first-stop/error
+  precedence and listener release, including real Git disposal. Baseline RED confirmed the
+  reported false success; all new cases are GREEN on the correction.
+- Worker validation on committed `e63ce9a`: typecheck/build passed; focused contract/unit/Git
+  plus worktree/provider-seam passed 219/219 (5 files); full suite passed 1,456/1,456 (46 files,
+  zero skipped); headed Chromium passed 8/8. Logs: `/tmp/fp-pr20-r1-*.log`.
+- Parent independently inspected the correction commit and diff, then passed typecheck and
+  219/219 tests: captured contract/unit/Git 175 plus legacy worktree/provider-seam 44, with no
+  skipped cases (`/tmp/fp-pr20-r1-parent-{typecheck,focused,compat}.log`).
+- This correction remains slice 2 only. A fresh exact-head Codex review and remote CI must be
+  observed after the follow-up push; no clean review, merge, deployment or next slice is claimed.
