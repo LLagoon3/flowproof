@@ -431,3 +431,131 @@ diff-check pass. Logs: `/tmp/fp-pr21-clock-{red,delayed-green,unit,typecheck}.lo
 probe selected one case and skipped the other 107; it is not reported as a full-suite pass.
 No product source, test expectation or real-timer test changed. Exact-head re-review and full CI
 must complete after this correction; the initial clean review is not approval of a later SHA.
+
+## Slice 4 branch
+
+### Authority, source and scope
+
+- The owner authorized merging PR #21 and continuing the next slice on 2026-11-03. The parent
+  verified the exact reviewed head `a405bf12bd142c2565aa458297bb61e7c7806994`, Codex no findings,
+  successful CI `41592671435` (1,630 tests/eight headed cases), GitGuardian success and zero
+  unresolved threads before merging. This checkout begins clean on merged main
+  `bcb29e5261354039c1a1fdf34902615a6b145b9e`, branch `feat/004-visible-runtime-evidence`.
+- Local-only scope: T017, T019 launch, T020, T022, T025-T027, T030, T033, T034 presentation,
+  T035-T042. T002's final prepared negative case is now exercised by headed T020. T041 remains
+  human-only, unperformed and unchecked. No push, PR, remote review, merge or deployment occurs
+  in this extraction; the separate deployment target is still unspecified.
+- Immutable source: `ebb747dd57dd3b1726e4eca1de8da9cdd3b1b52e`, incremental to slice-3 source
+  `1dc51234f242dde7dd31edbcfbf294e7827ea4b0`: ten paths, +2,557/-27 including tests/helper.
+  Nine safe whole-file candidates had no newer baseline fixes and were restored exactly. The
+  integration file was applied additively after its EOF-only difference prevented a clean patch;
+  all earlier server assertions remain, with import expansion and 16 appended admission cases.
+  All ten extracted source files match `ebb747d` exactly. The new QA launcher and delivery docs
+  are additional work, not claimed to be part of that source.
+- Preserved unchanged from merged baseline: captured engine/contracts/private Git/worktree,
+  all earlier contract/unit/Git/client/server fixes and regressions, API/state, and provider-seam.
+  In particular the PR #21 deterministic clock is controlled only by test advances; all 108 unit
+  cases still run, including the nine PR #20 finalization-interruption regressions.
+
+### Commit boundaries
+
+1. `0f06602 feat(studio): launch captured runs with owned target finalization`: launcher,
+   captured harness and launch-admission regressions compile/build with legacy UI; RED 16 failed/
+   29 passed before launcher implementation; GREEN 45/45 after it. This boundary is independent
+   of visible UI; captured E2E was kept for the following UI commit.
+2. `2073ce0 feat(studio): show actual captured replay and completed evidence`: existing App,
+   AgentPanel/ProofTrail/TargetPane, the small captured result component, additive styles and six
+   headed cases. Before the UI, the passing case failed for its missing candidate-start action;
+   afterwards all six captured headed cases passed. Live iframe identity and covered/focused input,
+   baseline/candidate readiness, plausible-wrong failure, build/load failure, static evidence and
+   two mid-run close paths are checked against the real observed frame.
+3. `ad807a2 test(studio): add built-module captured verification QA launcher`: strict `--case pass`
+   interface, prior-build check, built-module imports only, temporary committed clone and prepared
+   dependency links, exact fixed fixture build/pinned image, real canvas-fix capturing session,
+   human-controlled start/close and explicit cleanup summary. Own tag/clone only are removed.
+   Quickstart now includes UI discovery/focus, headed discovery and the prior-build prerequisite.
+4. `d8a1ef1 fix(test): report QA cleanup only after all owned removals` ensures the manual
+   launcher emits its single cleanup verdict after tag and clone removal too; exceptional
+   cleanup can never leave an earlier `cleanupComplete: true` summary.
+5. Documentation-only completion records the observed gate counts, scope audit and explicit
+   human-only gap. Optional before/after-implement Git commit hooks are not executed, per
+   CONTRIBUTING.md; there is no mandatory implementation hook. Manual Conventional Commits are used.
+
+### Whole-feature scope audit (T038)
+
+The whole feature from original `b2ed6ad` and the current slice from `bcb29e5` were both inspected.
+`package.json`, `pnpm-lock.yaml`, production CLI, legacy `run.ts`, legacy result schemas and
+verification gates are byte-identical to `b2ed6ad`. No new HTTP route, target URL/port, service,
+container family, provider invocation, cancel endpoint or upload/export path is added. The new
+in-process launcher export and browser result discriminator are the approved internal contracts,
+not network export surfaces. Application keeps Git safe defaults; prohibited apply flags appear
+only in the explanatory comment and are never used. The existing Docker fixture is reused.
+The Docker context's `.dockerignore` excludes everything except `agent.mjs`; root Git ignores
+installed dependencies, generated builds, run artifacts, environment files and test output.
+
+Existing agent fixture and Studio harness changes are strictly additive (+93/0 and +232/0).
+Existing test assertions are preserved; the integration imports expand, and 16 new admission
+cases are appended. The only historical guard adjustment is the owner-approved exact four-module
+capture reachability set from PR #19; type-only traversal and independent production restrictions
+remain intact. PR #21's already-reviewed fake-clock correction is test-only; no product assertion
+was weakened. Captured contract/unit/Git/server/client regressions are unchanged or additive,
+not overwritten by the older aggregate snapshot. No secret, local artifact, dependency link or
+new dependency is tracked. The aggregate checkout and other worktrees remain untouched.
+
+### Slice 4 validation
+
+All commands run from this slice checkout against committed product/test bytes. Logs are under
+`/tmp/fp-slice4-native-*.log`; counts below are observed, not inferred from zero-test exits.
+
+| Check | Observed result | Log suffix |
+| --- | --- | --- |
+| Explicit feature prerequisites; unchanged requirements checklist | exit 0; 16/16 checked | direct prerequisite/checklist output |
+| `pnpm install --offline --frozen-lockfile` | exit 0, real ignored dependency directories | `install.log` |
+| Launch admission tests first | exit 1; 16 failed, 29 passed | `launch-red.log` |
+| Launcher typecheck/build without captured UI | exit 0 / exit 0 | `launch-typecheck.log`, `launch-build.log` |
+| Launch admission/server GREEN | exit 0; 45/45 | `launch-green.log` |
+| Headed passing case before captured UI | exit 1; missing candidate-start action | `ui-red.log` |
+| Final typecheck/build | exit 0 / exit 0 | `typecheck.log`, `build.log` |
+| Focused slice-4 plus preserved contract/unit/Git/seam, eight files | exit 0; 547/547, zero skipped | `focused.log` |
+| Five-file Vitest discovery | nonzero for all five files | `discovery.log` |
+| Captured headed discovery | six cases in one file | `headed-discovery.log` |
+| Captured headed cases | exit 0; 6/6, zero skipped | `captured-e2e.log` |
+| Exact T039 ten-file legacy Vitest command | exit 0; 497/497, zero skipped | `legacy.log` |
+| Exact T039 five-file legacy headed command | exit 0; 8/8, zero skipped | `legacy-e2e.log` |
+| Full `xvfb-run -a pnpm test --no-file-parallelism --maxWorkers=1 --reporter=verbose` | exit 0; 48 files, 1,646/1,646, zero skipped | `full.log` |
+| Full `xvfb-run -a pnpm exec playwright test --pass-with-no-tests` | exit 0; 14 discovered, 14 passed, zero skipped | `e2e.log` |
+| Manual script syntax and strict interface/prior-build refusals | exit 0 syntax; four expected exit-2 refusals | `manual-check.log`, `manual-interface.log` |
+| Automated built-module launcher startup/close | exit 0; empty residue/processes, port off, original unchanged; not human QA | `manual-final-smoke.log` |
+| Scope/source/preserved-regression audit and diff-check | exit 0; exact extracted source match | `whole-scope.log`, direct Git audit |
+
+Focused executed counts: captured server/launch 45, captured UI 145, legacy state 147, Proof Trail
+11, contract 39, unit 108, Git 28, provider-seam 24. Vitest list prints unexpanded parameterized
+entries (15 contract, 50 unit, 27 Git, 21 server, 43 UI); execution expands those to
+39/108/28/45/145 respectively, not zero-test success. Full project totals: contract nine
+files/320 tests, unit 21/686, integration 15/337, UI three/303. Relative to slice 3 this adds
+16 launch-admission cases; no earlier test is removed or skipped. Headed adds six captured
+cases to the unchanged eight legacy cases.
+
+Nine passing/failing/preparation PNGs are preserved in `/tmp/fp-slice4-native-screenshots/`.
+The passing screenshot and its before/after captured labels were inspected; the automated
+same-frame assertions remain the identity proof, not screenshots alone. The latest test output
+also retains these under `test-results/`. The initial manual lifecycle attempt refused an
+occupied prepared port while an earlier focused run settled (`manual-smoke.log`); a clean
+retry passed (`manual-smoke-retry.log`). No foreign process/resource was stopped. This failure
+is preserved rather than relabelled as a pass.
+
+**Human-only T041: not performed.** Automated headed observations, screenshot inspection and
+manual-launcher startup/close do not constitute owner visual acceptance. T042 records that gap;
+all other tasks have supporting automated or scope-audit evidence. Prepared candidate execution
+is not containment for arbitrary hostile code, and page-global adversarial observation isolation
+remains excluded issue #15 work. No live model, credential, automatic install, deployment or
+remote publication is claimed. The owner can perform T041 after the final gate with the exact
+quickstart command and inspect its cleanup summary.
+
+
+Final automated launcher smoke ran on committed `d8a1ef1`, after its summary-order correction:
+exit 0, `ready=True`, empty temporary leftovers/processes, target port not listening, original
+snapshot unchanged, no mismatch and `cleanupComplete: true` (`manual-final-smoke.log`). It closed
+through SIGINT without starting verification and explicitly records `human_visual_acceptance=False`;
+the separate six headed cases prove the full candidate run. The final documentation commit changes
+no product or test bytes. All automated gates are settled; no owned test/runtime remains running.

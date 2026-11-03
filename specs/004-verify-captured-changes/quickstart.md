@@ -93,8 +93,9 @@ node tests/manual/captured-verification.mjs --case pass
 ```
 
 The QA launcher uses the deterministic editor/capture path and trusted host launch API; it
-is not a production CLI mode. It clones committed HEAD, links existing prepared dependencies, builds the fixed local fixture
-image and pins its immutable image ID. It never installs candidate dependencies or invokes a model. Confirm the real original
+is not a production CLI mode. It clones committed HEAD, links existing prepared dependencies,
+builds the fixed local fixture image and pins its immutable image ID. It never installs candidate
+dependencies or invokes a model. Confirm the real original
 failure and candidate select replay are visible, final result/checks match, and the final pane is
 labelled captured evidence rather than a navigable live app. Close Studio and check cleanup. Automated
 tests cover negative cases. This manual smoke is not claimed completed by automated launcher or headed tests.
