@@ -75,8 +75,8 @@ Nothing advances on a timer, and no control sends a request.
 The selected legacy prepared case stays bound to its synthetic run through Start, intermediate
 states and mode round trips. The invalid-citation case never applies or replays a candidate, and
 its final outcome is always `Unverified`. Direct `Successful` / `Unsuccessful` preview controls
-explicitly choose the matching Hero / invalid-citation example and announce any case change in
-the existing menu note; they are fixture selectors, not alternate outcomes for the same run.
+explicitly name and choose the matching Hero / invalid-citation example and announce any case
+change in the existing menu note; they are fixture selectors, not alternate outcomes for the same run.
 
 ## Allowed data and constraints
 

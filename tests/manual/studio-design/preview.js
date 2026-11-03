@@ -1005,6 +1005,11 @@
       : 'Unavailable: simulated activity applies to the Active and Finalizing states, while live activity is connected.'
     document.querySelector(`input[name="mode"][value="${ui.mode}"]`).checked = true
     document.querySelector(`input[name="view"][value="${ui.view}"]`).checked = true
+    for (const view of ['successful', 'unsuccessful']) {
+      const fixture = view === 'successful' ? 'Hero' : 'invalid citation'
+      document.querySelector(`input[name="view"][value="${view}"] + span`).textContent =
+        ui.mode === 'legacy' ? `${VIEW_NAMES[view].replace(' result', '')} · ${fixture}` : VIEW_NAMES[view].replace(' result', '')
+    }
   }
 
   function renderAll({ resetHistory = false } = {}) {
