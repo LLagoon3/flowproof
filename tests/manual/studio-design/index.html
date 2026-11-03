@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>FlowProof Studio — Design preview (simulated data)</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="preview.css" />
+    <script src="preview.js" defer></script>
+  </head>
+  <body>
+    <!--
+      Isolated design preview for Spec 005 slice 1. Every value is synthetic; no control sends a
+      request, starts a run, or loads a live target. See README.md in this directory.
+    -->
+    <a class="skip-link" href="#work-panel">Skip to work panel</a>
+    <a class="skip-link" href="#canvas">Skip to canvas</a>
+
+    <header class="app-header">
+      <h1 class="brand">FlowProof <span>Studio</span></h1>
+      <div class="preview-chrome">
+        <span class="preview-label">Preview · simulated</span>
+        <button type="button" id="preview-menu-toggle" class="icon-btn" popovertarget="preview-menu" aria-label="Preview options">···</button>
+      </div>
+    </header>
+    <div id="preview-menu" class="preview-menu" popover="auto" role="region" aria-label="Design preview controls">
+      <p class="menu-heading">Design preview — simulated data</p>
+      <fieldset class="preview-field">
+        <legend class="preview-field__legend">Mode</legend>
+        <div class="segmented" id="mode-options">
+          <label class="segmented__option"
+            ><input type="radio" name="mode" value="legacy" checked /><span>Legacy prepared case</span></label
+          >
+          <label class="segmented__option"
+            ><input type="radio" name="mode" value="captured" /><span>Captured candidate</span></label
+          >
+        </div>
+      </fieldset>
+      <fieldset class="preview-field">
+        <legend class="preview-field__legend">State</legend>
+        <div class="segmented" id="state-options">
+          <label class="segmented__option"
+            ><input type="radio" name="view" value="ready" checked /><span>Ready</span></label
+          >
+          <label class="segmented__option"
+            ><input type="radio" name="view" value="active" /><span>Active</span></label
+          >
+          <label class="segmented__option"
+            ><input type="radio" name="view" value="finalizing" /><span>Finalizing</span></label
+          >
+          <label class="segmented__option"
+            ><input type="radio" name="view" value="disconnected" /><span>Disconnected</span></label
+          >
+          <label class="segmented__option"
+            ><input type="radio" name="view" value="unsuccessful" /><span>Unsuccessful</span></label
+          >
+          <label class="segmented__option"
+            ><input type="radio" name="view" value="successful" /><span>Successful</span></label
+          >
+        </div>
+      </fieldset>
+      <div class="preview-field preview-field--inline">
+        <label class="preview-field__legend" for="evidence-example">Evidence example</label>
+        <select id="evidence-example" class="select select--compact" aria-describedby="evidence-example-hint">
+          <option value="as-produced">As produced</option>
+          <option value="after-loading">After: loading</option>
+          <option value="after-unreadable">After: unreadable</option>
+          <option value="after-not-received">After: ID not received</option>
+          <option value="after-not-produced">After: not produced</option>
+          <option value="before-not-received">Before: ID not received</option>
+        </select>
+        <span id="evidence-example-hint" class="visually-hidden">Applies to final states only.</span>
+      </div>
+      <button type="button" id="append-activity" class="btn btn--preview btn--sm" aria-describedby="append-hint">
+        Append simulated activity
+      </button>
+      <span id="append-hint" class="visually-hidden"></span>
+      <div id="session-context" class="session-context"></div>
+      <p id="preview-note" class="menu-note" role="status"></p>
+    </div>
+
+    <main id="workspace" class="workspace" data-panel-step="2" data-collapsed="false">
+      <aside id="work-panel" class="work-panel" aria-label="Work panel" tabindex="-1">
+        <div class="panel-head">
+          <h2 class="panel-title">Canvas filter</h2>
+          <button type="button" id="collapse-panel" class="icon-btn" aria-controls="work-panel" aria-expanded="true" aria-label="Collapse work panel" data-focus-key="collapse">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><path d="M6 2.75v10.5M10.75 6.25 9 8l1.75 1.75"/></svg>
+          </button>
+        </div>
+        <div id="run-status" class="visually-hidden" role="status" tabindex="-1"></div>
+        <div class="history-wrap">
+          <div id="history" class="history" role="region" aria-label="Work history" tabindex="0"></div>
+          <div class="jump-latest">
+            <button type="button" id="jump-latest" class="btn btn--secondary btn--sm btn--pill" hidden>
+              <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M8 3v9.5M4 8.75 8 12.5l4-3.75" />
+              </svg>
+              <span id="jump-latest-label">Jump to latest</span>
+            </button>
+          </div>
+        </div>
+        <div id="composer" class="composer-slot"></div>
+      </aside>
+
+      <div
+        id="panel-separator"
+        class="panel-separator"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
+        aria-controls="work-panel"
+        aria-label="Work panel width"
+        aria-valuemin="20"
+        aria-valuemax="32"
+        aria-valuenow="24"
+        aria-valuetext="24rem (default)"
+      ></div>
+
+      <section id="canvas" class="canvas" aria-labelledby="canvas-title" tabindex="-1">
+        <div class="canvas-bar">
+          <div id="collapsed-entry" class="collapsed-entry" hidden>
+            <button
+              type="button"
+              id="restore-panel"
+              class="btn btn--secondary btn--sm"
+              aria-controls="work-panel"
+              aria-expanded="false"
+            >
+              <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+                <path d="M6 2.75v10.5M9 6.25 10.75 8 9 9.75" />
+              </svg>
+              Show work panel
+            </button>
+            <p id="collapsed-status" class="status-pill" role="status"></p>
+            <button type="button" id="view-result" class="btn btn--quiet btn--sm" hidden>View result</button>
+          </div>
+          <div class="canvas-bar__title-group">
+            <h2 id="canvas-title" class="canvas-bar__title">Canvas</h2>
+            <p id="surface-label" class="surface-label"></p>
+          </div>
+          <div id="canvas-tabs" class="tabs" role="tablist" aria-label="Canvas view" hidden>
+            <button type="button" role="tab" id="tab-target" class="tabs__tab" aria-controls="view-target" data-tab="target" data-focus-key="tab:target">
+              Target
+            </button>
+            <button type="button" role="tab" id="tab-evidence" class="tabs__tab" aria-controls="view-evidence" data-tab="evidence" data-focus-key="tab:evidence">
+              Evidence
+            </button>
+          </div>
+        </div>
+        <div class="canvas-stage">
+          <div id="view-target" class="target-view">
+            <div id="target-frame" class="target-frame" data-frame-identity="synthetic-target-1"></div>
+          </div>
+          <div id="view-evidence" class="evidence-view" hidden></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
