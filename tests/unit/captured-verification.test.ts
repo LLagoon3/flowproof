@@ -1166,14 +1166,13 @@ const STAGE_CHECKS: Readonly<Record<StagePort, readonly string[]>> = {
 }
 const PRIVATE_LOCATOR = `/tmp/private-host-locator/${MARKER}`
 
-/** A monotonic clock that the engine reads through `performance.now()`, shifted by the test. */
+/** A test-controlled monotonic clock, independent of real filesystem and scheduler latency. */
 function fakeMonotonicClock(): { advance(ms: number): void } {
-  const real = performance.now.bind(performance)
-  let offset = 0
-  vi.spyOn(performance, 'now').mockImplementation(() => real() + offset)
+  let now = performance.now()
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
   return {
     advance(ms: number): void {
-      offset += ms
+      now += ms
     },
   }
 }

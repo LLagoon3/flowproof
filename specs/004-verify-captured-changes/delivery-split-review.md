@@ -1,10 +1,11 @@
 # Spec004 delivery decomposition review
 
 **Date:** 2026-11-03. **State when written:** local-only feasibility review; further product
-implementation paused. **Current:** slice 1 merged through PR #19 (`16eecc0`); slice 2 is
-published for review as [PR #20](https://github.com/LLagoon3/flowproof/pull/20), see
-[Slice 2 branch](#slice-2-branch). Earlier sections are
-dated history and their counts are not current.
+implementation paused. **Current:** slices 1 and 2 merged through PR #19 (`16eecc0`) and
+[PR #20](https://github.com/LLagoon3/flowproof/pull/20) (`d385c36`); slice 3 is extracted,
+verified and reviewed locally, and published as [PR #21](https://github.com/LLagoon3/flowproof/pull/21)
+for GitHub Codex review. See [Slice 3 branch](#slice-3-branch). Earlier sections are dated history;
+their authorization boundaries and counts are not current.
 
 ## Correction and preserved work
 
@@ -310,3 +311,123 @@ local slice-2 verification, not remote CI or merge authority.
   skipped cases (`/tmp/fp-pr20-r1-parent-{typecheck,focused,compat}.log`).
 - This correction remains slice 2 only. A fresh exact-head Codex review and remote CI must be
   observed after the follow-up push; no clean review, merge, deployment or next slice is claimed.
+
+## Slice 2 merge
+
+The owner requested merge, deployment and the next slice on 2026-11-03. PR #20 merged as
+`d385c36f5cc8cf3ae205ec1556f4c5c714fd3835` after correction-round Codex review completed with
+no findings on exact head `639d993`. CI run `41585119282` and GitGuardian succeeded on that
+same SHA, no review thread remained unresolved, and the PR body reflected that state. These
+remote observations and the merge were performed by the parent session, not by this extractor.
+Deployment target clarification is separate; this report claims no deployment.
+
+## Slice 3 branch
+
+- Current authority: local extraction, verification and manual commits for slice 3 only, following
+  the owner's request after the PR #20 merge. No slice-3 push, PR, review request, merge or
+  deployment is performed here, and slice 4 is not started.
+- Branch `feat/004-studio-contracts-state` starts from current `main`/`origin/main` at `d385c36`.
+  The aggregate checkout and every other worktree remain untouched.
+- Scope: T018, T019 server portion, T021, T023-T024 and T034 selectors. T019 launch admission
+  and T034 visible presentation remain incomplete, as do all slice-4 tasks. The existing
+  launcher, UI components, browser harness, E2E tests, dependencies, package/lockfiles and CLI
+  are unchanged. No product requirement or route is added.
+- Source: immutable audit snapshot `1dc51234f242dde7dd31edbcfbf294e7827ea4b0`, incremental to
+  `72ad9623298111e26c9c24478de97c63d41b20cd`. The server and client/state product files are
+  byte-identical to that source. The server test drops one blank EOF line to pass diff-check;
+  the client test adds two boundary regressions covering PR #19 reducer normalization for all
+  12 missing-evidence/terminal combinations and strict/private metric failure handling.
+- The merged contract and engine files, captured unit/contract/Git regressions (including the
+  nine PR #20 finalization-interruption cases), and provider-seam guard are unchanged from
+  `d385c36`. The guard still permits exactly the four approved capture modules, and does not
+  admit the editing-session/Docker runtime.
+
+### Slice 3 commit boundaries
+
+1. `18ba202 feat(studio): add host-fixed captured verification server contract` contains the
+   host-fixed server mode and server-only integration tests. Its independent typecheck/build
+   and captured-server/legacy-API/provider-seam checks pass without the new client or state.
+2. `19d1bf1 feat(studio): add explicit captured result client and state selectors` contains
+   the browser-safe explicit result union/parser, catalog mode, captured state/selectors and
+   their tests. The API and state form one client contract; both compile without a launcher
+   or visible component integration.
+3. A documentation-only commit records current authority, task-part completion and measured
+   validation. Optional before/after-implement Git auto-commit hooks are not run, following
+   CONTRIBUTING.md; no mandatory implementation hook is registered.
+
+### Slice 3 validation
+
+Measured on committed product `19d1bf1`; subsequent changes are documentation-only. Logs use
+`/tmp/fp-slice3-native-*.log`. No live provider or credential is used.
+
+| Check | Observed result | Log suffix |
+| --- | --- | --- |
+| `check-prerequisites.sh --json --require-tasks --include-tasks`, explicit feature directory with persistence disabled | exit 0 | `prerequisites.log` |
+| Requirements checklist | 16/16 checked, unchanged | checked from file |
+| `pnpm install --offline --frozen-lockfile` | exit 0; real ignored dependency directories, no tracked dependency symlink | `install.log` |
+| Server tests first, merged baseline product | exit 1; 29 discovered, 17 failed and 12 passed; captured host mode is missing | `server-red.log` |
+| Client tests first, baseline API/state | exit 1 before collection because captured exports are missing; not a zero-test pass | `client-red.log` |
+| Client API restored, baseline state | exit 1; 143 discovered, 33 failed and 110 passed for missing captured state/selectors | `state-red.log` |
+| Server boundary `pnpm typecheck`, `pnpm build`, before new client/state | exit 0, exit 0 | `server-{typecheck,build}.log` |
+| Server captured + legacy API + unchanged seam gate | exit 0; 96/96 (29 + 43 + 24) | `server-green.log` |
+| Final client/state/Proof Trail gate | exit 0; 303/303 (145 + 147 + 11), including the two extra parity regressions | `client-parity.log` |
+| `pnpm typecheck`, `pnpm build` on final product | exit 0, exit 0 | `typecheck.log`, `build.log` |
+| Slice-3 focused gate, all six named files | exit 0; 395/395, zero skipped | `focused.log` |
+| Preserved captured contract/unit/Git plus unchanged provider-seam gate | exit 0; 199/199 (39 + 108 + 28 + 24), zero skipped | `regression.log` |
+| `xvfb-run -a pnpm test --no-file-parallelism --maxWorkers=1 --reporter=verbose` | exit 0; 48 files, 1,630/1,630 passed, zero skipped | `full.log` |
+| Existing headed Chromium suite under Xvfb | exit 0; 8 discovered, 8 passed, zero skipped | `e2e.log` |
+| `git diff --check d385c36` and exact product/source comparison | exit 0; product/source diff empty, merged regression files unchanged | final local audit |
+
+Focused file counts: captured server 29, captured client/state 145, legacy state 147, Proof Trail 11,
+legacy Studio API 43, legacy worktree 20. `vitest list` discovers every named file; its unexpanded
+parameterized-test entries are not substituted for the executed counts (`discovery.log`).
+The prepared Docker-backed captured cases and all nine merged PR #20 finalization regressions ran.
+
+Full regression project counts: contract 9 files/320 tests, unit 21/686, integration 15/321,
+UI 3/303. This is the merged slice-2 total of 1,456 plus 29 server and 145 client/state tests,
+with zero tests removed, skipped or weakened. The five product/test paths total +2,576/-52
+relative to `d385c36`, including all tests; product source is +845/-52. The three active
+delivery documents are additional changes, not excluded from review.
+Whole-feature T002, T038, T040 and human-only T041 remain incomplete. Slice-3 automated
+validation does not deliver the actual-frame launcher or visible captured-evidence components. The
+prepared-candidate trust boundary and issue #15 observation-isolation exclusion are unchanged.
+
+### Parent verification of slice 3
+
+On `e1b06c8`, the parent inspected the three commits and aggregate scope, confirmed all three
+product files match `1dc51234`, and verified the merged contract/engine/worktree regression files
+and provider-seam guard are unchanged from `d385c36`. Worker full-suite and headed-suite logs
+were checked through their final summaries. Independent `pnpm typecheck` and the six slice-3
+focused files plus `provider-seam.test.ts` passed: exit 0, seven files, 419/419 tests, zero skipped.
+Logs: `/tmp/fp-slice3-parent-typecheck.log` and `/tmp/fp-slice3-parent-focused.log`.
+`git diff --check d385c36 HEAD` passed. This is local slice completion, not a published PR,
+remote review, whole-feature acceptance or deployment.
+
+### Slice 3 publication and review
+
+The owner subsequently authorized PR publication and a review loop on 2026-11-03. Slice 3 is
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21), `feat/004-studio-contracts-state` to `main`.
+This supersedes the earlier local-only publication boundary, authorizing in-scope corrections,
+follow-up pushes and exact-head GitHub Codex review requests. Follow AGENTS.md: initial review
+plus at most three remediation rounds. Merge, deployment and slice 4 remain outside this loop.
+Current phase: exact-head review and CI pending; local verification above is not remote CI.
+The repository has only the PR CI workflow and no automatic preview/deployment workflow.
+This publication-status commit changes documentation only; all product and test bytes remain
+those independently checked at `e1b06c8`.
+
+### Slice 3 CI correction 1
+
+Codex completed its initial review of `aaea755` without findings. CI run `41591935207` failed
+one of 1,630 tests: the elapsed-total-window application case expected `RUN_TIMEOUT` for the
+application, but got `CHECK_NOT_EVALUATED`. Its fake clock added advances to live elapsed time;
+after advancing to ten milliseconds before the deadline, baseline evidence I/O could consume
+that margin and correctly stop the engine before application ever began.
+
+The parent reproduced the same failure by temporarily delaying baseline evidence by 25 ms.
+The test-only clock now advances solely under test control, so the same delay passes without
+altering engine behavior or assertions. The temporary delay was removed after the RED/GREEN
+probe. The complete captured unit suite passes 108/108 with zero skipped; typecheck and
+diff-check pass. Logs: `/tmp/fp-pr21-clock-{red,delayed-green,unit,typecheck}.log`. The filtered
+probe selected one case and skipped the other 107; it is not reported as a full-suite pass.
+No product source, test expectation or real-timer test changed. Exact-head re-review and full CI
+must complete after this correction; the initial clean review is not approval of a later SHA.

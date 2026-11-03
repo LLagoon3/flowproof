@@ -33,19 +33,31 @@ GitHub Codex review requests; merge and later slices were not authorized at that
 extraction and verification of delivery slice 2 only, superseding the earlier pause for that
 slice. The owner subsequently authorized publishing slice 2 as
 [PR #20](https://github.com/LLagoon3/flowproof/pull/20) and its GitHub Codex review loop, including
-in-scope corrections and follow-up pushes. Merge, deployment and every later slice remain
-unauthorized; AGENTS.md caps remediation at three rounds after the initial review.
+in-scope corrections and follow-up pushes. The owner then requested merge, deployment and the
+next slice. PR #20 merged into `main` as `d385c36` after no-finding Codex review, successful CI
+and GitGuardian, and zero unresolved threads on exact reviewed head `639d993`. This supersedes
+the earlier merge/slice-3 restriction; this branch performs local slice-3 implementation and
+verification only. Deployment target clarification is handled separately by the parent session,
+and no deployment is claimed here. The owner subsequently authorized publishing slice 3 as
+[PR #21](https://github.com/LLagoon3/flowproof/pull/21) and its GitHub Codex review loop, including
+in-scope corrections, follow-up pushes and exact-head re-reviews. Initial review plus at most
+three remediation rounds follows AGENTS.md. Merge, deployment and slice 4 are not included.
 
-**This branch**: `feat/004-verification-engine-lifecycle`, created from `main`/`origin/main` at
-`16eecc0`. The owner authorized extraction and verification of delivery slice 2:
-T001-T002, T004, T010-T011, T014-T016, T028-T029 and T031-T032, taken from audit snapshot
-`72ad962` while preserving every PR #19 correction (see
-[delivery-split-review.md](./delivery-split-review.md#slice-2-branch)). Checkmarks describe `main`
-plus this branch and are set only with recorded verification evidence. T001, T004, T010-T011,
-T014-T016, T028-T029 and T031-T032 are checked on the slice-2 evidence in the delivery review.
-T002 stays unchecked: its five cases exist and four are exercised by T011, but the
-`canvas-plausible-wrong` rendering deviation is first observed by the headed T020 in slice 4.
-Every other unchecked task is unimplemented here; this branch does not complete the feature.
+**This branch**: `feat/004-studio-contracts-state`, created from current `main`/`origin/main`
+at `d385c36`. Scope is delivery slice 3 only: T018, T019 server portion, T021, T023-T024 and
+T034 selectors, extracted from audit snapshot `1dc51234` relative to `72ad962`. All merged
+PR #19 and PR #20 corrections and regression tests are preserved. T019 and T034 remain
+unchecked as whole tasks: launch admission and visible evidence components belong to slice 4.
+T002 remains unchecked because `canvas-plausible-wrong` is first observed by headed T020 in
+slice 4; T038, T040 and human-only T041 remain incomplete whole-feature gates. Checkmarks
+are based only on committed implementation and recorded verification in
+[the slice-3 report](./delivery-split-review.md#slice-3-branch), not the aggregate's history.
+
+**Slice 3 partial tasks**: T019 server-only guards, host-fixed catalog/start/result/events and
+closed-evidence tests pass (29/29); launcher admission is unimplemented here. T034 strict
+completed-evidence, cleanup and check-summary selectors pass in the client/state suite (145/145);
+visible presentation is unimplemented here. Keep both whole-task boxes unchecked. T018, T021,
+T023 and T024 are checked on the 395/395 focused gate plus typecheck/build evidence.
 
 **Slice 1 (history)**: delivered by PR #19 from `feat/004-contracts-pinned-git`, created from
 `main` at `b2ed6ad` and extracted from the narrowed audit snapshot `8602163` (see
@@ -55,7 +67,7 @@ application layer (no applied or buildable target); reducing that outcome to the
 `application_complete` check is engine work (T010, T016), delivered in slice 2. On 2026-11-03 the
 owner authorized the narrow provider-seam exception below for slice 1; after that correction the
 slice-1 branch passed typecheck, build and the full regression (46 files, 1,339/1,339 tests). Those
-are slice-1 counts, not this branch's.
+are historical slice-1 counts, not this branch's.
 
 **Approved compatibility exception (T038)**: `tests/integration/provider-seam.test.ts` may replace
 the blanket ban on reachable `editing/*` modules with exactly `editing/capture.ts`,
@@ -65,8 +77,9 @@ continue to include type-only edges and reject every additional editing module. 
 references to editing session/workspace/contracts/Docker/runtime-profile modules remain forbidden,
 and the Hero/Failure provider and verification behavior remain unchanged. This exception does not
 complete T038's whole-feature audit or authorize another slice. Push and review authority was
-initially limited to PR #19; PR #20 now has its own authorized review loop. On slice 2 the unchanged guard still passes (24/24):
-`verify/capturedRun.ts` is not yet reachable from a production entry point.
+initially limited to PR #19; PR #20 subsequently completed its own authorized review loop.
+Slice 3 makes `verify/capturedRun.ts` reachable through the host-fixed Studio server; the exact
+four-module allowance and all independent direct-reference/provider restrictions stay unchanged.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -168,16 +181,16 @@ than triggering a hidden fallback.
 > T018 does not.
 
 - [ ] T017 [P] [US2] Extend `tests/support/studioHarness.ts` with a captured-mode harness that launches `startCapturedVerificationStudio` (through `tests/support/pendingModule.ts`) for a temporary clone and a supplied capture result, with the existing private TMPDIR, unset `MODEL_API_KEY`, loopback-only request guard and cleanup report; the legacy harness is unchanged.
-- [ ] T018 [P] [US2] Write client contract and state tests in new `tests/ui/captured-verification.test.ts`: the client captured-result parser accepts and rejects exactly the T005 fixtures the server parser does, the unchanged client `parseRunResult` rejects the captured family, and result reads are bound to the started run; catalog entries parse the captured execution-kind discriminator while legacy entries keep their exact shape; in captured mode the reducer creates no Meta chat and no nine pending legacy gates; target presentation is derived only from actual events as baseline live, preparation (not live), candidate live or completed captured evidence; ten check rows come only from the strict result; `Candidate verification passed` appears only for `passed`, never `Verified Fix`.
+- [X] T018 [P] [US2] Write client contract and state tests in new `tests/ui/captured-verification.test.ts`: the client captured-result parser accepts and rejects exactly the T005 fixtures the server parser does, the unchanged client `parseRunResult` rejects the captured family, and result reads are bound to the started run; catalog entries parse the captured execution-kind discriminator while legacy entries keep their exact shape; in captured mode the reducer creates no Meta chat and no nine pending legacy gates; target presentation is derived only from actual events as baseline live, preparation (not live), candidate live or completed captured evidence; ten check rows come only from the strict result; `Candidate verification passed` appears only for `passed`, never `Verified Fix`.
 - [ ] T019 [P] [US2] Write server and launch integration tests in new `tests/integration/captured-verification-studio.test.ts` (pattern of `tests/integration/studio-api.test.ts`): existing host/origin/cookie/CSP guards apply unchanged; the captured catalog lists only the prepared scenario with the discriminator; a `POST /api/runs` body carrying a patch, filesystem root, command, provider or mode override is rejected without side effects; captured mode requires no model key or transport while legacy readiness is unchanged; the start response carries server-generated IDs; events use only existing types and the phases `initialized`, `reproducing`, `failure_captured`, `applying`, `replaying`, `finalized` with bounded messages, and no `diagnosing`, model or `gate_updated` event; the result route returns the strict captured family bound to its run; the candidate-diff route and any raw-path or patch read return the existing not-found; one run per launch; invalid launch input (T003 non-captured outcomes, unknown scenario) fails with a fixed error before any browser, server or artifact exists (depends on T003, T017).
 - [ ] T020 [P] [US2] Write headed end-to-end tests in new `tests/e2e/captured-verification.spec.ts` using T004 and T017: for `canvas-fix`, the same Studio iframe element and Playwright frame show the baseline build and then the candidate build (served stage verified through `TargetApp`), the prepared select action is visible in both phases, and the observations used for the result come from that frame; during application/build/check the pane is labelled as preparation, not live; during measured phases a transparent cover blocks a pointer click on the target, focus stays outside the iframe and the iframe is not tabbable, while the prepared programmatic select still changes the real iframe; `canvas-plausible-wrong` and `canvas-build-fail` finalize as failed with visible reasons; a target load failure (pattern of `tests/e2e/target-load-failure.spec.ts`) never yields a hidden successful replay; closing the browser mid-run (pattern of `tests/e2e/browser-close.spec.ts`) finalizes `interrupted`; save success and failure screenshots as test evidence (depends on T004, T017).
 
 ### Implementation for User Story 2
 
-- [ ] T021 [US2] Add the host-configured captured mode to `packages/flowproof/src/studio/server.ts`: an in-process option only `startCapturedVerificationStudio` can set; the catalog exposes only the prepared scenario with an additive execution-kind discriminator; the existing start-body parser and guards are reused, and the host-fixed starter is selected without model readiness or transport; `StudioRunHandle.result()` returns the explicit union of the unchanged `RunResult` and the captured family; existing closed evidence routes serve captured runs and the candidate-diff route returns not-found for them; legacy server behavior is unchanged (depends on T008, T019).
+- [X] T021 [US2] Add the host-configured captured mode to `packages/flowproof/src/studio/server.ts`: an in-process option only `startCapturedVerificationStudio` can set; the catalog exposes only the prepared scenario with an additive execution-kind discriminator; the existing start-body parser and guards are reused, and the host-fixed starter is selected without model readiness or transport; `StudioRunHandle.result()` returns the explicit union of the unchanged `RunResult` and the captured family; existing closed evidence routes serve captured runs and the candidate-diff route returns not-found for them; legacy server behavior is unchanged (depends on T008, T019).
 - [ ] T022 [US2] Implement `startCapturedVerificationStudio()` in `packages/flowproof/src/studio/launch.ts` per contract section 1: accept the original repository root, the completed capture result and the prepared scenario ID `canvas-filter-hero`, admit and snapshot the candidate (T014) before asynchronous work, start the same target app, Studio build, guarded server and headed browser as `startStudio()`, and return the existing origin/session/page/close handle shape; wire `executeCapturedRun` ports to `TargetApp.serveBuild('known-bad')`/`reconnect` and `BrowserCapture.capturePhase('failure')` on the actual Studio frame, then the pinned worktree's application/build/check, then `serveBuild('patched')`/`reconnect` of the same frame and `capturePhase('replay')`; emit only the T019 phases and bounded real activity messages; abort the run on the existing close path; legacy `startStudio()` options and credential behavior are unchanged (depends on T016, T020, T021).
-- [ ] T023 [P] [US2] Extend `apps/studio/src/api.ts` with the strict client captured-result parser, the explicit `ResultRead` union with run binding, and the catalog execution-kind discriminator, keeping legacy `parseRunResult` and legacy payload parsing unchanged (depends on T018).
-- [ ] T024 [US2] Extend `apps/studio/src/state.ts` with the captured run view: mode from the catalog, check rows from the strict result, target presentation states (baseline live, preparation, candidate live) from actual events, and no legacy gate placeholders or Meta chat state in captured mode (depends on T023).
+- [X] T023 [P] [US2] Extend `apps/studio/src/api.ts` with the strict client captured-result parser, the explicit `ResultRead` union with run binding, and the catalog execution-kind discriminator, keeping legacy `parseRunResult` and legacy payload parsing unchanged (depends on T018).
+- [X] T024 [US2] Extend `apps/studio/src/state.ts` with the captured run view: mode from the catalog, check rows from the strict result, target presentation states (baseline live, preparation, candidate live) from actual events, and no legacy gate placeholders or Meta chat state in captured mode (depends on T023).
 - [ ] T025 [US2] Create new `apps/studio/src/components/CapturedVerification.tsx` in the existing right-hand surface: current stage and bounded activity, the ten check rows with pass/fail/unevaluable and safe reasons, final status (`Candidate verification passed` or the non-passing status and reason), short candidate digest and baseline, the coverage note when present, and the statement that no model diagnosis or citations were evaluated (depends on T024).
 - [ ] T026 [US2] Update `apps/studio/src/components/TargetPane.tsx`, `apps/studio/src/App.tsx` and `apps/studio/src/styles.css`: keep the one memoized iframe mounted with the same identity during live phases, add the phase label, and during measured phases add a transparent input cover, move focus to the outer Studio and set the iframe out of the tab order; no new iframe, URL, port or navigation (depends on T020, T024).
 - [ ] T027 [US2] Update `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/ProofTrail.tsx` for captured mode: a candidate-verification start action instead of the Meta chat and nine legacy gates, and no diagnosis, provider or candidate-diff sections; legacy rendering is unchanged (depends on T025).
@@ -267,12 +280,12 @@ are preserved; a checked parent task is not a statement that either PR part is r
 
 The local audit snapshots are dependency/validation evidence, not published or owner-approved
 PR branches. Do not blindly cherry-pick the interleaved aggregate commits. Preserve the original
-branch. Slice 1 merged through PR #19; slice 2 is published for review as PR #20 on
-`feat/004-verification-engine-lifecycle`. Do not implement T035-T042 or start slice 3 now. Report
-and stop at the current slice boundary. After a slice PR is separately authorized, reviewed and
-merged, update main and create the next authorized slice branch from it, as required by
-CONTRIBUTING.md. Only the current slice-2 publication and review loop is authorized, not its
-merge or deployment, and not work on later slices.
+branch. Slice 1 merged through PR #19 and slice 2 through PR #20. Slice 3 is published as PR #21 on
+`feat/004-studio-contracts-state` from merged baseline `d385c36`; its exact task parts are listed
+above. Do not implement T035-T042 or start slice 4 now. Report and stop at this slice boundary.
+After this slice is separately authorized for publication, reviewed and merged, update main and
+create the next authorized slice branch, as required by CONTRIBUTING.md. The current request
+authorizes the slice-3 publication/review loop only, not merge, deployment or work on a later slice.
 
 ---
 

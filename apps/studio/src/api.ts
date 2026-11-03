@@ -13,6 +13,24 @@ import type {
   StudioEvent,
   StudioEventType,
 } from '../../../packages/flowproof/src/contracts/index.js'
+import type { SUBMODULE_COVERAGE_NOTE } from '../../../packages/flowproof/src/editing/capture.js'
+import type {
+  CAPTURED_CHECK_IDS as ENGINE_CAPTURED_CHECK_IDS,
+  CAPTURED_CHECK_REASONS as ENGINE_CAPTURED_CHECK_REASONS,
+  CAPTURED_CLEANUP_RESOURCES as ENGINE_CAPTURED_CLEANUP_RESOURCES,
+  CAPTURED_ORIGINAL_MISMATCHES as ENGINE_CAPTURED_ORIGINAL_MISMATCHES,
+  CAPTURED_OUTCOME_REASONS as ENGINE_CAPTURED_OUTCOME_REASONS,
+  CAPTURED_RESULT_KIND as ENGINE_CAPTURED_RESULT_KIND,
+  CAPTURED_SCHEMA_VERSION as ENGINE_CAPTURED_SCHEMA_VERSION,
+  CAPTURED_STATUSES as ENGINE_CAPTURED_STATUSES,
+  CapturedCheck,
+  CapturedCheckId,
+  CapturedCheckReason,
+  CapturedCheckStatus,
+  CapturedOutcomeReason,
+  CapturedStatus,
+  CapturedVerificationResult,
+} from '../../../packages/flowproof/src/verify/capturedContracts.js'
 
 // The browser side of contracts/studio-api.md. Every HTTP and SSE payload is untrusted: it is
 // checked here with narrow, browser-safe mirrors of the committed contracts before any state
@@ -35,6 +53,7 @@ export type {
   StudioEvent,
   StudioEventType,
 }
+export type { CapturedCheck, CapturedCheckId, CapturedCheckStatus, CapturedStatus, CapturedVerificationResult }
 
 export const CONTRACT_SCHEMA_VERSION = '1.0.0'
 export const META_MODEL_ID = 'muse-spark-1.3'
@@ -79,13 +98,31 @@ export const STUDIO_EVENT_TYPES = [
   'agent_message',
 ] as const satisfies readonly StudioEventType[]
 
-/** Safe presentation metadata for one committed case, as listed by `GET /api/scenarios`. */
-export interface ScenarioSummary {
+/** The catalog discriminator of the host-fixed captured verification mode; legacy entries carry none. */
+export const CAPTURED_EXECUTION_KIND = 'captured-verification'
+
+interface ScenarioSummaryFields {
   readonly scenario_id: string
   readonly case: ScenarioCase
   readonly title: string
   readonly default_request: string
 }
+
+/** A legacy catalog entry: exactly the four committed fields. */
+export interface LegacyScenarioSummary extends ScenarioSummaryFields {
+  readonly execution_kind?: never
+}
+
+/** The one prepared case of a host-fixed captured verification Studio, explicitly discriminated. */
+export interface CapturedScenarioSummary extends ScenarioSummaryFields {
+  readonly execution_kind: typeof CAPTURED_EXECUTION_KIND
+}
+
+/** Safe presentation metadata for one committed case, as listed by `GET /api/scenarios`. */
+export type ScenarioSummary = LegacyScenarioSummary | CapturedScenarioSummary
+
+export const isCapturedScenario = (scenario: ScenarioSummary): scenario is CapturedScenarioSummary =>
+  scenario.execution_kind === CAPTURED_EXECUTION_KIND
 
 /** The `202 Accepted` body of `POST /api/runs`. */
 export interface RunStart {
@@ -94,7 +131,11 @@ export interface RunStart {
   readonly events_url: string
 }
 
-export type ResultRead = { readonly state: 'running' } | { readonly state: 'finalized'; readonly result: RunResult }
+/**
+ * One authoritative result read: still running, or a final result of either explicit family, already
+ * validated and bound to the requested run. The Studio state also binds the request, case and family.
+ */
+export type ResultRead = { readonly state: 'running' } | { readonly state: 'finalized'; readonly result: StudioRunResult }
 
 // ---------------------------------------------------------------------------------------
 // Safe errors
@@ -114,6 +155,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   RESPONSE_INVALID: 'The Studio API returned a response outside its contract.',
   RESULT_INVALID: 'The run result violates the run-result contract, so no final status is shown.',
   RESULT_RUN_MISMATCH: 'The run result belongs to another run or request, so no final status is shown.',
+  RESULT_FAMILY_MISMATCH: 'The run result is not the kind of result this Studio mode produces, so no final status is shown.',
   EVENT_INVALID: 'A live activity event violated the Studio Event contract, so live activity stopped.',
   EVENT_RUN_MISMATCH: 'A live activity event belonged to another run, so live activity stopped.',
   EVENT_SEQUENCE_DUPLICATE: 'A live activity event repeated a sequence, so live activity stopped.',
@@ -124,6 +166,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   SCENARIO_NOT_SELECTED: 'Select a prepared case before starting a run.',
   RUN_ALREADY_ACTIVE: 'A run is already active in this Studio session.',
   ACTIVE_RUN_EXISTS: 'This Studio session already has an active run.',
+  RUN_LIMIT_REACHED: 'This Studio session has already started its verification run.',
   PROVIDER_CREDENTIAL_MISSING: 'The live Meta provider requires MODEL_API_KEY; no run was created.',
   SCENARIO_NOT_REGISTERED: 'The selected case is not a committed scenario.',
   REQUEST_TEXT_TOO_LONG: `The request is limited to ${MAX_REQUEST_TEXT_LENGTH} characters.`,
@@ -346,20 +389,323 @@ export function parseRunResult(input: unknown): RunResult | null {
   return consistent ? frozenCopy(input as unknown as RunResult) : null
 }
 
+// ---------------------------------------------------------------------------------------
+// Captured verification result family (Spec 004)
+// ---------------------------------------------------------------------------------------
+
+// A browser-safe mirror of `packages/flowproof/src/verify/capturedContracts.ts`: the strict result
+// family discriminated by `kind`, independent of the legacy Run Result. The engine's tables are
+// imported for their types only, so each mirror below fails type checking when it drifts, and the
+// client contract tests check parity with the engine parser.
+
+export const CAPTURED_RESULT_KIND: typeof ENGINE_CAPTURED_RESULT_KIND = 'captured-verification'
+export const CAPTURED_SCHEMA_VERSION: typeof ENGINE_CAPTURED_SCHEMA_VERSION = '1.0.0'
+/** The fixed note of a candidate whose baseline or final tree holds a submodule entry. */
+export const CAPTURED_COVERAGE_NOTE: typeof SUBMODULE_COVERAGE_NOTE =
+  'Submodule entries are captured as commit references only; nested working-tree changes were neither inspected nor captured.'
+
+/** The ten mandatory checks, in data-model order. */
+export const CAPTURED_CHECK_IDS: typeof ENGINE_CAPTURED_CHECK_IDS = [
+  'input_valid',
+  'baseline_reproduced',
+  'application_complete',
+  'build_passed',
+  'tests_passed',
+  'dataset_matches',
+  'canvas_matches',
+  'secret_scan_clean',
+  'cleanup_complete',
+  'original_unchanged',
+]
+export const CAPTURED_STATUSES: typeof ENGINE_CAPTURED_STATUSES = ['passed', 'failed', 'error', 'interrupted']
+export const CAPTURED_CLEANUP_RESOURCES: typeof ENGINE_CAPTURED_CLEANUP_RESOURCES = ['target_runtime', 'browser_capture', 'operation', 'worktree', 'private_git_state']
+export const CAPTURED_ORIGINAL_MISMATCHES: typeof ENGINE_CAPTURED_ORIGINAL_MISMATCHES = [
+  'gitCommonDir',
+  'head',
+  'branch',
+  'status',
+  'index',
+  'refs',
+  'history',
+  'localConfig',
+  'worktreeList',
+  'worktreeAdminEntries',
+  'trackedFiles',
+  'snapshot',
+]
+
+/** Fixed check reasons; each has exactly one status and one message. */
+export const CAPTURED_CHECK_REASONS: typeof ENGINE_CAPTURED_CHECK_REASONS = {
+  INPUT_ADMITTED: ['pass', 'The completed captured candidate, its editing-session identity, and complete upstream cleanup were admitted.'],
+  BASELINE_REPRODUCED: ['pass', 'The baseline observation shows the prepared defect, and the failure evidence is complete.'],
+  BASELINE_NOT_REPRODUCED: ['fail', 'The baseline observation already matches the expected outcome, so the prepared defect did not reproduce.'],
+  BASELINE_OBSERVATION_INVALID: ['fail', 'The baseline observation is malformed, so the prepared defect could not be confirmed.'],
+  BASELINE_EVIDENCE_INCOMPLETE: ['fail', 'The baseline failure evidence is missing, invalid, or not fully persisted.'],
+  APPLICATION_COMPLETE: ['pass', 'The candidate applied once at its recorded baseline, and every versioned effect matched its captured summary.'],
+  BASELINE_UNAVAILABLE: ['fail', 'The recorded baseline commit is not available in the original repository.'],
+  APPLICATION_REJECTED: ['fail', 'The candidate did not apply completely at its recorded baseline, so nothing was tested.'],
+  APPLICATION_FIDELITY_MISMATCH: ['fail', "The applied result differs from the candidate's captured file summary, so nothing was tested."],
+  BUILD_PASSED: ['pass', 'The registered application build completed and produced servable output.'],
+  BUILD_FAILED: ['fail', 'The registered application build failed for the applied candidate.'],
+  BUILD_OUTPUT_INVALID: ['fail', 'The registered application build produced no servable output.'],
+  TESTS_PASSED: ['pass', 'The trusted prepared functional check executed every case and matched every expected outcome.'],
+  TESTS_FAILED: ['fail', 'The trusted prepared functional check reported a mismatch or did not complete.'],
+  TESTS_NOT_EXECUTED: ['fail', 'The trusted prepared functional check executed no case, so it cannot pass.'],
+  DATASET_MATCHED: ['pass', 'The observed filtered rows exactly match the committed dataset oracle.'],
+  DATASET_MISMATCH: ['fail', 'The observed filtered rows differ from the committed dataset oracle.'],
+  DATASET_OBSERVATION_INVALID: ['fail', 'The observed dataset is missing or malformed, so it cannot match the oracle.'],
+  DATASET_ORACLE_INVALID: ['fail', 'The committed dataset oracle is malformed.'],
+  CANVAS_MATCHED: ['pass', 'The rendered bar count, labels, and values exactly match the committed chart oracle.'],
+  CANVAS_BAR_COUNT_MISMATCH: ['fail', 'The rendered bar count differs from the committed chart oracle.'],
+  CANVAS_LABEL_MISMATCH: ['fail', 'A rendered bar label differs from the committed chart oracle.'],
+  CANVAS_VALUE_MISMATCH: ['fail', 'A rendered bar value differs from the committed chart oracle.'],
+  CANVAS_OBSERVATION_INVALID: ['fail', 'The rendered chart observation is missing or malformed, so it cannot match the oracle.'],
+  CANVAS_ORACLE_INVALID: ['fail', 'The committed chart-series oracle is malformed.'],
+  REPLAY_EVIDENCE_INCOMPLETE: ['fail', 'The replay evidence is missing, invalid, or not fully persisted, so the oracle cannot pass.'],
+  SECRET_SCAN_CLEAN: ['pass', 'The whole-run secret scan found no seeded marker or credential.'],
+  SECRET_SCAN_FINDINGS: ['fail', 'The whole-run secret scan found potential secrets; their values are not reported.'],
+  SECRET_SCAN_INCOMPLETE: ['fail', 'A required surface could not be read or scanned, so the whole-run secret scan is incomplete.'],
+  CLEANUP_COMPLETE: ['pass', 'Every owned target, operation, worktree, and private Git state was released.'],
+  CLEANUP_INCOMPLETE: ['fail', 'At least one owned resource could not be released.'],
+  ORIGINAL_UNCHANGED: ['pass', 'After cleanup the original repository equals its pre-run snapshot.'],
+  ORIGINAL_CHANGED: ['fail', 'After cleanup the original repository differs from its pre-run snapshot.'],
+  ORIGINAL_INTEGRITY_UNVERIFIED: ['fail', 'The original repository could not be compared with its pre-run snapshot.'],
+  CHECK_NOT_EVALUATED: ['unevaluable', 'The run stopped before this check was evaluated.'],
+  STAGE_ERROR: ['unevaluable', 'This check could not be executed because its stage failed to run.'],
+  RUN_TIMEOUT: ['unevaluable', 'This check was not completed because the run exceeded its scenario time window.'],
+  RUN_INTERRUPTED: ['unevaluable', 'This check was not completed because the Studio closed or the process was interrupted.'],
+}
+
+/** Fixed outcome reasons of non-passing results, with the status each one belongs to. */
+export const CAPTURED_OUTCOME_REASONS: typeof ENGINE_CAPTURED_OUTCOME_REASONS = {
+  BASELINE_NOT_CONFIRMED: ['failed', 'The prepared defect was not confirmed on the baseline, so the candidate was not verified.'],
+  APPLICATION_FAILED: ['failed', 'The candidate could not be applied completely at its recorded baseline, so it was not verified.'],
+  CANDIDATE_FAILED: ['failed', 'A mandatory candidate check failed, so the candidate was not verified.'],
+  FINALIZATION_FAILED: ['failed', 'Secret scanning, cleanup, or original-integrity checks failed, so the run cannot pass.'],
+  VERIFICATION_ERROR: ['error', 'A verification stage could not be executed, so the candidate was not verified.'],
+  RUN_TIMEOUT: ['interrupted', 'The run exceeded its scenario time window and was cancelled.'],
+  RUN_INTERRUPTED: ['interrupted', 'The Studio closed or the process was interrupted, so the run was cancelled.'],
+}
+
+/** Reasons any check may report when it could not be evaluated. */
+const CAPTURED_UNEVALUABLE_REASONS = ['CHECK_NOT_EVALUATED', 'STAGE_ERROR', 'RUN_TIMEOUT', 'RUN_INTERRUPTED'] as const satisfies readonly CapturedCheckReason[]
+
+/** The evaluated reasons each check may report, beside the shared unevaluable reasons. */
+const CAPTURED_CHECK_REASON_SETS: Readonly<Record<CapturedCheckId, readonly CapturedCheckReason[]>> = {
+  input_valid: ['INPUT_ADMITTED'],
+  baseline_reproduced: ['BASELINE_REPRODUCED', 'BASELINE_NOT_REPRODUCED', 'BASELINE_OBSERVATION_INVALID', 'BASELINE_EVIDENCE_INCOMPLETE'],
+  application_complete: ['APPLICATION_COMPLETE', 'BASELINE_UNAVAILABLE', 'APPLICATION_REJECTED', 'APPLICATION_FIDELITY_MISMATCH'],
+  build_passed: ['BUILD_PASSED', 'BUILD_FAILED', 'BUILD_OUTPUT_INVALID'],
+  tests_passed: ['TESTS_PASSED', 'TESTS_FAILED', 'TESTS_NOT_EXECUTED'],
+  dataset_matches: ['DATASET_MATCHED', 'DATASET_MISMATCH', 'DATASET_OBSERVATION_INVALID', 'DATASET_ORACLE_INVALID', 'REPLAY_EVIDENCE_INCOMPLETE'],
+  canvas_matches: [
+    'CANVAS_MATCHED',
+    'CANVAS_BAR_COUNT_MISMATCH',
+    'CANVAS_LABEL_MISMATCH',
+    'CANVAS_VALUE_MISMATCH',
+    'CANVAS_OBSERVATION_INVALID',
+    'CANVAS_ORACLE_INVALID',
+    'REPLAY_EVIDENCE_INCOMPLETE',
+  ],
+  secret_scan_clean: ['SECRET_SCAN_CLEAN', 'SECRET_SCAN_FINDINGS', 'SECRET_SCAN_INCOMPLETE'],
+  cleanup_complete: ['CLEANUP_COMPLETE', 'CLEANUP_INCOMPLETE'],
+  original_unchanged: ['ORIGINAL_UNCHANGED', 'ORIGINAL_CHANGED', 'ORIGINAL_INTEGRITY_UNVERIFIED'],
+}
+
+/** Which same-run evidence each check may cite; all other checks cite none. */
+const CAPTURED_EVIDENCE_SCOPE: Partial<Readonly<Record<CapturedCheckId, RegExp>>> = {
+  baseline_reproduced: /^ev_failure_[a-z]+_[0-9]{3}$/,
+  dataset_matches: /^ev_replay_dataset_[0-9]{3}$/,
+  canvas_matches: /^ev_replay_chart_[0-9]{3}$/,
+}
+
+/** The outcome reason of a `failed` result follows its first failing check in canonical order. */
+const CAPTURED_FAILED_OUTCOME: Readonly<Record<CapturedCheckId, CapturedOutcomeReason>> = {
+  input_valid: 'CANDIDATE_FAILED',
+  baseline_reproduced: 'BASELINE_NOT_CONFIRMED',
+  application_complete: 'APPLICATION_FAILED',
+  build_passed: 'CANDIDATE_FAILED',
+  tests_passed: 'CANDIDATE_FAILED',
+  dataset_matches: 'CANDIDATE_FAILED',
+  canvas_matches: 'CANDIDATE_FAILED',
+  secret_scan_clean: 'FINALIZATION_FAILED',
+  cleanup_complete: 'FINALIZATION_FAILED',
+  original_unchanged: 'FINALIZATION_FAILED',
+}
+
+const CAPTURED_RESULT_KEYS = [
+  'kind',
+  'schema_version',
+  'run_id',
+  'request_id',
+  'scenario_id',
+  'editing_session_id',
+  'baseline_commit',
+  'candidate_patch_sha256',
+  'coverage',
+  'status',
+  'reason_code',
+  'message',
+  'checks',
+  'before_evidence',
+  'after_evidence',
+  'cleanup',
+  'started_at',
+  'completed_at',
+  'total_duration_ms',
+  'phase_durations_ms',
+] as const
+const CAPTURED_CHECK_KEYS = ['check_id', 'status', 'reason_code', 'message', 'evidence_ids', 'metrics'] as const
+const CAPTURED_CLEANUP_KEYS = ['complete', 'remaining_owned_resources', 'original_unchanged', 'original_mismatches'] as const
+const CAPTURED_DURATION_KEYS = ['reproduce', 'apply', 'build', 'test', 'replay', 'finalize'] as const
+/** A full lowercase SHA-1 (40) or SHA-256 (64) Git object ID; never abbreviated. */
+const OBJECT_ID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
+const METRIC_KEY_PATTERN = /^[a-z][a-z0-9_]{0,39}$/
+const MAX_CAPTURED_METRICS = 8
+const MAX_CHECK_EVIDENCE = 8
+
+/** An own entry of a fixed table; inherited names such as `constructor` never count. */
+const ownEntry = <T>(table: Readonly<Record<string, T>>, key: unknown): T | undefined =>
+  typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : undefined
+
+const isMetricValue = (value: unknown): boolean =>
+  value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+
+function isCapturedCheck(value: unknown, checkId: CapturedCheckId): value is CapturedCheck {
+  if (!isObject(value) || !hasExactKeys(value, CAPTURED_CHECK_KEYS) || value.check_id !== checkId) return false
+  const allowed: readonly string[] = [...CAPTURED_CHECK_REASON_SETS[checkId], ...CAPTURED_UNEVALUABLE_REASONS]
+  const fixed = ownEntry<readonly [CapturedCheckStatus, string]>(CAPTURED_CHECK_REASONS, value.reason_code)
+  if (fixed === undefined || !allowed.includes(value.reason_code as string)) return false
+  const scope = CAPTURED_EVIDENCE_SCOPE[checkId]
+  const { evidence_ids: evidence, metrics } = value
+  return (
+    value.status === fixed[0] &&
+    value.message === fixed[1] &&
+    isUniqueList(evidence, isEvidenceId) &&
+    evidence.length <= MAX_CHECK_EVIDENCE &&
+    evidence.every((id) => scope !== undefined && scope.test(id)) &&
+    isObject(metrics) &&
+    Object.keys(metrics).length <= MAX_CAPTURED_METRICS &&
+    Object.entries(metrics).every(([key, metric]) => METRIC_KEY_PATTERN.test(key) && isMetricValue(metric))
+  )
+}
+
+const isEvidenceReference = (value: unknown, phase: EvidencePhase): boolean =>
+  isObject(value) &&
+  hasExactKeys(value, ['manifest_path', 'screenshot_path']) &&
+  value.manifest_path === `evidence/${phase}/manifest.json` &&
+  value.screenshot_path === `evidence/${phase}/screenshot.png`
+
+const isCapturedCoverage = (value: unknown): boolean =>
+  isObject(value) && hasExactKeys(value, ['scope', 'note']) && value.scope === 'main_repository' && (value.note === null || value.note === CAPTURED_COVERAGE_NOTE)
+
+function isCapturedCleanup(value: unknown): value is CapturedVerificationResult['cleanup'] {
+  if (!isObject(value) || !hasExactKeys(value, CAPTURED_CLEANUP_KEYS)) return false
+  const { complete, remaining_owned_resources: remaining, original_unchanged: unchanged, original_mismatches: mismatches } = value
+  return (
+    typeof complete === 'boolean' &&
+    typeof unchanged === 'boolean' &&
+    isUniqueList(remaining, (item) => isOneOf(item, CAPTURED_CLEANUP_RESOURCES)) &&
+    isUniqueList(mismatches, (item) => isOneOf(item, CAPTURED_ORIGINAL_MISMATCHES)) &&
+    complete === (remaining.length === 0) &&
+    unchanged === (mismatches.length === 0)
+  )
+}
+
+/**
+ * Mirrors the strict captured verification family: exact identity, ten canonical checks with fixed
+ * reasons and same-run evidence, fixed outcome reasons, and cleanup facts. A passing result requires
+ * all ten checks to pass, both evidence references, and complete cleanup with an unchanged original.
+ */
+export function parseCapturedVerificationResult(input: unknown): CapturedVerificationResult | null {
+  if (!isObject(input) || !hasExactKeys(input, CAPTURED_RESULT_KEYS)) return null
+  const { checks, cleanup, status, reason_code: reason, message, before_evidence: before, after_evidence: after } = input
+  const durations = input.phase_durations_ms
+  if (
+    input.kind !== CAPTURED_RESULT_KIND ||
+    input.schema_version !== CAPTURED_SCHEMA_VERSION ||
+    !isUuid(input.run_id) ||
+    !isUuid(input.request_id) ||
+    !isUuid(input.editing_session_id) ||
+    new Set([input.run_id, input.request_id, input.editing_session_id]).size !== 3 ||
+    !matches(input.scenario_id, KEBAB_ID_PATTERN) ||
+    !matches(input.baseline_commit, OBJECT_ID_PATTERN) ||
+    !matches(input.candidate_patch_sha256, SHA256_PATTERN) ||
+    !isCapturedCoverage(input.coverage) ||
+    !isOneOf(status, CAPTURED_STATUSES) ||
+    !(reason === null || ownEntry(CAPTURED_OUTCOME_REASONS, reason) !== undefined) ||
+    !(message === null || isText(message, MAX_MESSAGE_LENGTH)) ||
+    !Array.isArray(checks) ||
+    checks.length !== CAPTURED_CHECK_IDS.length ||
+    !CAPTURED_CHECK_IDS.every((checkId, index) => isCapturedCheck(checks[index], checkId)) ||
+    !(before === null || isEvidenceReference(before, 'failure')) ||
+    !(after === null || isEvidenceReference(after, 'replay')) ||
+    !isCapturedCleanup(cleanup) ||
+    !isTimestamp(input.started_at) ||
+    !isTimestamp(input.completed_at) ||
+    !isMilliseconds(input.total_duration_ms) ||
+    !isObject(durations) ||
+    !hasExactKeys(durations, CAPTURED_DURATION_KEYS) ||
+    !CAPTURED_DURATION_KEYS.every((key) => isMilliseconds(durations[key]))
+  ) {
+    return null
+  }
+  const ordered = checks as CapturedCheck[]
+  const passes = (checkId: CapturedCheckId): boolean => ordered[CAPTURED_CHECK_IDS.indexOf(checkId)]?.status === 'pass'
+  // The cleanup and integrity checks restate the cleanup facts; passing oracles cite produced evidence.
+  if (passes('cleanup_complete') !== cleanup.complete || passes('original_unchanged') !== cleanup.original_unchanged) return null
+  if (passes('baseline_reproduced') && before === null) return null
+  if ((passes('dataset_matches') || passes('canvas_matches')) && after === null) return null
+  if (status === 'passed') {
+    const complete = ordered.every((check) => check.status === 'pass') && before !== null && after !== null
+    return complete && cleanup.complete && cleanup.original_unchanged && reason === null && message === null
+      ? frozenCopy(input as unknown as CapturedVerificationResult)
+      : null
+  }
+  const outcome = ownEntry<readonly [string, string]>(CAPTURED_OUTCOME_REASONS, reason)
+  if (outcome === undefined || outcome[0] !== status || message !== outcome[1]) return null
+  if (status === 'failed') {
+    const first = ordered.find((check) => check.status === 'fail')
+    if (first === undefined || CAPTURED_FAILED_OUTCOME[first.check_id] !== reason) return null
+  }
+  return frozenCopy(input as unknown as CapturedVerificationResult)
+}
+
+/** A final result of either family: the unchanged legacy Run Result or the captured verification result. */
+export type StudioRunResult = RunResult | CapturedVerificationResult
+
+export const isCapturedVerificationResult = (result: StudioRunResult): result is CapturedVerificationResult =>
+  'kind' in result && result.kind === CAPTURED_RESULT_KIND
+
+/**
+ * Dispatches by the explicit `kind` discriminator: a body with `kind` is only ever read as the
+ * captured family, and one without it only as the legacy Run Result. Neither falls back to the other.
+ */
+export function parseStudioRunResult(input: unknown): StudioRunResult | null {
+  return isObject(input) && Object.hasOwn(input, 'kind') ? parseCapturedVerificationResult(input) : parseRunResult(input)
+}
+
+const SCENARIO_KEYS = ['scenario_id', 'case', 'title', 'default_request'] as const
+const CAPTURED_SCENARIO_KEYS = [...SCENARIO_KEYS, 'execution_kind'] as const
+
+const hasScenarioFields = (entry: JsonObject): boolean =>
+  matches(entry.scenario_id, KEBAB_ID_PATTERN) &&
+  isOneOf(entry.case, SCENARIO_CASES) &&
+  isText(entry.title, MAX_TITLE_LENGTH) &&
+  isText(entry.default_request, MAX_REQUEST_TEXT_LENGTH)
+
 function parseScenarioList(input: unknown): readonly ScenarioSummary[] | null {
   if (!isObject(input) || !hasExactKeys(input, ['scenarios']) || !Array.isArray(input.scenarios)) return null
   const scenarios: unknown[] = input.scenarios
-  const valid = scenarios.every(
-    (entry) =>
-      isObject(entry) &&
-      hasExactKeys(entry, ['scenario_id', 'case', 'title', 'default_request']) &&
-      matches(entry.scenario_id, KEBAB_ID_PATTERN) &&
-      isOneOf(entry.case, SCENARIO_CASES) &&
-      isText(entry.title, MAX_TITLE_LENGTH) &&
-      isText(entry.default_request, MAX_REQUEST_TEXT_LENGTH),
-  )
+  const legacy = scenarios.every((entry) => isObject(entry) && hasExactKeys(entry, SCENARIO_KEYS) && hasScenarioFields(entry))
+  // The host-fixed captured mode lists exactly its one prepared case, carrying the discriminator.
+  const captured =
+    scenarios.length === 1 &&
+    scenarios.every(
+      (entry) => isObject(entry) && hasExactKeys(entry, CAPTURED_SCENARIO_KEYS) && entry.execution_kind === CAPTURED_EXECUTION_KIND && hasScenarioFields(entry),
+    )
   const ids = scenarios.map((entry) => (entry as ScenarioSummary).scenario_id)
-  return valid && new Set(ids).size === ids.length ? frozenCopy(scenarios as ScenarioSummary[]) : null
+  return (legacy || captured) && new Set(ids).size === ids.length ? frozenCopy(scenarios as ScenarioSummary[]) : null
 }
 
 function parseRunStart(input: unknown): RunStart | null {
@@ -443,10 +789,10 @@ export interface RunEventSubscription {
 export interface StudioClient {
   listScenarios(signal?: AbortSignal): Promise<readonly ScenarioSummary[]>
   startRun(request: { readonly scenarioId: string; readonly requestText: string }, signal?: AbortSignal): Promise<RunStart>
-  /** Reads the authoritative result once: still running, or the validated final result. */
+  /** Reads the authoritative result once: still running, or the validated final result of this run. */
   readResult(runId: string, signal?: AbortSignal): Promise<ResultRead>
   /** Reads the result until the run finalizes or the signal aborts. */
-  pollResult(runId: string, options?: { readonly intervalMs?: number; readonly signal?: AbortSignal }): Promise<RunResult>
+  pollResult(runId: string, options?: { readonly intervalMs?: number; readonly signal?: AbortSignal }): Promise<StudioRunResult>
   /** The validated candidate diff text, or null when the run has none. */
   readCandidateDiff(runId: string, signal?: AbortSignal): Promise<string | null>
   /** One sanitized JSON evidence artifact of the run; screenshots are shown through `evidenceUrl` instead. */
@@ -539,7 +885,7 @@ export function createStudioClient(options: StudioClientOptions = {}): StudioCli
       return Object.freeze({ state: 'running' })
     }
     if (response.status !== 200) throw await rejection(response)
-    const result = parseRunResult(await readJson(response, 'RESULT_INVALID'))
+    const result = parseStudioRunResult(await readJson(response, 'RESULT_INVALID'))
     if (result === null) throw new StudioClientError('RESULT_INVALID', 200)
     if (result.run_id !== runId) throw new StudioClientError('RESULT_RUN_MISMATCH', 200)
     return Object.freeze({ state: 'finalized', result })
@@ -567,7 +913,7 @@ export function createStudioClient(options: StudioClientOptions = {}): StudioCli
 
     readResult,
 
-    async pollResult(runId: string, options: { readonly intervalMs?: number; readonly signal?: AbortSignal } = {}): Promise<RunResult> {
+    async pollResult(runId: string, options: { readonly intervalMs?: number; readonly signal?: AbortSignal } = {}): Promise<StudioRunResult> {
       const { intervalMs = DEFAULT_POLL_INTERVAL_MS, signal } = options
       for (;;) {
         const read = await readResult(runId, signal)
