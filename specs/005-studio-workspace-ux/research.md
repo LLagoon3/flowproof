@@ -91,9 +91,18 @@ belongs in the headed suite. Existing recorded Hero exercises legacy success wit
 **Alternatives considered**: Adding a DOM emulator, design SaaS requirement, live model acceptance
 suite, or screenshot pixel equality duplicates facilities or confuses visual taste with correctness.
 Contrast and zoom/layout are mechanical checks, not work delegated to the owner.
-The scenario-fixed launcher viewport needs test-only overrides at 100%; actual 200% zoom needs
-clearing page metrics emulation on the same page and using native browser zoom, as documented in
-quickstart. Existing real harness cases supply rare state captures and interactive final review;
+The scenario-fixed launcher viewport needs test-only overrides at 100%. Keep these metrics for
+native OS/browser zoom; clearing them through another CDP session did not restore native resizing.
+A throwaway feasibility probe (2026-11-03, Playwright 1.64.1 / Chromium 156.0.8078.4, isolated
+Xvfb and synthetic loopback HTML only) reproduced the launcher context options. After setting
+1280 x 720, OS-delivered Ctrl+0 then five Ctrl++ shortcuts produced the visible Chromium 200%
+indicator, `innerWidth/innerHeight` 640 x 360 and DPR 2; outer bounds stayed 1288 x 805.
+Restoring Ctrl+0 returned 1280 x 720 / DPR 1. The failed clear-metrics approach instead kept
+1280 x 800 despite changing outer bounds, so it is no longer prescribed. Retained local probe
+material is under `.flowproof/review/005-studio-workspace-ux/2e94c7579f0d231554b6752f1a4b718ac6537acb/feasibility/zoom/`.
+This verifies only procedure feasibility, not actual Studio reflow, iframe measurement or FR/SC
+acceptance. T010 must build the opt-in same-page case; T015/T031 still verify real Studio.
+Existing real harness cases supply rare state captures and interactive final review;
 no production fault-injection feature or second browser is needed.
 
 ## Bounded Research Cross-Check

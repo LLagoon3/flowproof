@@ -41,7 +41,9 @@ markup, CSS or the isolated preview; verify those through rendered behavior and 
 1280 x 720 and 1920 x 1080 content areas at 100%, plus the same 1280 x 720 content-area window
 at actual 200% browser zoom. The launcher fixes the page to the scenario viewport (currently
 1280 x 800); resizing its OS window alone is insufficient. Use test-only page viewport overrides
-for the 100% cases and the same-page, native-window/real-zoom procedure in quickstart for 200%.
+for the 100% cases and retain the same page/window at 1280 x 720 for OS-delivered native 200%
+zoom per quickstart. Keep fixed metrics; the generic feasibility probe demonstrated 640 x 360 CSS
+viewport at native 200%, not a Studio acceptance pass.
 No launcher/scenario viewport change is planned; any such need returns to owner design review.
 
 **Project Type**: Local CLI-launched web workspace, not a browser extension, cloud service, or PPT editor.
@@ -136,6 +138,8 @@ state machine. The separate static preview is disposable design material, not a 
   retain the width choice for returning to side-by-side mode. Collapse/restore remains available.
   A compact current-state indicator outside the hidden panel keeps updating, including final result
   arrival, and offers a keyboard-accessible restore-and-result entry point without resetting details.
+  In slice 2 it uses existing authoritative selectors without inferred phases/verdicts. Slice 3
+  migrates it to `RunPresentation` and tests both visible/collapsed result/stream precedence.
   These dimensions are the initial preview proposal, not an unchangeable visual decision.
 - **DOM lifetime**: Render one stable `TargetPane` in one stable parent position. CSS changes spatial
   arrangement; collapse affects only the work panel. Never key/remount the canvas by width, tab,
@@ -222,7 +226,8 @@ See [quickstart.md](./quickstart.md) for reproducible commands and
   not process cleanup, data validity or security inspection. No population-level UX claim is made.
   T023 produces real-UI six-state captures for SC-002; T025/T033 provide interactive successful and
   unsuccessful/unevaluable results in both modes using existing test harnesses. Quickstart defines
-  how test-only review pauses retain the shell without delaying engine cleanup or adding product flags.
+  how opt-in bounded Node-side review waits retain the shell without Inspector, browser pauses,
+  engine delays or product flags.
 - Biggest risks: reparenting/remounting the measured target; an activity card implying final success;
   out-of-order/stale evidence; focus/scroll disruption; CSP-blocked resizing; compact layout hiding
   controls; preview and production diverging. Each has a validation responsibility above.

@@ -70,27 +70,39 @@ The launcher currently fixes Studio to the scenario's 1280 x 800 viewport at dev
 Changing its OS window alone does not test the requested sizes. Do not change the launcher or
 scenario for this feature, and do not request Playwright's built-in page/browser fixtures.
 
-1. At 100%, the new workspace test uses the existing harness's actual `page.setViewportSize`
+1. Reset native browser zoom to 100% before each case. The new workspace test uses the existing
+   harness's actual `page.setViewportSize`
    with 1280 x 720 and 1920 x 1080. Record `innerWidth`, `innerHeight`, zoom, and screenshots.
    This is an explicit viewport override for layout, not proof of actual browser zoom.
-2. For the actual zoom check, retain that same launcher-owned page/browser on a visible desktop.
-   A test-only CDP session from `page.context().newCDPSession(page)` calls
-   `Emulation.clearDeviceMetricsOverride`; use `Browser.getWindowForTarget` and
-   `Browser.setWindowBounds` to restore normal native-window sizing. At native 100% zoom, adjust
-   window bounds until the measured content area (`innerWidth`/`innerHeight`) is 1280 x 720.
-   Do not replace the context/page or change the target frame. This procedure is mechanical review,
-   not part of the default unattended Playwright suite.
-3. With the outer window unchanged, use OS-delivered browser shortcuts/menu to set actual 200%
-   zoom. Capture the browser's visible 200% indicator and effective CSS viewport (approximately
-   640 x 360, allowing browser rounding). Check reflow, focus, primary/result/evidence/restore
-   controls, and absence of page-wide horizontal overflow; keep the chart at 640 x 360 with local
-   scrolling. Restore 100% and original test viewport afterward, then close only owned resources.
-4. Record browser version, pre/post dimensions, the native zoom indicator and observed outcomes.
-   If CDP/native zoom cannot produce the measured state, record a blocked check, not a pass or
-   an emulated substitute. A required launcher change returns to owner design review.
+2. T010 authors an opt-in `native-zoom-review` case on the same launcher-owned page,
+   skipped unless the test-only `FLOWPROOF_ZOOM_REVIEW=1` environment variable is set. It
+   sets `page.setViewportSize({ width: 1280, height: 720 })` at native 100%, records the
+   resulting outer window bounds, then retains that window/page/context. Keep the fixed
+   viewport metrics: do not try to clear them through a second CDP session. The feasibility
+   [probe in research.md](./research.md#8-validation-without-new-services) confirms that native
+   Chromium zoom still reduces the effective CSS viewport.
+3. On a visible desktop, use OS-delivered browser shortcuts/menu to set actual 200% zoom
+   without another viewport or window resize. Capture the browser's visible 200% indicator,
+   unchanged outer window bounds and effective CSS viewport (640 x 360, allowing rounding).
+   Check reflow, focus, primary/result/evidence/restore controls and absence of page-wide
+   horizontal overflow; the chart remains 640 x 360 with local scrolling. Restore native 100%
+   and the original test viewport in `finally`; close only owned resources. Perform the check
+   before admission or after finalization, never during engine measurement.
+4. Run this test-local case with no Inspector, on the agent's desktop, under T015 and T031:
+
+   ```bash
+   FLOWPROOF_ZOOM_REVIEW=1 pnpm exec playwright test tests/e2e/workspace-ux.spec.ts --grep native-zoom-review
+   ```
+
+   Bound every terminal acknowledgement to 120 seconds and the review case to 900 seconds;
+   do not disable context/action timeouts or engine budgets. Record browser version, pre/post
+   dimensions, native zoom indicator, discovered cases and observed outcomes. If the actual
+   Studio fails to produce this measured state, record the check blocked and return any required
+   launcher change to owner design review; the generic probe is not product acceptance evidence.
 
 For the static preview, use its ordinary visible browser page without viewport emulation, size
-the content area at 100%, then follow steps 3-4. CSS transforms, pinch scaling, device scale or
+the content area at 100%, then collect the same step-3 native zoom observations without the
+workspace-test command. CSS transforms, pinch scaling, device scale or
 smaller viewports alone are never 200%-zoom evidence. The agent performs these mechanical checks;
 the owner need not repeat them. In stacked layout the width separator is hidden/unfocusable but
 collapse/restore remains. A collapsed panel's external status must update through final result arrival.
@@ -164,19 +176,29 @@ For SC-002 use these real Studio screenshots (all six states, with both modes re
 simulated preview screenshots. Record the owner's answer/next action and elapsed time separately
 from the expected answer. Missing captures leave the criterion pending.
 
-For SC-001/SC-003, author named owner-review cases in the workspace E2E using the same harness
-setup and assertions, then run on the owner's visible desktop (not a hidden Xvfb display):
+For SC-001/SC-003, author named `owner-review` cases using the same harness and assertions.
+Skip these cases unless the test-only `FLOWPROOF_OWNER_REVIEW=1` environment variable is set;
+run on the owner's visible desktop, not hidden Xvfb:
 
 ```bash
-pnpm exec playwright test tests/e2e/workspace-ux.spec.ts --debug --grep owner-review
+FLOWPROOF_OWNER_REVIEW=1 pnpm exec playwright test tests/e2e/workspace-ux.spec.ts --grep owner-review
 ```
 
-These prospective cases use test-local `page.pause()` before start for SC-001 and after verified
-final result/artifact availability for SC-003. The owner navigates the actual UI while the harness
-is retained. Pauses apply only in explicit debug review, not normal CI, and must never suspend
-engine measurement, cleanup, time budgets or active resources. Resume to run cleanup assertions in
-`finally`; captured target disposal must already be complete before final-shell review. Keep legacy
-iframe mounted while switching canvas evidence tabs and assert element/frame identity on return.
+Do not use `--debug`, `PWDEBUG`, Inspector or `page.pause()`: they can pause the launcher's
+contexts and alter shared timeouts. The ordinary event loop and all context/action/engine
+budgets must keep running. Set only the opt-in test case's finite outer timeout to 900 seconds.
+After the ready assertion, print the review instruction and wait at most 120 seconds for the
+owner's actual start action using the observable admission UI. Measure SC-001 from that prompt
+to the observed action. Wait for the ordinary bounded result/cleanup assertions; captured target
+disposal must be complete before final-shell review. Then retain the shell while waiting at most
+180 seconds for a terminal acknowledgement after interactive SC-003 navigation, with timings
+recorded separately. Implement acknowledgements as fresh case-specific marker files under the
+retained evidence directory: print the exact terminal command, reject stale markers before the
+prompt, and poll with a finite deadline. Do not depend on worker stdin or add a product control.
+Use the same bounded marker mechanism for the native-zoom review. An absent answer is
+pending/failed feedback, not a pass. Release any routes and close/assert cleanup in `finally`, including after timeout. These are Node-side bounded waits,
+not browser/context pauses; they never hold an engine/measurement barrier for human review.
+Keep the legacy iframe mounted while switching evidence tabs and assert identity on return.
 Record each missing evidence side honestly; never create replay evidence for a run that did not reach it.
 If a source case lacks a needed state/check outcome, add only a test-local case using existing
 contract-valid conditions; inability to reproduce it remains a gap, not permission for product changes.
@@ -196,7 +218,11 @@ mechanical accessibility/contrast/zoom evidence, baseline-compatibility outcomes
 Never reuse earlier Spec 004 counts as this feature's validation or turn preview screenshots into proof.
 
 Store screenshots, traces, zoom evidence and the state-to-case/run manifest under ignored
-`test-results/studio-workspace-ux/`, with per-slice/per-tested-commit subdirectories. Do not commit
+`.flowproof/review/005-studio-workspace-ux/<tested-sha>/<slice>/<case>/`, outside Playwright's
+cleared `test-results/` output directory. Resolve this path from the invoking review checkout,
+not the harness's disposable clone. Save/copy each capture and its manifest before harness cleanup;
+copy any needed Playwright traces there before the next test invocation. Verify retained files
+still exist after the full-suite and owner-review runs. Do not commit
 binary evidence, launch tokens, private data or absolute operator hosting paths. Commit concise
 results and repository-relative artifact locations in tasks/design-system records; transfer review
 material through the authorized review surface when needed. If evidence expires, mark it unavailable.

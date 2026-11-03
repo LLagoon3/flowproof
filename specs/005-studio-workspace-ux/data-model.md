@@ -28,9 +28,11 @@ Reset run-bound choices only when run identity changes or the selected item genu
 be valid. Responsive reflow and terminal result arrival do not reset unrelated view preferences.
 No choice persists across launches or changes the execution reducer. Keep hidden panel content
 mounted (but unavailable to focus while collapsed) so its disclosure and read state are retained.
-The compact status outside the hidden panel derives from the same `RunPresentation`, including
-result arrival; its restore/result entry restores the panel and focuses the retained result when
-present. Below 64rem the width separator is hidden/inert and the width choice is retained.
+In slice 2, the compact status uses only the existing authoritative state/selectors and never
+infers a verdict from stream end. T018 switches it to the same `RunPresentation` used inside the
+panel; T017/T021 prove identical result/stream precedence and no verdict before a valid bound
+result. Its restore/result entry restores the panel and focuses the retained result when present.
+Below 64rem the width separator is hidden/inert and the width choice is retained.
 
 ## WorkCardView (derived)
 
