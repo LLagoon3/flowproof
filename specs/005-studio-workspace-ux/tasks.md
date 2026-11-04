@@ -329,6 +329,8 @@ After local completion, the owner explicitly requested a pull request and review
 authorizes pushing this slice to `LLagoon3/flowproof`, opening a PR against `main`, and the
 repository-required GitHub Codex review with up to three remediation rounds. In-scope findings
 may be corrected, verified and pushed before requesting a review of the new exact HEAD.
-Publication is being prepared; the PR link will be recorded before requesting review.
+Published as [PR #24](https://github.com/LLagoon3/flowproof/pull/24) against `main`.
+Exact-head CI, Codex review and any correction rounds are tracked in PR metadata without
+creating a new source commit solely to record their outcome.
 The implementation and verification record above is unchanged. T017+, merge and deployment
 remain unauthorized. CI is verification-only; this repository has no automatic PR deployment.
