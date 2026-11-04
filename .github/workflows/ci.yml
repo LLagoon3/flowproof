@@ -50,6 +50,17 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Explicit operator preparation of the Spec 006 `vite-static-v1` offline toolchain. A fresh
+      # runner has no prepared image or manifest, so this job builds its own immutable image from
+      # the committed sample lock (the only networked step; selected-project execution never pulls
+      # or builds), self-checks it offline, and writes the manifest to a runner-owned temporary
+      # path. The manifest location reaches both test steps through GITHUB_ENV.
+      - name: Prepare offline project runtime
+        run: |
+          manifest="$RUNNER_TEMP/flowproof/runtime-profiles/vite-static-v1.json"
+          node tools/runtime/prepare-project-vite.mjs prepare --output "$manifest" --self-check
+          echo "FLOWPROOF_PROJECT_PROFILE_MANIFEST=$manifest" >> "$GITHUB_ENV"
+
       # Part of the integration suite and the whole end-to-end suite open the pinned headed
       # Chromium, so both run under a virtual X display.
       - name: Test

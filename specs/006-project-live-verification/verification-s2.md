@@ -71,3 +71,23 @@ slice log root above. The historical authorization paragraph in `tasks.md` now r
 S1 merge and parallel S2/S3/S4 authorization without copying sibling task marks or claiming their
 integration. Optional Git auto-commit hooks remain skipped under the repository policy; this final
 reviewed evidence is committed manually. No full default repository suite or live model was run.
+
+## CI runtime preparation correction
+
+The default S2 tests use real Docker and the operator manifest from `runtimeManifestPath()`, but a
+fresh hosted runner has neither a prepared image nor a manifest. `.github/workflows/ci.yml` now
+runs an explicit **Prepare offline project runtime** step after Build and before both test steps:
+`node tools/runtime/prepare-project-vite.mjs prepare --output
+"$RUNNER_TEMP/flowproof/runtime-profiles/vite-static-v1.json" --self-check`, then exports
+`FLOWPROOF_PROJECT_PROFILE_MANIFEST` through `GITHUB_ENV`. The job builds its own immutable image
+from the committed sample lock during this operator step only; selected-project execution still
+never pulls or builds. No test is skipped and no product, script, dependency or global
+configuration changed.
+
+Local checks (heavy lock held): the workflow parses with eleven steps in the intended order; a
+stubbed-`node` run of the exact step script writes the `GITHUB_ENV` line on success and exits 1
+without it on failure; `tests/unit/project-runtime-preparation.test.ts` passed 11 tests; `verify
+--self-check` of the retained local manifest passed without pulling or rebuilding it; host
+containers were 46 -> 46 identical. The real image build on a fresh hosted runner is not yet
+proven: only the hosted CI run on the published PR can show it. Logs are under the ignored
+`.flowproof/task-logs/006-project-live-verification/s2-ci/`.
