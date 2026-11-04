@@ -54,6 +54,43 @@ section serves a synthetic page from the test and uses a fake image collector on
 observable; it is not masked screenshot evidence. Ports 43170/43171 were free before and after; no
 browser process, container or temporary state root remained.
 
+## Parent review correction (after `a9bf701`)
+
+The parent's independent probe (`s4-parent/probe.mjs`, copied and rerun from `s4/probe-copy/`) showed
+two defects. (1) Origin/popup state was not rechecked after the end checkpoint, condition evaluation or
+drain: a late popup or a move to another origin still gave `conditions-satisfied`. (2) Waits handed every
+primitive `min(10 s, phase remaining)` and accepted a success that arrived after the deadline: a 20 ms
+wait succeeded after 9 999 ms.
+
+Fix `ffc785b` (`projectReplay.ts` sha256 `c1de4dbf…762b`, test sha256 `81f320dd…5610`):
+- `stillOnTarget` runs after every step, checkpoint, condition and drain. After release and join, a newly
+  recorded popup/dialog/download (or an unjoined producer, a defensive case that existing paths cannot
+  reach) turns a verdict into `operational-failure`. Sticky cancellation still wins.
+- Every call gets an absolute deadline: a declared wait's own timeout; one 10 s bound shared by locator
+  resolution and the action primitive (a behavior change: previously each step got its own 10 s); a
+  10 s bound per condition (`CONDITION_TIMEOUT`) and per checkpoint/drain; the 120 s phase caps them all.
+  Primitives receive only the remaining time (at least 1 ms, because Playwright treats 0 as unlimited).
+  A result arriving after its deadline is a timeout, never a success. A probe cut off by its window
+  still reports the last unmet state (for example `LOCATOR_AMBIGUOUS`).
+- Drain ends the observation window. Duplicate observation IDs and an image viewport that differs from
+  the frozen one are `EVIDENCE_BINDING_MISMATCH`.
+
+| Check (fix) | Result | Log |
+| --- | --- | --- |
+| Red: the 21 new tests against `a9bf701` | 20 failed; 1 cancellation regression guard passed | `r2-red.log` |
+| Focused suite, fake driver (final) | 80 passed, 5 skipped (opt-in Chromium) | `r2-green-5.log` |
+| Actual headless Chromium, heavy lease, final code and tests | 85/85 (also 84/84 twice before the last fake test was added) | `r2-chromium-final-3.log` |
+| Parent probe rerun (copy) | late popup → `REPLAY_POPUP`, late origin → `NAVIGATION_LEFT_TARGET`, 20 ms wait completes at 19 ms | `probe-copy/probe-result.json` |
+| Guard mutations, final code (30, including 13 new) | 30/30 killed, original restored | `r2-mutations-final.log` |
+| Same 8-file regression set | 362 passed, 5 skipped | `r2-regression.log` |
+| `pnpm typecheck`, `pnpm build` (heavy lease) | passed | `r2-typecheck-final.log`, `r2-build-final.log` |
+
+Three mutations survived the first pass (the post-done deadline check in `poll`, and the checks after
+the end checkpoint and after conditions, which later checks were masking). They were killed after
+tests were added for stage-specific detection and for a synchronous late path read. The new Chromium
+test uses a page that opens a popup, or leaves the origin, 300 ms after a click, while a labelled fake
+collector's drain is still running (1.5 s).
+
 ## Decisions for parent review
 
 - Replay actions must reuse recorded locator candidates and values in recorded order (waits excepted);
@@ -66,4 +103,5 @@ browser process, container or temporary state root remained.
 
 No real project/runtime, S3 recorder, S3 masking collector, model, baseline/candidate decision,
 Studio input lock or headed-browser human-input exclusion (callers must use a headless browser or lock
-input). Hostile page code can still lie about DOM state; only bounded host probes are used.
+input). Hostile page code can still lie about DOM state; only bounded host probes are used. Events after drain or
+release are outside the verdict window, and `no-error` asserts absence only within that window.
