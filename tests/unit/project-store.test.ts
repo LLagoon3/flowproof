@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, lstat, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readFile, readdir, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -136,6 +136,41 @@ async function filesBelow(root: string): Promise<string[]> {
   return found.sort()
 }
 
+/** Every entry below a directory with its type, mode and digest: proves a rejection wrote nothing. */
+async function treeOf(root: string): Promise<Record<string, string>> {
+  const entries: Record<string, string> = {}
+  const walk = async (relative: string): Promise<void> => {
+    for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
+      const name = path.join(relative, entry.name)
+      const absolute = path.join(root, name)
+      const mode = ((await lstat(absolute)).mode & 0o7777).toString(8)
+      if (entry.isSymbolicLink()) entries[name] = `symlink:${await readlink(absolute)}`
+      else if (entry.isDirectory()) entries[name] = `dir:${mode}`
+      else entries[name] = `file:${mode}:${sha256(await readFile(absolute))}`
+      if (entry.isDirectory()) await walk(name)
+    }
+  }
+  await walk('')
+  return entries
+}
+
+/** The store error code, a raw filesystem error code, or `accepted` when the operation succeeded. */
+async function outcomeOf(operation: Promise<unknown>): Promise<string> {
+  try {
+    await operation
+    return 'accepted'
+  } catch (error) {
+    if (error instanceof ProjectStoreError) return error.code
+    return String((error as { code?: unknown }).code ?? 'unknown')
+  }
+}
+
+async function privateDirectory(target: string): Promise<string> {
+  await mkdir(target, { recursive: true, mode: 0o700 })
+  await chmod(target, 0o700)
+  return target
+}
+
 describe('project state root placement and permissions', () => {
   it('creates an owner-only state root, run directory and artifact files outside the selected checkout', async () => {
     const { root, run } = await openRun()
@@ -219,6 +254,135 @@ describe('project state root placement and permissions', () => {
     await temp.remove()
     expect(changedSnapshotFacets(before, await snapshotOriginalProject(repository.root))).toEqual([])
     await expect(lstat(path.join(repository.root, '.flowproof'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+// Containment compares whole path segments: a child named `..state`, `..cache` or `...` is inside
+// its parent; only a leading `..` segment (a real parent or sibling) is outside.
+describe('exact path-segment containment of state and temporary roots', () => {
+  it('rejects state roots at existing, missing and nested ..-prefixed children of every protected root without writing them', async () => {
+    const repository = await selectedRepository()
+    // An external Git directory is protected exactly like the checkout.
+    const gitDir = await tempDirectory('flowproof-project-gitdir-')
+    const protectedRoots = [repository, gitDir]
+    // Existing private children would otherwise be accepted and receive a `runs` directory.
+    for (const root of [repository, gitDir]) await privateDirectory(path.join(root, '..state'))
+    const before = { repository: await treeOf(repository), gitDir: await treeOf(gitDir) }
+    expect(before.gitDir).toEqual({ '..state': 'dir:700' })
+    const expected: Record<string, string> = {}
+    const outcomes: Record<string, string> = {}
+    for (const [label, root] of [['repository', repository], ['gitDir', gitDir]] as const) {
+      for (const child of ['..state', '..state/nested/state', '..cache', '..cache/nested/state', '...']) {
+        expected[`${label}/${child}`] = 'PROJECT_STORE_ROOT_INSIDE_PROJECT'
+        outcomes[`${label}/${child}`] = await outcomeOf(openProjectStateRoot({ stateRoot: path.join(root, child), protectedRoots }))
+      }
+    }
+    expect({ outcomes, repository: await treeOf(repository), gitDir: await treeOf(gitDir) }).toEqual({ outcomes: expected, ...before })
+  })
+
+  it('rejects temporary roots at existing and nested ..-prefixed children without allocating inside the protected root', async () => {
+    const repository = await selectedRepository()
+    const gitDir = await tempDirectory('flowproof-project-gitdir-')
+    const protectedRoots = [repository, gitDir]
+    for (const root of [repository, gitDir]) await privateDirectory(path.join(root, '..cache/nested'))
+    const before = { repository: await treeOf(repository), gitDir: await treeOf(gitDir) }
+    const expected: Record<string, string> = {}
+    const outcomes: Record<string, string> = {}
+    for (const [label, root] of [['repository', repository], ['gitDir', gitDir]] as const) {
+      for (const child of ['..cache', '..cache/nested']) {
+        expected[`${label}/${child}`] = 'PROJECT_STORE_TEMP_INSIDE_PROJECT'
+        outcomes[`${label}/${child}`] = await outcomeOf(
+          createProjectTempDirectory({ purpose: 'candidate-copy', protectedRoots, tempRoot: path.join(root, child) }),
+        )
+      }
+      // A temporary root must already exist; a missing one is refused before anything is created.
+      for (const child of ['..missing', '..missing/nested']) {
+        expected[`${label}/${child}`] = 'ENOENT'
+        outcomes[`${label}/${child}`] = await outcomeOf(
+          createProjectTempDirectory({ purpose: 'target-output', protectedRoots, tempRoot: path.join(root, child) }),
+        )
+      }
+    }
+    expect({ outcomes, repository: await treeOf(repository), gitDir: await treeOf(gitDir) }).toEqual({ outcomes: expected, ...before })
+  })
+
+  it('rejects ..-prefixed children reached through a canonical symlink ancestor into the checkout or external Git directory', async () => {
+    const repository = await selectedRepository()
+    const gitDir = await tempDirectory('flowproof-project-gitdir-')
+    const protectedRoots = [repository, gitDir]
+    const aliases = await tempDirectory()
+    await symlink(repository, path.join(aliases, 'repo-link'))
+    await symlink(gitDir, path.join(aliases, 'git-link'))
+    for (const root of [repository, gitDir]) await privateDirectory(path.join(root, '..state'))
+    for (const root of [repository, gitDir]) await privateDirectory(path.join(root, '..cache'))
+    const before = { repository: await treeOf(repository), gitDir: await treeOf(gitDir), aliases: await treeOf(aliases) }
+    const expected: Record<string, string> = {}
+    const outcomes: Record<string, string> = {}
+    for (const link of ['repo-link', 'git-link']) {
+      for (const child of ['..state', '..state/nested', '..missing/state']) {
+        expected[`${link}/${child}`] = 'PROJECT_STORE_ROOT_INSIDE_PROJECT'
+        outcomes[`${link}/${child}`] = await outcomeOf(openProjectStateRoot({ stateRoot: path.join(aliases, link, child), protectedRoots }))
+      }
+      expected[`${link}/..cache (temp)`] = 'PROJECT_STORE_TEMP_INSIDE_PROJECT'
+      outcomes[`${link}/..cache (temp)`] = await outcomeOf(
+        createProjectTempDirectory({ purpose: 'admission-snapshot', protectedRoots, tempRoot: path.join(aliases, link, '..cache') }),
+      )
+    }
+    expect({
+      outcomes,
+      repository: await treeOf(repository),
+      gitDir: await treeOf(gitDir),
+      aliases: await treeOf(aliases),
+    }).toEqual({ outcomes: expected, ...before })
+  })
+
+  it('rejects a state root that contains a ..-prefixed protected child without writing either', async () => {
+    const parent = await tempDirectory()
+    const direct = await privateDirectory(path.join(parent, 'direct'))
+    const directProject = await privateDirectory(path.join(direct, '..project'))
+    const nested = await privateDirectory(path.join(parent, 'nested'))
+    const nestedProject = await privateDirectory(path.join(nested, '..git/worktree'))
+    await symlink(parent, path.join(parent, 'alias'))
+    const before = await treeOf(parent)
+    const outcomes = {
+      direct: await outcomeOf(openProjectStateRoot({ stateRoot: direct, protectedRoots: [directProject] })),
+      nested: await outcomeOf(openProjectStateRoot({ stateRoot: nested, protectedRoots: [nestedProject] })),
+      aliased: await outcomeOf(openProjectStateRoot({ stateRoot: path.join(parent, 'alias/direct'), protectedRoots: [directProject] })),
+    }
+    expect({ outcomes, tree: await treeOf(parent) }).toEqual({
+      outcomes: { direct: 'PROJECT_STORE_ROOT_CONTAINS_PROJECT', nested: 'PROJECT_STORE_ROOT_CONTAINS_PROJECT', aliased: 'PROJECT_STORE_ROOT_CONTAINS_PROJECT' },
+      tree: before,
+    })
+  })
+
+  it('keeps real siblings, ..-prefixed siblings and parent temporary roots allowed', async () => {
+    const parent = await tempDirectory()
+    const repository = await privateDirectory(path.join(parent, 'repo'))
+    await writeFile(path.join(repository, 'App.jsx'), 'export const App = () => null\n')
+    const protectedRoots = [repository]
+    const before = await treeOf(repository)
+    const accepted: string[] = []
+    for (const stateRoot of [
+      path.join(parent, 'sibling'),
+      path.join(parent, '..sibling'),
+      path.join(parent, 'repo-state'),
+      `${repository}/../..lexical`,
+    ]) {
+      const root = await openProjectStateRoot({ stateRoot, protectedRoots })
+      const run = await root.createRun(newProjectUuid())
+      const record = await run.writeText('observation-text', 'outside the checkout')
+      expect((await run.read(record.artifact_id, record.sha256)).bytes.toString('utf8')).toBe('outside the checkout')
+      accepted.push(path.relative(parent, root.path))
+    }
+    expect(accepted).toEqual(['sibling', '..sibling', 'repo-state', '..lexical'])
+    const siblingCache = await privateDirectory(path.join(parent, '..cache'))
+    for (const tempRoot of [parent, siblingCache]) {
+      const temp = await createProjectTempDirectory({ purpose: 'target-output', protectedRoots, tempRoot })
+      expect(path.dirname(temp.path)).toBe(tempRoot)
+      expect(await modeOf(temp.path)).toBe(0o700)
+      await temp.remove()
+    }
+    expect(await treeOf(repository)).toEqual(before)
   })
 })
 

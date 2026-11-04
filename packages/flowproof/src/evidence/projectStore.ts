@@ -192,9 +192,15 @@ async function lstatOrNull(target: string): Promise<Stats | null> {
   }
 }
 
+/**
+ * Exact path-segment containment of canonical absolute paths. Only a leading `..` segment (a real
+ * parent or sibling) is outside; `..state`, `..cache` or `...` are ordinary child names inside.
+ */
 const isInsideOrEqual = (child: string, parent: string): boolean => {
   const relative = path.relative(parent, child)
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+  if (relative === '') return true
+  if (path.isAbsolute(relative)) return false
+  return relative !== '..' && !relative.startsWith(`..${path.sep}`)
 }
 
 const ownerUid = (): number | null => (typeof process.getuid === 'function' ? process.getuid() : null)
