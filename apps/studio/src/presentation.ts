@@ -169,7 +169,7 @@ const FINALIZING_TITLE = 'Finalizing'
 
 const FINALIZING_TEXT: Readonly<Record<StudioMode, string>> = {
   legacy: 'The original-worktree check was observed; the run is finishing. Only the final result decides each gate.',
-  captured: 'Secret-scan and cleanup activity was observed; the run is finishing. Checks are reported only in the final result.',
+  captured: 'Secret-scan or cleanup activity was observed; the run is finishing. Checks are reported only in the final result.',
 }
 
 /** The final event carries the producer's wording of the outcome, so its group never repeats it. */

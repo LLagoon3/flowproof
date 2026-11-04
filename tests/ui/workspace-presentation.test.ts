@@ -556,6 +556,7 @@ describe('Workspace presentation: layout holds still while the target is measure
 
 const SCAN_MARKER = CAPTURED_FLOW[7]?.message ?? ''
 const CLEANUP_MARKER = CAPTURED_FLOW[8]?.message ?? ''
+const CAPTURED_FINALIZING_DETAIL = 'Secret-scan or cleanup activity was observed; the run is finishing. Checks are reported only in the final result.'
 const FINALIZING = 'Finalizing · verdict pending'
 
 const flat = (cards: readonly WorkCardView[]): StudioEvent[] => cards.flatMap((card) => [...card.events])
@@ -701,6 +702,22 @@ describe('Work presentation: exact observed finalization markers and drift fallb
     expect(shape(view.cards).at(-1)).toEqual(['finalizing', 'replaying', 9, 10])
     expect(view.cards.at(-2)?.events.at(-1)?.message).toBe('Scanning for leaked credentials.')
     expect(view.execution).toBe('finalizing')
+  })
+
+  it('words captured finalization conservatively when only the scan or only the cleanup marker was observed', () => {
+    const scanOnly = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 8), CAPTURED_RUN_ID), CAPTURED_RUN_ID)]))
+    const driftedScan = CAPTURED_FLOW.map((input) => (input.message === SCAN_MARKER ? { ...input, message: 'Scanning for leaked credentials.' } : input))
+    const cleanupOnly = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(events(driftedScan.slice(0, 9), CAPTURED_RUN_ID), CAPTURED_RUN_ID)]))
+    expect(scanOnly.cards.at(-1)?.events.map((event) => event.message)).toEqual([SCAN_MARKER])
+    expect(cleanupOnly.cards.at(-1)?.events.map((event) => event.message)).toEqual([CLEANUP_MARKER])
+    for (const view of [scanOnly, cleanupOnly]) {
+      expect(view).toMatchObject({ execution: 'finalizing', label: FINALIZING, verdict: null })
+      expect(view.detail).toBe(CAPTURED_FINALIZING_DETAIL)
+      expect(view.cards.at(-1)).toMatchObject({ kind: 'finalizing', statusText: CAPTURED_FINALIZING_DETAIL })
+      // One marker never implies the other, nor that either finished.
+      for (const text of [view.detail ?? '', view.cards.at(-1)?.statusText ?? '']) expect(text).not.toMatch(/scan and cleanup|\bcomplete|\bclean\b|\bfinished\b|were observed/i)
+      expect(presentsNoVerdict(view)).toBe(true)
+    }
   })
 
   it.each<[string, (message: string) => EventInput]>([

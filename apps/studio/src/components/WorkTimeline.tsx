@@ -42,7 +42,7 @@ const NOTHING_OPEN: ReadonlySet<string> = new Set()
 
 const FINALIZING_NOTES: Readonly<Record<RunPresentation['mode'], string>> = {
   legacy: 'Shown as Finalizing from the observed original-worktree gate update; its events keep the phase',
-  captured: 'Shown as Finalizing from the observed secret-scan and cleanup activity; its events keep the phase',
+  captured: 'Shown as Finalizing from observed secret-scan or cleanup activity; its events keep the phase',
 }
 
 const rangeOf = (card: WorkCardView): string => (card.firstSequence === card.lastSequence ? `#${card.firstSequence}` : `#${card.firstSequence}–#${card.lastSequence}`)

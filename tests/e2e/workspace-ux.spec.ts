@@ -1135,7 +1135,7 @@ async function runCapturedCase({ name, resize, loseActivity = false }: CapturedC
       // Before the page reads the bound result, the collapsed status still shows no verdict.
       if ((await workspace.root.getAttribute('data-collapsed', { timeout: ELEMENT_TIMEOUT_MS })) !== 'true') await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
       await expect(workspace.panel).toBeHidden()
-      // Scan and cleanup activity was observed, but no result reached the page: no verdict yet.
+      // Finalization activity was observed, but no result reached the page: no verdict yet.
       await expect(workspace.status).toHaveText('Finalizing · verdict pending')
       await expect(workspace.viewResult).toHaveCount(0)
       await review.shot(page, 'result-pending-collapsed.png')
@@ -1376,6 +1376,8 @@ test('native-zoom-review: the real Studio reflows at actual native 200% browser 
 
 const FAILURE = 'canvas-filter-failure-invalid-citation'
 const FINALIZING_LABEL = 'Finalizing · verdict pending'
+/** The captured finalizing detail: one observed marker suffices, so it claims neither completion nor both. */
+const CAPTURED_FINALIZING_DETAIL = 'Secret-scan or cleanup activity was observed; the run is finishing. Checks are reported only in the final result.'
 /** Every family verdict label; none may appear before a bound final result. */
 const VERDICT_TEXT = /Verified Fix|Unverified|Candidate verification (passed|failed|error|interrupted)/
 
@@ -1651,7 +1653,7 @@ const EXPECTED_ANSWERS: Readonly<Record<SixState, Readonly<Record<StudioModeName
   },
   finalizing: {
     legacy: { happening: 'The run is finalizing (the original-worktree check was observed); the verdict is still pending.', nextAction: 'Wait for the authoritative result.' },
-    captured: { happening: 'The verification is finalizing (secret scan and cleanup were observed); the verdict is still pending.', nextAction: 'Wait for the authoritative result.' },
+    captured: { happening: 'The verification is finalizing (secret-scan or cleanup activity was observed); the verdict is still pending.', nextAction: 'Wait for the authoritative result.' },
   },
   'disconnected-without-result': {
     legacy: { happening: 'Live activity disconnected and no final result has arrived; this is not a run failure.', nextAction: 'Wait for the result; if none arrives, close Studio and launch it again.' },
@@ -1711,7 +1713,10 @@ async function captureState(review: ReviewCase, page: Page, caseName: string, in
     execution: document.querySelector('.work-summary')?.getAttribute('data-execution') ?? null,
     stream: document.querySelector('[data-stream]')?.getAttribute('data-stream') ?? null,
     finalStatus: document.querySelector('[data-workspace-result]')?.textContent ?? null,
+    workRunId: document.querySelector('section.work-timeline')?.getAttribute('data-run-id') ?? null,
   }))
+  // Every state after Ready belongs to an accepted run, so its capture names that run.
+  if (input.state !== 'ready') expect(input.runId, `${input.state} capture run id`).toMatch(/^\S+$/)
   const capture: StateCapture = {
     state: input.state,
     mode: input.mode,
@@ -1829,6 +1834,8 @@ test('captured finalization: the actual producer scan and cleanup events show as
 
     // The panel: a Finalizing summary with no verdict, before any result reached the page.
     await expect(work.heading).toHaveText(FINALIZING_LABEL)
+    // Only the producer's scan event has arrived: the detail claims neither cleanup nor completion.
+    await expect(work.detail).toHaveText(CAPTURED_FINALIZING_DETAIL)
     await expect(work.summary).toHaveAttribute('data-execution', 'finalizing')
     await expect(page.locator('.captured-status__final')).toHaveAttribute('data-captured-status', 'pending')
     expect(await work.summary.innerText()).not.toMatch(VERDICT_TEXT)
@@ -2361,16 +2368,21 @@ test('legacy activity lost before the result shows a separate warning and no ver
     const contrast = await auditContrast(page)
     review.record('contrast:legacy-disconnected', contrast)
     expect(contrast.failures).toEqual([])
+    // The run was accepted although its live activity was refused: the capture names that run.
+    await expect(work.section).toHaveAttribute('data-run-id', /^(?!none$)\S+$/)
+    const acceptedRunId = await work.section.getAttribute('data-run-id')
+    expect(acceptedRunId).toMatch(/^\S+$/)
     await captureState(review, page, caseName, {
       state: 'disconnected-without-result',
       mode: 'legacy',
       conditions: ['live-event request aborted by a test route', 'result reads held', 'committed fixture provider'],
-      runId: null,
+      runId: acceptedRunId,
       result: { exposedToPage: false, runId: null, status: null },
     })
 
     // The engine finished unseen; until the page reads the result, still no verdict.
     const finished = await harness.waitForResult(RUN_BUDGET_MS)
+    expect(finished.runId).toBe(acceptedRunId)
     expect(finished.result.status).toBe('Unverified')
     await expect(work.heading).toHaveText('Run in progress')
     await expect(page.locator('.agent-status__final')).toHaveAttribute('data-status', 'pending')
