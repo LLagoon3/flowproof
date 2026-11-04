@@ -852,6 +852,107 @@ test('canvas-plausible-wrong passes its build and check but fails the replay ora
   expectNothingLeft(harness, cleanup)
 })
 
+/** Animation frames between two held Studio run-event deliveries once the target frame was released. */
+const HELD_EVENT_PACE_FRAMES = 3
+
+/**
+ * Holds the Studio's own run-event deliveries from the first candidate-replay event until the target
+ * iframe is physically detached, then delivers them in order, one every few animation frames. The
+ * host still emits and orders its activity as usual and releases the frame on its own; only the
+ * Studio learns of the replay after the release, which is the delivery/release interleaving a slow
+ * event stream produces. The test listener's stream (opened from an evaluated script) stays native.
+ * No timer decides anything: the hold ends on the observed detachment.
+ */
+async function holdStudioReplayEventsUntilRelease(page: Page): Promise<void> {
+  await page.evaluate((paceFrames) => {
+    const scope = window as unknown as Record<string, unknown>
+    const Native = window.EventSource
+    const frame = document.querySelector('.target-pane iframe') as HTMLIFrameElement
+    const queue: Array<() => void> = []
+    const state = { held: 0, holding: false, heldWhileAttached: false }
+    scope.__flowproofHeldEvents = state
+    const afterFrames = (count: number, run: () => void): void => {
+      if (count === 0) run()
+      else requestAnimationFrame(() => afterFrames(count - 1, run))
+    }
+    const drain = (): void => {
+      const next = queue.shift()
+      if (next === undefined) {
+        state.holding = false
+        return
+      }
+      next()
+      afterFrames(paceFrames, drain)
+    }
+    const watch = (): void => {
+      if (frame.isConnected) requestAnimationFrame(watch)
+      else drain()
+    }
+    function Held(url: string | URL, init?: EventSourceInit): EventSource {
+      const source = new Native(url, init)
+      if (String(new Error().stack).includes('__playwright_evaluation_script__')) return source
+      const wrapped = new WeakMap<object, EventListener>()
+      const wrap = (listener: EventListenerOrEventListenerObject): EventListener => {
+        let held = wrapped.get(listener)
+        if (held === undefined) {
+          held = (event: Event) => {
+            const deliver = (): void => void (typeof listener === 'function' ? listener.call(source, event) : listener.handleEvent(event))
+            const data = (event as MessageEvent).data
+            if (!state.holding && typeof data === 'string' && data.includes('"phase":"replaying"')) {
+              state.holding = true
+              state.heldWhileAttached = frame.isConnected
+              requestAnimationFrame(watch)
+            }
+            if (!state.holding) return deliver()
+            state.held += 1
+            queue.push(deliver)
+          }
+          wrapped.set(listener, held)
+        }
+        return held
+      }
+      const add = source.addEventListener.bind(source)
+      const remove = source.removeEventListener.bind(source)
+      source.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => add(type, wrap(listener), options)) as EventSource['addEventListener']
+      source.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) =>
+        remove(type, wrapped.get(listener) ?? listener, options)) as EventSource['removeEventListener']
+      for (const name of ['onmessage', 'onerror', 'onopen'] as const) {
+        let current: EventListener | null = null
+        Object.defineProperty(source, name, {
+          get: () => current,
+          set: (handler: EventListener | null) => {
+            if (current !== null) remove(name.slice(2), wrap(current))
+            current = handler
+            if (handler !== null) add(name.slice(2), wrap(handler))
+          },
+        })
+      }
+      return source
+    }
+    Object.assign(Held, { CONNECTING: 0, OPEN: 1, CLOSED: 2 })
+    Held.prototype = Native.prototype
+    ;(window as unknown as { EventSource: unknown }).EventSource = Held
+  }, HELD_EVENT_PACE_FRAMES)
+}
+
+test('a Studio that learns of the candidate replay only after the release never presents the released frame as live', async () => {
+  test.setTimeout(RUN_BUDGET_MS * 2)
+  // The candidate phase reaches this Studio only after its frame is gone, so it is honestly never live.
+  const live = { live: ['baseline-live'], screenshot: 'captured-verification-held-replay-events.png' } as const
+  const { cleanup } = await runCase(
+    'canvas-plausible-wrong',
+    live,
+    async ({ harness, result }) => {
+      expect(result).toMatchObject({ status: 'failed', reason_code: 'CANDIDATE_FAILED' })
+      const held = await harness.page.evaluate(() => (window as unknown as Record<string, unknown>).__flowproofHeldEvents)
+      expect(held).toMatchObject({ holding: false, heldWhileAttached: true })
+      expect((held as { held: number }).held).toBeGreaterThan(0)
+    },
+    holdStudioReplayEventsUntilRelease,
+  )
+  expect(cleanup).toBeDefined()
+})
+
 test('canvas-build-fail stops before replay and never serves a candidate build to the frame', async () => {
   test.setTimeout(RUN_BUDGET_MS * 2)
   const live = { live: ['baseline-live'], screenshot: 'captured-verification-failed-build.png' } as const
