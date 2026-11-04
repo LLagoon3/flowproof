@@ -697,7 +697,7 @@ code {
 }
 
 .evidence-side__note--problem {
-  color: var(--color-danger);
+  color: var(--color-warning);
 }
 
 /* Captured verification: what the frame may be presented as, and the measured-target guard. */
