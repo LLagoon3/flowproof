@@ -102,3 +102,48 @@ Boundaries and gaps:
 - T031 `tests/integration/project-live-meta-smoke.test.ts` is authored, typechecked and isolated
   but NOT executed. Without `MODEL_API_KEY` it fails with a blocker message (no skip). Live
   strict-schema, image interpretation, quota and identity compatibility remain unproven until T053.
+
+## Unit C — parent correction: prompt provenance and snapshot integrity
+
+Base: `d03e272`. Defect independently reproduced by the parent with
+`/tmp/flowproof-s5-parent-binding-probe.mjs` (no provider): a spread copy of a built prompt whose
+`manifest.included_observation_ids` added a UUID absent from the serialized request was admitted
+(`accepted:true, calls:1, invocation_includes_unknown:true`; parent red retained unchanged at
+`.flowproof/task-logs/006-project-live-verification/s5-parent/manifest-red.json`). Admission hashed only
+instructions/input, the validators trusted the copied manifest, and nested prompt/manifest arrays were
+mutable while an exchange was pending.
+
+Fix (no new trust root, no cryptographic claim; in-process host provenance only):
+
+- Builders snapshot every caller-supplied value exactly once (sources, run/invocation IDs, capture,
+  description, question, clarification, definition, baseline boundary) before validation.
+- Each built prompt re-derives its provenance from the actual request blocks (bindings, image labels,
+  decoded image digests, included observation IDs, source paths/digests, omissions, clarification)
+  and must match the manifest exactly, then is deeply frozen and registered as builder-owned.
+- The client admits only builder-owned prompts (`isBuiltProjectPrompt`); copies, `structuredClone`s
+  and rebound manifests are `PROVIDER_PROMPT_INVALID` before any send. Validators return
+  `PROMPT_UNTRUSTED` for non-built prompts. The client fixes the exact request body before any await
+  and refuses to send any body other than it.
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Red-first | focused `project-model.test.ts` with new cases, before the fix | 14 failed, 48 passed (62); the one new passing case is phase rebinding, already refused by the prior phase check |
+| Green | same command | 62 passed, 0 skipped |
+| Typecheck + build | `flock -w 1800 /tmp/flowproof-spec006-heavy.lock npm run typecheck` / `npm run build` | passed (first attempt failed on two type errors, fixed, then passed) |
+| Parent probe | `node /tmp/flowproof-s5-parent-binding-probe.mjs --green` against the rebuilt `dist` | `accepted:false, calls:0, error:PROVIDER_PROMPT_INVALID`; original-mode run now fails its old acceptance assertion as expected |
+| Contract project | `npx vitest run --project contract` (under the lock, before the type-only fix) | 12 files, 466 passed |
+| Discovery | `tests/integration/project-live-discovery.test.ts` | 5 passed |
+
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/s5-unit-c/`.
+
+New proofs: the manifest-adds-unknown-evidence probe case; rebinding image IDs, source paths,
+source digests, question, capture, report, clarification, phase or nothing (structural copy and
+`structuredClone`) is refused with zero sends; deep freezing of prompt/input/content/manifest
+arrays; caller mutation of capture/sources/image map and attempted prompt mutation while an exchange
+is pending leaves the serialized bytes, wire `input` hash and record provenance unchanged; a getter
+that changes a source path after N reads (N = 1..10) can never smuggle an unadmitted path; a baseline
+`outcome` getter cannot change the sent context; a copied correction prompt cannot widen target paths
+or rebind the definition digest.
+
+Gap: provenance is in-process object identity for the trusted host; it is not a signature and does
+not survive serialization across processes (none is used). Live calls remain T053.
