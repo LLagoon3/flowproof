@@ -26,3 +26,25 @@ All heavy steps ran under `flock -w 1800 /tmp/flowproof-spec006-heavy.lock` on o
 - The red oversized and root cases failed at the first state assertion. Their pixel assertions were not reached before the fix; leaking pixels are shown by the passing Chromium controls, not by a red pixel assertion.
 - Pseudo content on `html` is now assessed, but no Chromium regression covers it. Integration, UI and the full e2e suite were not rerun in this unit.
 - Review threads, independent check, push and merge stay with the parent.
+
+## Independent source-parent validation
+
+The parent inspected the complete correction diff, then refreshed this branch with merged S4/main
+in `58ee37d44c477bfedc95ee618d9633eea2f07397`. Under the exact shared heavy lock, the parent independently
+passed workspace typecheck/build, three capture/privacy/replay test files (143 passed, five explicit
+opt-in replay Chromium skips), and all 14 headed `project-privacy.spec.ts` tests without skips. The
+previous independent 40-assertion built-module privacy probe also passed on the corrected build.
+
+A separate 18-assertion built-module/real Chromium probe confirmed null fill/select values taint the
+registry without storing a value, sensitive failed-request paths are refused with a public-path
+control, and a real rendered `html::before` sensitive-text case is refused before retention while a
+public page produces an image. This additional case checks the rendered computed pseudo content and
+a control screenshot, not OCR or a separate pixel-decoding oracle; the headed suite supplies the
+pixel-level root/body/reflection evidence. The parent probe closes the previously untested HTML
+pseudo execution path but does not claim general hostile-renderer privacy.
+
+Parent logs: ignored `.flowproof/task-logs/006-project-live-verification/pr28-parent/` (typecheck,
+build, focused, chromium, probe and additional-probe). The parent-only probe server and browser were
+closed in `finally`; no original repository, provider, deployment or sibling container was used.
+`git diff --check origin/main..HEAD` passed. Hosted updated-HEAD CI and the second Codex review remain
+separate, pending checks before merge.
