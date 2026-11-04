@@ -717,7 +717,9 @@ test('the legacy workspace keeps the draft, the target frame, one run and pendin
     const layoutSamples = await recordedSamples(page)
     review.record('layoutSamples', layoutSamples)
     expectHeldDuringMeasurement(layoutSamples, 2)
-    await expect(workspace.status).toHaveText('Run in progress')
+    // The page observed the integrity gate and the final event, but holds no result: finalizing,
+    // with no verdict (the same run presentation as the panel, slice 3).
+    await expect(workspace.status).toHaveText('Finalizing · verdict pending')
     await expect(workspace.viewResult).toHaveCount(0)
     expect(await workspace.status.innerText()).not.toMatch(/Verified Fix|Unverified/)
     await review.shot(page, 'result-pending-collapsed.png')
@@ -1132,7 +1134,8 @@ async function runCapturedCase({ name, resize, loseActivity = false }: CapturedC
       // Before the page reads the bound result, the collapsed status still shows no verdict.
       if ((await workspace.root.getAttribute('data-collapsed', { timeout: ELEMENT_TIMEOUT_MS })) !== 'true') await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
       await expect(workspace.panel).toBeHidden()
-      await expect(workspace.status).toHaveText('Verification in progress')
+      // Scan and cleanup activity was observed, but no result reached the page: no verdict yet.
+      await expect(workspace.status).toHaveText('Finalizing · verdict pending')
       await expect(workspace.viewResult).toHaveCount(0)
       await review.shot(page, 'result-pending-collapsed.png')
       results.release()

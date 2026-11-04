@@ -7,15 +7,17 @@ import type { CapturedVerificationResult, GateSummary, RunResult, RunState, Scen
 import {
   DEFAULT_PANEL_WIDTH_STEP,
   PANEL_WIDTHS_REM,
+  compactStatusOf,
   initialWorkspacePresentation,
   panelWidthRem,
   panelWidthStepAt,
   panelWidthStepForKey,
   selectCompactStatus,
   selectMeasuringTarget,
+  selectRunPresentation,
   workspaceReducer,
 } from '../../apps/studio/src/presentation.js'
-import type { CompactStatusView, WorkspaceAction, WorkspacePresentation } from '../../apps/studio/src/presentation.js'
+import type { CompactStatusView, RunPresentation, WorkCardView, WorkspaceAction, WorkspacePresentation } from '../../apps/studio/src/presentation.js'
 import { CAPTURED_STATUS_LABELS, initialStudioState, selectCapturedOutcome, selectCapturedTarget, studioReducer } from '../../apps/studio/src/state.js'
 import type { StudioAction, StudioState } from '../../apps/studio/src/state.js'
 
@@ -253,7 +255,7 @@ describe('Workspace presentation: compact status from authoritative state only',
     }
   })
 
-  it('keeps a legacy run in progress through every live event, including the final event, until its result', () => {
+  it('keeps a legacy run pending through every live event, including the final event, until its result: in progress, then finalizing once its integrity gate was observed', () => {
     let state = reduce(LEGACY_RUNNING)
     const seen: CompactStatusView[] = [selectCompactStatus(state)]
     for (const action of eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID)) {
@@ -263,7 +265,10 @@ describe('Workspace presentation: compact status from authoritative state only',
     // The stream ended with `run_finalized`, yet no authoritative result was read.
     expect(state.run?.stream.status).toBe('ended')
     expect(state.run?.status).toBe('running')
-    for (const view of seen) expect(view).toEqual({ label: 'Run in progress', tone: 'progress', hasResult: false, activityNotice: null })
+    // Before the tenth event, the original-worktree gate update, no finalization was observed.
+    for (const view of seen.slice(0, 10)) expect(view).toEqual({ label: 'Run in progress', tone: 'progress', hasResult: false, activityNotice: null })
+    for (const view of seen.slice(10)) expect(view).toEqual({ label: 'Finalizing · verdict pending', tone: 'progress', hasResult: false, activityNotice: null })
+    for (const view of seen) expect(showsNoVerdict(view)).toBe(true)
   })
 
   it('shows a lost activity stream as a separate notice, never as a failure or success', () => {
@@ -309,7 +314,7 @@ describe('Workspace presentation: compact status from authoritative state only',
     })
   })
 
-  it('keeps the captured verification in progress through scan, release and its final event until the strict result', () => {
+  it('keeps the captured verification pending through scan, release and its final event until the strict result: in progress, then finalizing from the observed scan', () => {
     let state = reduce(CAPTURED_RUNNING)
     const seen: CompactStatusView[] = [selectCompactStatus(state)]
     for (const action of eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID)) {
@@ -318,7 +323,10 @@ describe('Workspace presentation: compact status from authoritative state only',
     }
     expect(state.capturedRun?.stream.status).toBe('ended')
     expect(state.capturedRun?.status).toBe('running')
-    for (const view of seen) expect(view).toEqual({ label: 'Verification in progress', tone: 'progress', hasResult: false, activityNotice: null })
+    // The eighth event is the scan marker; scan, release and the final event are all finalization.
+    for (const view of seen.slice(0, 8)) expect(view).toEqual({ label: 'Verification in progress', tone: 'progress', hasResult: false, activityNotice: null })
+    for (const view of seen.slice(8)) expect(view).toEqual({ label: 'Finalizing · verdict pending', tone: 'progress', hasResult: false, activityNotice: null })
+    for (const view of seen) expect(showsNoVerdict(view)).toBe(true)
   })
 
   it.each<[string, CapturedVerificationResult, CompactStatusView['tone']]>([
@@ -530,5 +538,354 @@ describe('Workspace presentation: layout holds still while the target is measure
     const lostLate = reduce([{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }], reduce([...CAPTURED_RUNNING, ...eventActions(captured.slice(0, 4), CAPTURED_RUN_ID), capturedUnreadable]))
     expect(selectMeasuringTarget(lostLate)).toBe(true)
     expect(selectCapturedTarget(lostLate.capturedRun)).toBe('not-live')
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// T017 for T018 (Spec 005 slice 3): observed work and the run presentation
+// ---------------------------------------------------------------------------------------
+//
+// The work panel's readable groups and its current state are pure projections of the accepted,
+// run-bound events and the authoritative result. A group is a contiguous run of events of one
+// phase; finalization is recognized only from the exact captured scan/cleanup producer copy or the
+// observed legacy original-worktree gate update, and any drifted copy falls back to the truthful
+// observed phase. Live activity never yields a verdict: only a valid bound final result does, and
+// once it exists late activity and lost streams never revise it. The collapsed workspace status
+// is that same projection. These selector cases copy the producer strings; the real captured E2E
+// checks the coupling against actual producer events.
+
+const SCAN_MARKER = CAPTURED_FLOW[7]?.message ?? ''
+const CLEANUP_MARKER = CAPTURED_FLOW[8]?.message ?? ''
+const FINALIZING = 'Finalizing · verdict pending'
+
+const flat = (cards: readonly WorkCardView[]): StudioEvent[] => cards.flatMap((card) => [...card.events])
+const shape = (cards: readonly WorkCardView[]): Array<[WorkCardView['kind'], RunState | null, number, number]> =>
+  cards.map((card) => [card.kind, card.phase, card.firstSequence, card.lastSequence])
+
+/** Reduces events one at a time from `from`, returning every intermediate presentation. */
+function presentEach(from: StudioState, list: readonly StudioEvent[], runId: string): { state: StudioState; seen: RunPresentation[] } {
+  let state = from
+  const seen: RunPresentation[] = [selectRunPresentation(state)]
+  for (const action of eventActions(list, runId)) {
+    state = reduce([action], state)
+    seen.push(selectRunPresentation(state))
+  }
+  return { state, seen }
+}
+
+/** Every family verdict; a presentation without a bound final result must show none of them anywhere. */
+const presentsNoVerdict = (view: RunPresentation): boolean =>
+  view.verdict === null &&
+  [view.label, view.detail ?? '', view.nextAction ?? '', ...view.cards.flatMap((card) => [card.title, card.statusText])].every((text) => !VERDICTS.some((verdict) => text.includes(verdict)))
+
+describe('Work presentation: observed work in ordered contiguous groups', () => {
+  it('groups contiguous events of one phase in accepted order, with IDs of run and first sequence that later events never change', () => {
+    const list = events(LEGACY_FLOW, LEGACY_RUN_ID)
+    const { state, seen } = presentEach(reduce(LEGACY_RUNNING), list, LEGACY_RUN_ID)
+    expect(seen[0]?.cards).toEqual([])
+    const firstSequenceOf = new Map<string, number>()
+    seen.forEach((view, index) => {
+      // Every accepted event, exactly once, in order: nothing dropped, reordered or added.
+      expect(flat(view.cards)).toEqual(list.slice(0, index))
+      for (const card of view.cards) {
+        expect(card.id).toBe(`${LEGACY_RUN_ID}:${card.firstSequence}`)
+        expect(card.runId).toBe(LEGACY_RUN_ID)
+        expect(card.firstSequence).toBe(card.events[0]?.sequence)
+        expect(card.lastSequence).toBe(card.events.at(-1)?.sequence)
+        const known = firstSequenceOf.get(card.id)
+        if (known !== undefined) expect(card.firstSequence).toBe(known)
+        firstSequenceOf.set(card.id, card.firstSequence)
+      }
+      // A group that existed keeps its identity and position as later events arrive.
+      const previous = seen[index - 1]
+      if (previous !== undefined) expect(view.cards.slice(0, Math.max(0, previous.cards.length - 1)).map((card) => card.id)).toEqual(previous.cards.slice(0, -1).map((card) => card.id))
+    })
+    expect(shape(selectRunPresentation(state).cards)).toEqual([
+      ['phase', 'initialized', 1, 1],
+      ['phase', 'reproducing', 2, 4],
+      ['phase', 'failure_captured', 5, 5],
+      ['phase', 'diagnosing', 6, 6],
+      ['phase', 'applying', 7, 7],
+      ['phase', 'replaying', 8, 9],
+      ['finalizing', 'replaying', 10, 11],
+    ])
+  })
+
+  it('starts a new group when a phase recurs after another phase, and keeps a phase-less event in the group it follows', () => {
+    const list = events(
+      [
+        { type: 'agent_message', phase: null, message: 'No phase reported yet.' },
+        { type: 'phase_started', phase: 'reproducing' },
+        { type: 'agent_message', phase: null, message: 'Still reproducing.' },
+        { type: 'agent_message', phase: 'failure_captured' },
+        { type: 'agent_message', phase: 'reproducing' },
+      ],
+      CAPTURED_RUN_ID,
+    )
+    const view = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(list, CAPTURED_RUN_ID)]))
+    // A leading event without a phase is not given one; no phase is invented for the group.
+    expect(shape(view.cards)).toEqual([
+      ['phase', null, 1, 1],
+      ['phase', 'reproducing', 2, 3],
+      ['phase', 'failure_captured', 4, 4],
+      ['phase', 'reproducing', 5, 5],
+    ])
+    expect(new Set(view.cards.map((card) => card.id)).size).toBe(4)
+    expect(flat(view.cards)).toEqual(list)
+  })
+
+  it('keeps every accepted event of a long run rather than only the latest forty', () => {
+    const inputs: EventInput[] = Array.from({ length: 45 }, (_, index) => ({ type: 'agent_message', phase: index % 2 === 0 ? 'applying' : 'failure_captured', message: `Activity ${index + 1}.` }))
+    const list = events(inputs, CAPTURED_RUN_ID)
+    const view = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(list, CAPTURED_RUN_ID)]))
+    expect(view.cards).toHaveLength(45)
+    expect(flat(view.cards)).toEqual(list)
+    expect(view.cards[0]?.id).toBe(`${CAPTURED_RUN_ID}:1`)
+  })
+
+  it('marks only the last group current while the result is pending, and no group once the result is bound', () => {
+    const running = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 5), CAPTURED_RUN_ID), CAPTURED_RUN_ID)]))
+    expect(running.cards.map((card) => card.isCurrent)).toEqual([false, false, false, true])
+    const lost = selectRunPresentation(
+      reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 5), CAPTURED_RUN_ID), CAPTURED_RUN_ID), { type: 'stream/disconnected', runId: CAPTURED_RUN_ID }]),
+    )
+    expect(lost.cards.map((card) => card.isCurrent)).toEqual([false, false, false, true])
+    const decided = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID), capturedResult(PASSED)]))
+    expect(decided.cards.some((card) => card.isCurrent)).toBe(false)
+  })
+
+  it('reports the existing raw phase only: none before any event, then the accepted run phase', () => {
+    const none = selectRunPresentation(reduce(LEGACY_RUNNING))
+    expect(none).toMatchObject({ execution: 'active', phase: null, verdict: null, cards: [] })
+    const legacy = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 5), LEGACY_RUN_ID), LEGACY_RUN_ID)])
+    expect(selectRunPresentation(legacy).phase).toBe(legacy.run?.phase)
+    expect(selectRunPresentation(legacy).phase).toBe('failure_captured')
+  })
+})
+
+describe('Work presentation: exact observed finalization markers and drift fallback', () => {
+  it('shows captured finalization from the exact scan and cleanup copy, keeping the raw phase of every event', () => {
+    const list = events(CAPTURED_FLOW, CAPTURED_RUN_ID)
+    const { seen } = presentEach(reduce(CAPTURED_RUNNING), list, CAPTURED_RUN_ID)
+    for (const view of seen.slice(0, 8)) {
+      expect(view.cards.some((card) => card.kind === 'finalizing')).toBe(false)
+      expect(view.execution).toBe('active')
+      expect(view.label).toBe('Verification in progress')
+    }
+    const [scan, cleanup, finalEvent] = [seen[8], seen[9], seen[10]]
+    for (const view of [scan, cleanup, finalEvent]) {
+      expect(view).toMatchObject({ execution: 'finalizing', label: FINALIZING, tone: 'progress', verdict: null })
+      expect(presentsNoVerdict(view as RunPresentation)).toBe(true)
+    }
+    const card = finalEvent?.cards.at(-1)
+    expect(card).toMatchObject({ kind: 'finalizing', title: 'Finalizing', phase: 'replaying', firstSequence: 8, lastSequence: 10, isCurrent: true })
+    // One finalizing group, growing in place under the identity of its first marker.
+    expect(scan?.cards.at(-1)?.id).toBe(card?.id)
+    expect(cleanup?.cards.at(-1)?.events.map((event) => event.message)).toEqual([SCAN_MARKER, CLEANUP_MARKER])
+    // `Finalizing` is a presentation label; the events keep the phases the producer sent.
+    expect(card?.events.map((event) => event.phase)).toEqual(['replaying', 'replaying', 'finalized'])
+    expect(cleanup?.phase).toBe('replaying')
+  })
+
+  it('starts captured finalization at the cleanup copy when only that marker is exact', () => {
+    const drifted = CAPTURED_FLOW.map((input) => (input.message === SCAN_MARKER ? { ...input, message: 'Scanning for leaked credentials.' } : input))
+    const view = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(events(drifted, CAPTURED_RUN_ID), CAPTURED_RUN_ID)]))
+    expect(shape(view.cards).at(-1)).toEqual(['finalizing', 'replaying', 9, 10])
+    expect(view.cards.at(-2)?.events.at(-1)?.message).toBe('Scanning for leaked credentials.')
+    expect(view.execution).toBe('finalizing')
+  })
+
+  it.each<[string, (message: string) => EventInput]>([
+    ['changed wording', (message) => ({ type: 'agent_message', phase: 'replaying', message: message.replace('Scanning', 'Checking').replace('Releasing', 'Freeing') })],
+    ['a trailing space', (message) => ({ type: 'agent_message', phase: 'replaying', message: `${message} ` })],
+    ['other letter case', (message) => ({ type: 'agent_message', phase: 'replaying', message: message.toUpperCase() })],
+    ['only a prefix', (message) => ({ type: 'agent_message', phase: 'replaying', message: message.slice(0, 20) })],
+    ['another event type', (message) => ({ type: 'phase_completed', phase: 'replaying', message })],
+  ])('falls back to the observed phase and then a pending result when the captured copy drifted to %s', (_name, drift) => {
+    const drifted = CAPTURED_FLOW.map((input) => (input.message === SCAN_MARKER || input.message === CLEANUP_MARKER ? drift(input.message ?? '') : input))
+    const list = events(drifted, CAPTURED_RUN_ID)
+    const { state, seen } = presentEach(reduce(CAPTURED_RUNNING), list, CAPTURED_RUN_ID)
+    for (const view of seen) {
+      expect(view.cards.some((card) => card.kind === 'finalizing' || card.title === 'Finalizing')).toBe(false)
+      expect(view.label).not.toContain('Finalizing')
+      expect(presentsNoVerdict(view)).toBe(true)
+    }
+    // Scan and release copy that is not exact stays in the replay group it followed.
+    expect(seen[9]).toMatchObject({ execution: 'active', label: 'Verification in progress', phase: 'replaying' })
+    expect(seen[9]?.cards.at(-1)).toMatchObject({ kind: 'phase', phase: 'replaying', firstSequence: 6, lastSequence: 9 })
+    // The final event without an observed marker means only that the result is pending.
+    const last = selectRunPresentation(state)
+    expect(state.capturedRun?.stream.status).toBe('ended')
+    expect(last).toMatchObject({ execution: 'result-pending', label: 'Result pending', verdict: null })
+    expect(last.cards.at(-1)).toMatchObject({ kind: 'phase', phase: 'finalized', title: 'Final event' })
+    expect(selectCompactStatus(state)).toEqual({ label: 'Result pending', tone: 'progress', hasResult: false, activityNotice: null })
+  })
+
+  it.each<[GateSummary['status'], string]>([
+    ['pass', 'WORKTREE_UNCHANGED'],
+    ['fail', 'ORIGINAL_WORKTREE_CHANGED'],
+    ['unevaluable', 'CLEANUP_FAILED'],
+  ])('shows legacy finalization from the observed original-worktree gate update with status %s', (status, reason) => {
+    const flow = LEGACY_FLOW.map((input) => (input.gate?.gate_id === 'original_worktree_unchanged' ? { ...input, gate: gate('original_worktree_unchanged', status, reason) } : input))
+    const view = selectRunPresentation(reduce([...LEGACY_RUNNING, ...eventActions(events(flow.slice(0, 10), LEGACY_RUN_ID), LEGACY_RUN_ID)]))
+    expect(view).toMatchObject({ execution: 'finalizing', label: FINALIZING, verdict: null })
+    expect(view.cards.at(-1)).toMatchObject({ kind: 'finalizing', phase: 'replaying', firstSequence: 10, lastSequence: 10 })
+    expect(presentsNoVerdict(view)).toBe(true)
+  })
+
+  it('does not take another gate, a message naming the gate, or a captured marker as legacy finalization', () => {
+    const lookalikes = events(
+      [
+        ...LEGACY_FLOW.slice(0, 9),
+        { type: 'gate_updated', phase: 'replaying', gate: gate('canvas_matches', 'pass', 'CANVAS_MATCHES') },
+        { type: 'agent_message', phase: 'replaying', message: 'original_worktree_unchanged' },
+        { type: 'agent_message', phase: 'replaying', message: SCAN_MARKER },
+        { type: 'run_finalized', phase: 'finalized', message: 'Run finalized as Verified Fix.', artifact_refs: ['result.json'] },
+      ],
+      LEGACY_RUN_ID,
+    )
+    const { state, seen } = presentEach(reduce(LEGACY_RUNNING), lookalikes, LEGACY_RUN_ID)
+    for (const view of seen) {
+      expect(view.cards.some((card) => card.kind === 'finalizing')).toBe(false)
+      expect(presentsNoVerdict(view)).toBe(true)
+    }
+    // The final event's own message claims a verdict; it reaches no label, only the raw record.
+    const last = selectRunPresentation(state)
+    expect(last).toMatchObject({ execution: 'result-pending', label: 'Result pending', verdict: null })
+    expect(last.cards.at(-1)?.events.at(-1)?.message).toBe('Run finalized as Verified Fix.')
+  })
+
+  it('does not take the legacy integrity gate as captured finalization', () => {
+    // Captured activity never carries legacy gates; the reducer stops such a stream before display.
+    const state = reduce([...CAPTURED_RUNNING, ...eventActions(events([...CAPTURED_FLOW.slice(0, 7), LEGACY_FLOW[9] as EventInput], CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    expect(state.capturedRun?.stream.status).toBe('rejected')
+    const view = selectRunPresentation(state)
+    expect(view.cards.some((card) => card.kind === 'finalizing')).toBe(false)
+    expect(view).toMatchObject({ execution: 'active', verdict: null, activityNotice: 'Live activity stopped' })
+  })
+})
+
+describe('Run presentation: final result, stream and verdict precedence', () => {
+  it('never derives a verdict from a stream end, a disconnection or a rejection, in either mode', () => {
+    const legacyEnded = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID)])
+    const capturedEnded = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    const legacyLost = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 3), LEGACY_RUN_ID), LEGACY_RUN_ID), { type: 'stream/disconnected', runId: LEGACY_RUN_ID }])
+    const capturedLost = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 8), CAPTURED_RUN_ID), CAPTURED_RUN_ID), { type: 'stream/disconnected', runId: CAPTURED_RUN_ID }])
+    const capturedRejected = reduce([...CAPTURED_RUNNING, { type: 'stream/failed', runId: CAPTURED_RUN_ID, error: { code: 'EVENT_INVALID', message: 'x' } }])
+    for (const state of [legacyEnded, capturedEnded, legacyLost, capturedLost, capturedRejected]) {
+      const view = selectRunPresentation(state)
+      expect(presentsNoVerdict(view)).toBe(true)
+      expect(view.tone).toBe('progress')
+    }
+    // A lost stream is a separate notice beside the last observed execution, not a replacement.
+    expect(selectRunPresentation(legacyLost)).toMatchObject({ execution: 'active', label: 'Run in progress', phase: 'reproducing', stream: 'disconnected', activityNotice: 'Live activity disconnected' })
+    expect(selectRunPresentation(capturedLost)).toMatchObject({ execution: 'finalizing', label: FINALIZING, stream: 'disconnected', activityNotice: 'Live activity disconnected' })
+    expect(selectRunPresentation(capturedRejected)).toMatchObject({ execution: 'active', stream: 'rejected', activityNotice: 'Live activity stopped', cards: [] })
+    // Missed events after the loss are neither inferred nor reconstructed.
+    expect(flat(selectRunPresentation(legacyLost).cards)).toEqual(legacyLost.run?.activity)
+  })
+
+  it('distinguishes a result that could not be read, with no verdict, from a failed verification, with its exact verdict', () => {
+    const unreadable: StudioAction = { type: 'result/failed', runId: CAPTURED_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }
+    const capturedUnreadable = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID), unreadable])
+    const capturedFailed = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID), capturedResult(FAILED)])
+    const legacyUnreadable = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID), { ...unreadable, runId: LEGACY_RUN_ID }])
+    const legacyUnverified = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(UNVERIFIED)])
+    for (const state of [capturedUnreadable, legacyUnreadable]) {
+      const view = selectRunPresentation(state)
+      expect(view).toMatchObject({ execution: 'result-unavailable', label: 'No final status', tone: 'warning', verdict: null })
+      expect(presentsNoVerdict(view)).toBe(true)
+    }
+    expect(selectRunPresentation(capturedFailed)).toMatchObject({ execution: 'final', verdict: CAPTURED_STATUS_LABELS.failed, label: CAPTURED_STATUS_LABELS.failed, tone: 'danger' })
+    expect(selectRunPresentation(legacyUnverified)).toMatchObject({ execution: 'final', verdict: 'Unverified', label: 'Unverified', tone: 'danger' })
+  })
+
+  it('lets a valid bound result win over observed finalization and every late event, never returning to pending', () => {
+    const scanning = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 8), CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    expect(selectRunPresentation(scanning).execution).toBe('finalizing')
+    const decided = reduce([capturedResult(PASSED)], scanning)
+    const expected = { execution: 'final', verdict: CAPTURED_STATUS_LABELS.passed, label: CAPTURED_STATUS_LABELS.passed, tone: 'success', activityNotice: null }
+    expect(selectRunPresentation(decided)).toMatchObject(expected)
+    const late = events([...CAPTURED_FLOW, { type: 'agent_message', phase: 'replaying', message: SCAN_MARKER }], CAPTURED_RUN_ID).slice(8)
+    let state = decided
+    for (const action of eventActions(late, CAPTURED_RUN_ID)) {
+      state = reduce([action], state)
+      expect(selectRunPresentation(state)).toMatchObject(expected)
+    }
+    expect(selectRunPresentation(reduce([{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }], decided))).toMatchObject(expected)
+    expect(selectRunPresentation(reduce([{ type: 'result/failed', runId: CAPTURED_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }], decided))).toMatchObject(expected)
+
+    // Legacy: a result bound mid-run stays final through the integrity gate and the final event.
+    const early = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 4), LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(VERIFIED)])
+    const lateLegacy = reduce(eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID).slice(4), LEGACY_RUN_ID), early)
+    expect(selectRunPresentation(lateLegacy)).toMatchObject({ execution: 'final', verdict: 'Verified Fix', label: 'Verified Fix', tone: 'success' })
+    // Late activity stays inspectable in order; it only cannot change the decided presentation.
+    expect(flat(selectRunPresentation(lateLegacy).cards)).toEqual(lateLegacy.run?.activity)
+  })
+
+  it('states the session before a run without a verdict, and starting ahead of the previous result', () => {
+    expect(selectRunPresentation(initialStudioState)).toMatchObject({ execution: 'loading', verdict: null, runId: null, cards: [] })
+    expect(selectRunPresentation(reduce([{ type: 'catalog/loaded', scenarios: LEGACY_SCENARIOS }]))).toMatchObject({ mode: 'legacy', execution: 'ready', label: 'Ready', verdict: null })
+    expect(selectRunPresentation(reduce([{ type: 'catalog/loaded', scenarios: CAPTURED_SCENARIOS }]))).toMatchObject({ mode: 'captured', execution: 'ready', label: 'Ready', verdict: null })
+    expect(selectRunPresentation(reduce([{ type: 'catalog/failed', error: { code: 'NETWORK_UNAVAILABLE', message: 'x' } }]))).toMatchObject({ execution: 'unavailable', label: 'Not ready', verdict: null })
+    const finished = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(VERIFIED)])
+    const next = selectRunPresentation(reduce([{ type: 'run/requested', requestText: GOAL }], finished))
+    expect(next).toMatchObject({ execution: 'starting', label: 'Starting', verdict: null })
+    expect(next.cards.some((card) => card.isCurrent)).toBe(false)
+    expect(selectRunPresentation(reduce(CAPTURED_RUNNING.slice(0, 2)))).toMatchObject({ execution: 'starting', label: 'Starting', verdict: null, cards: [] })
+  })
+
+  it('offers only supported next actions: waiting, closing or relaunching, or a new legacy run; never cancel, retry or resume', () => {
+    const states = [
+      reduce([{ type: 'catalog/loaded', scenarios: LEGACY_SCENARIOS }]),
+      reduce([{ type: 'catalog/loaded', scenarios: CAPTURED_SCENARIOS }]),
+      reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 3), LEGACY_RUN_ID), LEGACY_RUN_ID)]),
+      reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 9), CAPTURED_RUN_ID), CAPTURED_RUN_ID)]),
+      reduce([...LEGACY_RUNNING, { type: 'stream/disconnected', runId: LEGACY_RUN_ID }]),
+      reduce([...CAPTURED_RUNNING, { type: 'result/failed', runId: CAPTURED_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }]),
+      reduce([...LEGACY_RUNNING, { type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }]),
+    ]
+    const actions = states.map((state) => selectRunPresentation(state).nextAction)
+    for (const action of actions) {
+      expect(action).toEqual(expect.any(String))
+      expect(action).not.toMatch(/\b(cancel|retry|resume)\b/i)
+    }
+    expect(actions[2]).toMatch(/Closing Studio interrupts the run/)
+    expect(actions[3]).toMatch(/Closing Studio interrupts the verification/)
+    expect(actions[4]).toMatch(/launch it again/)
+    expect(actions[5]).toMatch(/launch it again/)
+    expect(actions[6]).toMatch(/start another run/i)
+  })
+})
+
+describe('Compact status: the same run presentation outside the collapsed panel', () => {
+  it('equals the run presentation at every step of both flows, through results, lost streams and unreadable results', () => {
+    const unreadable: StudioAction = { type: 'result/failed', runId: CAPTURED_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }
+    const scenarios: Array<{ from: readonly StudioAction[]; list: readonly StudioEvent[]; runId: string; tail: readonly StudioAction[] }> = [
+      { from: LEGACY_RUNNING, list: events(LEGACY_FLOW, LEGACY_RUN_ID), runId: LEGACY_RUN_ID, tail: [legacyResult(VERIFIED)] },
+      { from: LEGACY_RUNNING, list: events(LEGACY_FLOW.slice(0, 6), LEGACY_RUN_ID), runId: LEGACY_RUN_ID, tail: [{ type: 'stream/disconnected', runId: LEGACY_RUN_ID }, legacyResult(UNVERIFIED)] },
+      { from: CAPTURED_RUNNING, list: events(CAPTURED_FLOW, CAPTURED_RUN_ID), runId: CAPTURED_RUN_ID, tail: [capturedResult(INTERRUPTED)] },
+      { from: CAPTURED_RUNNING, list: events(CAPTURED_FLOW.slice(0, 9), CAPTURED_RUN_ID), runId: CAPTURED_RUN_ID, tail: [{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }, unreadable] },
+    ]
+    for (const { from, list, runId, tail } of scenarios) {
+      let state = reduce(from)
+      for (const action of [...eventActions(list, runId), ...tail]) {
+        state = reduce([action], state)
+        const view = selectRunPresentation(state)
+        const compact = selectCompactStatus(state)
+        expect(compact).toEqual(compactStatusOf(view))
+        expect(compact).toEqual({ label: view.label, tone: view.tone, hasResult: view.verdict !== null, activityNotice: view.activityNotice })
+        if (view.verdict === null) expect(showsNoVerdict(compact)).toBe(true)
+      }
+    }
+  })
+
+  it('shows Finalizing and no verdict while collapsed during observed finalization and after the final event, then only the bound verdict', () => {
+    const ended = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    expect(selectCompactStatus(ended)).toEqual({ label: FINALIZING, tone: 'progress', hasResult: false, activityNotice: null })
+    const lost = reduce([{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }], reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 8), CAPTURED_RUN_ID), CAPTURED_RUN_ID)]))
+    expect(selectCompactStatus(lost)).toEqual({ label: FINALIZING, tone: 'progress', hasResult: false, activityNotice: 'Live activity disconnected' })
+    expect(selectCompactStatus(reduce([capturedResult(PASSED)], ended))).toEqual({ label: CAPTURED_STATUS_LABELS.passed, tone: 'success', hasResult: true, activityNotice: null })
+    expect(selectCompactStatus(reduce([capturedResult({ ...PASSED, run_id: OTHER_RUN_ID })], ended))).toEqual({ label: 'No final status', tone: 'warning', hasResult: false, activityNotice: null })
   })
 })

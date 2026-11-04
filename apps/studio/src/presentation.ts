@@ -1,5 +1,6 @@
 import { selectCapturedOutcome, selectCapturedTarget, selectStudioMode } from './state.js'
-import type { CapturedOutcomeView, CapturedRunView, StreamStatus, StudioState } from './state.js'
+import type { RunState, StudioEvent } from './api.js'
+import type { CapturedOutcomeView, CapturedRunView, RunView, StreamStatus, StudioMode, StudioState } from './state.js'
 
 // The local presentation of the Studio workspace (Spec 005). It holds only layout choices of this
 // page: the work panel's width and whether it is collapsed. They never reach the run reducer, the
@@ -12,10 +13,12 @@ import type { CapturedOutcomeView, CapturedRunView, StreamStatus, StudioState } 
 // requests until such a phase ends. Lost live activity ends only what the page can see, not the
 // engine's work, so it never ends a phase by itself.
 //
-// The compact status shown outside a collapsed work panel is derived from the existing
-// authoritative state and selectors only. Live activity is advisory: a stream that ended,
-// disconnected or was rejected is at most a separate notice, never a verdict. A verdict appears only
-// with a valid bound final result, and it is that family's exact label.
+// The run presentation (slice 3) is the one projection of the accepted, run-bound events and the
+// authoritative result that both the work panel and the compact status outside a collapsed panel
+// show. It keeps three dimensions apart: what execution was observed, whether live activity is
+// connected, and the verdict. Live activity is advisory: a stream that ended, disconnected or was
+// rejected is at most a separate notice, never a verdict. A verdict appears only with a valid bound
+// final result, and it is that family's exact label; afterwards no late event revises it.
 
 /** The seven work-panel width choices, in rem; the CSS backs each with a class-like attribute rule. */
 export const PANEL_WIDTHS_REM = Object.freeze([20, 22, 24, 26, 28, 30, 32] as const)
@@ -90,10 +93,180 @@ export function panelWidthStepAt(widthPx: number, rootFontSizePx: number): Panel
 }
 
 // ---------------------------------------------------------------------------------------
-// Compact status
+// Observed work
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The fixed captured producer copy that opens finalization: the whole-run secret scan, then the
+ * release of the target, operations and owned worktree (`verify/capturedRun.ts`). The engine has no
+ * finalizing phase and exports no such signal, so these exact strings are copied here and nowhere
+ * else; the real captured E2E checks the coupling against actual producer events. Any other text,
+ * however similar, is ordinary activity of the phase it carries.
+ */
+const CAPTURED_FINALIZING_MARKERS: ReadonlySet<string> = new Set([
+  'Scanning the candidate, the evidence, and the run activity for secrets.',
+  'Releasing the target, operations, and owned worktree, then comparing the original repository.',
+])
+
+/** The legacy gate the engine records first when it finalizes: cleanup and the original-integrity comparison. */
+const LEGACY_FINALIZING_GATE = 'original_worktree_unchanged'
+
+/** Whether an accepted event shows that the run reached its finalization, by the exact observed signal of its family. */
+const isFinalizingMarker = (mode: StudioMode, event: StudioEvent): boolean =>
+  mode === 'captured'
+    ? event.type === 'agent_message' && CAPTURED_FINALIZING_MARKERS.has(event.message)
+    : event.type === 'gate_updated' && event.gate?.gate_id === LEGACY_FINALIZING_GATE
+
+/**
+ * A readable group of already observed activity: a contiguous run of accepted events of one phase,
+ * or everything from the first observed finalization signal on. It is neither a separate task nor
+ * evidence that unobserved work happened, and it never states a check outcome.
+ */
+export interface WorkCardView {
+  /** Stable for the session: the run and the sequence of the group's first accepted event. */
+  readonly id: string
+  readonly runId: string
+  readonly firstSequence: number
+  readonly lastSequence: number
+  /** `finalizing` from the exact observed finalization signal; otherwise the group of one phase. */
+  readonly kind: 'phase' | 'finalizing'
+  /** The existing phase of the group's first event; null when it carried none. Never invented. */
+  readonly phase: RunState | null
+  readonly title: string
+  /** One local sentence about the observed group; no verdict or check outcome. */
+  readonly statusText: string
+  /** The accepted events of the group, unchanged and in their original order. */
+  readonly events: readonly StudioEvent[]
+  /** The group most relevant to the pending run: the last one while no result is bound. */
+  readonly isCurrent: boolean
+}
+
+const WORK_TITLES: Readonly<Record<StudioMode, Readonly<Record<RunState, string>>>> = {
+  legacy: {
+    initialized: 'Request received',
+    reproducing: 'Reproducing the failure',
+    failure_captured: 'Failure captured',
+    diagnosing: 'Diagnosing',
+    candidate_validated: 'Validating the candidate',
+    applying: 'Applying the candidate',
+    replaying: 'Replaying the scenario',
+    finalized: 'Final event',
+  },
+  captured: {
+    initialized: 'Preparing the recorded baseline',
+    reproducing: 'Reproducing the prepared defect',
+    failure_captured: 'Baseline failure captured',
+    // The reducer refuses these legacy-only phases in a captured run before they are displayed.
+    diagnosing: 'Activity',
+    candidate_validated: 'Activity',
+    applying: 'Preparing the candidate',
+    replaying: 'Replaying on the candidate build',
+    finalized: 'Final event',
+  },
+}
+
+const FINALIZING_TITLE = 'Finalizing'
+
+const FINALIZING_TEXT: Readonly<Record<StudioMode, string>> = {
+  legacy: 'The original-worktree check was observed; the run is finishing. Only the final result decides each gate.',
+  captured: 'Secret-scan and cleanup activity was observed; the run is finishing. Checks are reported only in the final result.',
+}
+
+/** The final event carries the producer's wording of the outcome, so its group never repeats it. */
+const FINAL_EVENT_TEXT = 'The final event arrived; only the authoritative result decides the outcome.'
+
+interface WorkGroup {
+  readonly finalizing: boolean
+  readonly phase: RunState | null
+  readonly events: StudioEvent[]
+}
+
+/**
+ * Contiguous groups of the accepted events, in order. A phase-less event stays in the group it
+ * follows; a phase that recurs after another phase starts a new group. From the first finalization
+ * signal on, every event belongs to the one finalizing group. Appending events only extends the last
+ * group or adds groups, so earlier groups keep their identity.
+ */
+function groupWork(mode: StudioMode, activity: readonly StudioEvent[]): WorkGroup[] {
+  const groups: WorkGroup[] = []
+  let finalizing = false
+  for (const event of activity) {
+    finalizing ||= isFinalizingMarker(mode, event)
+    const last = groups.at(-1)
+    const joins = last !== undefined && (finalizing ? last.finalizing : !last.finalizing && (event.phase === null || event.phase === last.phase))
+    if (joins) last.events.push(event)
+    else groups.push({ finalizing, phase: event.phase, events: [event] })
+  }
+  return groups
+}
+
+function statusTextOf(mode: StudioMode, group: WorkGroup): string {
+  if (group.finalizing) return FINALIZING_TEXT[mode]
+  if (group.events.some((event) => event.type === 'run_finalized')) return FINAL_EVENT_TEXT
+  // The latest progress message of the group, else its phase start: observed engine copy only.
+  const message = group.events.findLast((event) => event.type === 'agent_message') ?? group.events.find((event) => event.type === 'phase_started')
+  if (message !== undefined) return message.message
+  const count = group.events.length
+  return `${count} observed ${count === 1 ? 'event' : 'events'}.`
+}
+
+function workCards(mode: StudioMode, runId: string, activity: readonly StudioEvent[], pending: boolean): WorkCardView[] {
+  const groups = groupWork(mode, activity)
+  return groups.map((group, index) => {
+    const first = group.events[0] as StudioEvent
+    const last = group.events.at(-1) as StudioEvent
+    return {
+      id: `${runId}:${first.sequence}`,
+      runId,
+      firstSequence: first.sequence,
+      lastSequence: last.sequence,
+      kind: group.finalizing ? 'finalizing' : 'phase',
+      phase: group.phase,
+      title: group.finalizing ? FINALIZING_TITLE : group.phase === null ? 'Activity' : WORK_TITLES[mode][group.phase],
+      statusText: statusTextOf(mode, group),
+      events: group.events,
+      isCurrent: pending && index === groups.length - 1,
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------------------
+// Run presentation and compact status
 // ---------------------------------------------------------------------------------------
 
 export type CompactStatusTone = 'neutral' | 'progress' | 'success' | 'danger' | 'warning'
+
+/**
+ * What execution was observed, in precedence order once a run exists: a valid bound final result,
+ * a result that could not be read (no verdict), observed finalization, the final event without an
+ * observed finalization signal (result pending), or an observed active phase. There is no
+ * finalizing execution phase; `finalizing` is shown only from the exact observed signal.
+ */
+export type ExecutionView = 'loading' | 'unavailable' | 'ready' | 'starting' | 'active' | 'finalizing' | 'result-pending' | 'result-unavailable' | 'final'
+
+export interface RunPresentation {
+  readonly mode: StudioMode
+  /** The run whose work is shown; null before the first run of this launch. */
+  readonly runId: string | null
+  readonly execution: ExecutionView
+  /** The existing accepted phase of the run; null when none was reported. Never invented. */
+  readonly phase: RunState | null
+  /** The current state in a few words; a verdict only from a valid bound final result. */
+  readonly label: string
+  readonly tone: CompactStatusTone
+  /** One sentence about the observed current work; null when there is nothing to add. */
+  readonly detail: string | null
+  /** The supported next action: wait, start, close or relaunch. Never cancel, retry or resume. */
+  readonly nextAction: string | null
+  /** The exact family verdict; null until a valid bound final result exists. */
+  readonly verdict: string | null
+  /** The existing live-activity state of the run; null before a run. */
+  readonly stream: StreamStatus | null
+  /** A live-activity problem, kept apart from execution and result status; null otherwise. */
+  readonly activityNotice: string | null
+  /** Every accepted event of the run, in readable contiguous groups. */
+  readonly cards: readonly WorkCardView[]
+}
 
 export interface CompactStatusView {
   /** The current state in a few words; a verdict only from a valid bound final result. */
@@ -111,14 +284,27 @@ const ACTIVITY_NOTICES: Readonly<Partial<Record<StreamStatus, string>>> = {
   rejected: 'Live activity stopped',
 }
 
-const NO_FINAL_STATUS = 'No final status'
+const ACTIVE_LABELS: Readonly<Record<StudioMode, string>> = {
+  legacy: 'Run in progress',
+  captured: 'Verification in progress',
+}
 
-const view = (label: string, tone: CompactStatusTone, hasResult = false, activityNotice: string | null = null): CompactStatusView => ({
-  label,
-  tone,
-  hasResult,
-  activityNotice,
-})
+const WAIT_FOR_RESULT: Readonly<Record<StudioMode, string>> = {
+  legacy: 'Wait for the result. Closing Studio interrupts the run.',
+  captured: 'Wait for the result. Closing Studio interrupts the verification.',
+}
+
+const WAIT_WITHOUT_ACTIVITY = 'Wait for the result here; if none arrives, close Studio and launch it again.'
+
+const NO_RESULT_NEXT: Readonly<Record<StudioMode, string>> = {
+  legacy: 'You can start another run, or close Studio.',
+  captured: 'Close Studio; to verify the candidate again, launch it again.',
+}
+
+const READY_NEXT: Readonly<Record<StudioMode, string>> = {
+  legacy: 'Review the request, then start the run.',
+  captured: 'Start the candidate verification when ready.',
+}
 
 const CAPTURED_TONES: Readonly<Record<CapturedOutcomeView['status'], CompactStatusTone>> = {
   passed: 'success',
@@ -127,31 +313,103 @@ const CAPTURED_TONES: Readonly<Record<CapturedOutcomeView['status'], CompactStat
   interrupted: 'warning',
 }
 
-/** The session states before any run of this launch: loading, unavailable, ready, or starting. */
-function sessionStatus(state: StudioState): CompactStatusView {
-  if (state.pendingStart !== null) return view('Starting', 'progress')
-  if (state.catalog.status === 'loading') return view('Loading', 'neutral')
-  if (state.catalog.status === 'failed' || state.selectedScenarioId === null) return view('Not ready', 'warning')
-  return view('Ready', 'neutral')
+interface SessionView {
+  readonly execution: ExecutionView
+  readonly label: string
+  readonly tone: CompactStatusTone
+  readonly detail: string | null
+  readonly nextAction: string | null
 }
 
-/** The compact current state of the session, from the authoritative Studio state only. */
-export function selectCompactStatus(state: StudioState): CompactStatusView {
-  if (selectStudioMode(state) === 'captured') {
-    const run = state.capturedRun
-    if (run === undefined) return sessionStatus(state)
-    if (run.status === 'running') return view('Verification in progress', 'progress', false, ACTIVITY_NOTICES[run.stream.status] ?? null)
-    if (run.status === 'failed') return view(NO_FINAL_STATUS, 'warning', false, ACTIVITY_NOTICES[run.stream.status] ?? null)
-    const outcome = selectCapturedOutcome(run)
-    return outcome === null ? view(NO_FINAL_STATUS, 'warning') : view(outcome.label, CAPTURED_TONES[outcome.status], true)
+/** The session states before a run, or before the next one: loading, unavailable, ready, or starting. */
+function sessionView(state: StudioState, mode: StudioMode): SessionView {
+  if (state.pendingStart !== null) return { execution: 'starting', label: 'Starting', tone: 'progress', detail: 'Waiting for the run to be admitted.', nextAction: null }
+  if (state.catalog.status === 'loading') return { execution: 'loading', label: 'Loading', tone: 'neutral', detail: 'Loading the prepared case.', nextAction: null }
+  if (state.catalog.status === 'failed' || state.selectedScenarioId === null) {
+    return { execution: 'unavailable', label: 'Not ready', tone: 'warning', detail: 'The prepared case is not available.', nextAction: 'Close Studio and launch it again.' }
   }
-  // A pending start supersedes the previous run, whose result is no longer the current one.
-  const { run } = state
-  if (state.pendingStart !== null || run === null) return sessionStatus(state)
-  if (run.status === 'running') return view('Run in progress', 'progress', false, ACTIVITY_NOTICES[run.stream.status] ?? null)
-  if (run.status === 'failed') return view(NO_FINAL_STATUS, 'warning', false, ACTIVITY_NOTICES[run.stream.status] ?? null)
-  return view(run.result.status, run.result.status === 'Verified Fix' ? 'success' : 'danger', true)
+  return { execution: 'ready', label: 'Ready', tone: 'neutral', detail: 'Nothing runs until you start.', nextAction: READY_NEXT[mode] }
 }
+
+const NO_RUN = { runId: null, phase: null, verdict: null, stream: null, activityNotice: null, cards: [] } as const
+
+type AnyRun = RunView | CapturedRunView
+
+/** The verdict and tone of a finalized run's bound result; null when no valid outcome exists. */
+function verdictOf(mode: StudioMode, run: AnyRun): { readonly verdict: string; readonly tone: CompactStatusTone } | null {
+  if (run.status !== 'finalized') return null
+  if (mode === 'captured') {
+    const outcome = selectCapturedOutcome(run as CapturedRunView)
+    return outcome === null ? null : { verdict: outcome.label, tone: CAPTURED_TONES[outcome.status] }
+  }
+  const { status } = (run as RunView & { readonly status: 'finalized' }).result
+  return { verdict: status, tone: status === 'Verified Fix' ? 'success' : 'danger' }
+}
+
+function runView(mode: StudioMode, run: AnyRun): RunPresentation {
+  const pending = run.status === 'running'
+  const cards = workCards(mode, run.runId, run.activity, pending)
+  const base = { mode, runId: run.runId, phase: run.phase, stream: run.stream.status, cards }
+  const decided = verdictOf(mode, run)
+  if (decided !== null) {
+    return { ...base, execution: 'final', label: decided.verdict, tone: decided.tone, detail: null, nextAction: null, verdict: decided.verdict, activityNotice: null }
+  }
+  const activityNotice = ACTIVITY_NOTICES[run.stream.status] ?? null
+  if (!pending) {
+    return {
+      ...base,
+      execution: 'result-unavailable',
+      label: 'No final status',
+      tone: 'warning',
+      detail: 'No valid final result could be read for this run.',
+      nextAction: NO_RESULT_NEXT[mode],
+      verdict: null,
+      activityNotice,
+    }
+  }
+  const nextAction = activityNotice === null ? WAIT_FOR_RESULT[mode] : WAIT_WITHOUT_ACTIVITY
+  const current = cards.at(-1)
+  const pendingView = { ...base, tone: 'progress', nextAction, verdict: null, activityNotice } as const
+  if (current?.kind === 'finalizing') {
+    const ended = run.stream.status === 'ended'
+    const detail = ended ? `${FINALIZING_TEXT[mode]} The final event arrived; waiting for the authoritative result.` : FINALIZING_TEXT[mode]
+    return { ...pendingView, execution: 'finalizing', label: 'Finalizing · verdict pending', detail }
+  }
+  if (run.activity.some((event) => event.type === 'run_finalized')) {
+    return { ...pendingView, execution: 'result-pending', label: 'Result pending', detail: FINAL_EVENT_TEXT }
+  }
+  const detail = current === undefined ? (activityNotice === null ? 'Waiting for live activity.' : 'No live activity was received.') : `${current.title}: ${current.statusText}`
+  return { ...pendingView, execution: 'active', label: ACTIVE_LABELS[mode], detail }
+}
+
+/**
+ * The presentation of the current session and its run, from the authoritative Studio state only.
+ * Precedence once a run exists: a valid bound final result, then a result that could not be read,
+ * then observed finalization, the final event, or the observed phase. A pending legacy start
+ * supersedes the previous run's result; that run's work stays inspectable until the next run starts.
+ */
+export function selectRunPresentation(state: StudioState): RunPresentation {
+  const mode = selectStudioMode(state)
+  const run: AnyRun | null = mode === 'captured' ? (state.capturedRun ?? null) : state.run
+  if (run === null) return { mode, ...NO_RUN, ...sessionView(state, mode) }
+  if (mode === 'legacy' && state.pendingStart !== null) {
+    const previous = runView(mode, run)
+    // The next run reported nothing yet; the previous run's phase and stream are not its own.
+    return { ...previous, ...sessionView(state, mode), phase: null, stream: null, verdict: null, activityNotice: null, cards: previous.cards.map((card) => ({ ...card, isCurrent: false })) }
+  }
+  return runView(mode, run)
+}
+
+/** The compact status outside a collapsed panel: the same run presentation, in a few words. */
+export const compactStatusOf = (presentation: RunPresentation): CompactStatusView => ({
+  label: presentation.label,
+  tone: presentation.tone,
+  hasResult: presentation.verdict !== null,
+  activityNotice: presentation.activityNotice,
+})
+
+/** The compact current state of the session, from the authoritative Studio state only. */
+export const selectCompactStatus = (state: StudioState): CompactStatusView => compactStatusOf(selectRunPresentation(state))
 
 // ---------------------------------------------------------------------------------------
 // Measurement hold
