@@ -175,6 +175,50 @@ const ROOT_CASES = [
   { name: 'body::after generated text', path: '/root-body-after', css: `body::after { content: "${REVIEW_SEEDS.bodyAfter}"; display: block; color: ${GREEN}; }`, reason: 'IMAGE_SENSITIVE_TEXT' },
 ] as const
 
+// S3 review round 2: every paintable surface is assessed before visibility or content shortcuts.
+const SURFACE_SEEDS = {
+  contentsText: 'sk-fpseedcontentstext6614abcd',
+  contentsBefore: 'sk-fpseedcontentsbefore7725abcd',
+  ghostBefore: 'sk-fpseedghostbefore8836abcd',
+  shadowText: 'sk-fpseedshadowtext9947abcd',
+  hidden: 'sk-fpseedhiddentext1058abcd',
+  mirror: 'Mirror-fpseedcontents5577',
+} as const
+
+const surfacePage = (css: string, body: string) => `<!doctype html><html><head><meta charset="utf-8"><style>
+  html, body { margin: 0; }
+  body { padding: 6px; background: white; font: 18px/1.2 sans-serif; color: rgb(0, 0, 200); }
+  ${css}
+</style></head><body><p>Surface page</p>${body}<button id="add">Add</button></body></html>`
+
+const SURFACE_CASES = [
+  { name: 'an empty-content ::before with a url background', path: '/surface-empty-pseudo', css: `#icon::before { content: ''; display: block; width: 200px; height: 40px; background: url('/private.svg') no-repeat; }`, body: '<div id="icon"></div>', reason: 'IMAGE_TEXT_UNVERIFIED' },
+  { name: 'a text ::after with a url background', path: '/surface-text-pseudo', css: `#label::after { content: 'Public label'; display: block; width: 240px; height: 26px; background: url('/private.svg') no-repeat; }`, body: '<div id="label"></div>', reason: 'IMAGE_TEXT_UNVERIFIED' },
+  { name: 'bare text in a display: contents wrapper', path: '/surface-contents-text', css: `.wrap { display: contents; color: ${GREEN}; }`, body: `<div class="wrap">${SURFACE_SEEDS.contentsText}</div>`, reason: 'IMAGE_SENSITIVE_TEXT' },
+  { name: '::before text on a display: contents wrapper', path: '/surface-contents-before', css: `.wrap { display: contents; } .wrap::before { content: "${SURFACE_SEEDS.contentsBefore}"; display: block; color: ${GREEN}; }`, body: '<div class="wrap"></div>', reason: 'IMAGE_SENSITIVE_TEXT' },
+  { name: 'a visible ::before inside a visibility: hidden element', path: '/surface-ghost-before', css: `.ghost { visibility: hidden; } .ghost::before { visibility: visible; content: "${SURFACE_SEEDS.ghostBefore}"; display: block; color: ${GREEN}; }`, body: '<div class="ghost">Hidden words</div>', reason: 'IMAGE_SENSITIVE_TEXT' },
+  { name: 'bare text directly in a shadow root', path: '/surface-shadow-text', css: `#host { display: block; color: ${GREEN}; }`, body: `<div id="host"></div><script>document.getElementById('host').attachShadow({ mode: 'open' }).append('${SURFACE_SEEDS.shadowText}')</script>`, reason: 'IMAGE_SENSITIVE_TEXT' },
+] as const
+
+const HIDDEN_SURFACES_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+  /* ${SURFACE_SEEDS.hidden} */
+  html, body { margin: 0; } body { padding: 6px; background: white; font: 18px/1.2 sans-serif; color: rgb(0, 0, 200); }
+  .wrap { display: contents; }
+</style><script>void '${SURFACE_SEEDS.hidden}'</script></head><body>
+  <p>Visible public words</p>
+  <div class="wrap">Public wrapped words<span style="display: none">${SURFACE_SEEDS.hidden}</span><span style="visibility: hidden">${SURFACE_SEEDS.hidden}</span></div>
+  <div style="opacity: 0"><span class="wrap">${SURFACE_SEEDS.hidden}</span></div>
+  <script>void '${SURFACE_SEEDS.hidden}'</script>
+  <button id="add">Add</button>
+</body></html>`
+
+const CONTENTS_REFLECT_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYLE}</head><body>
+  <input id="secret" type="password" aria-label="Secret">
+  <div id="echo-box" style="height: 22px"><div id="echo" style="display: contents; color: ${GREEN}"></div></div>
+  <button id="add">Add</button>
+  <script>document.getElementById('secret').addEventListener('input', (event) => { document.getElementById('echo').textContent = 'Hello ' + event.target.value })</script>
+</body></html>`
+
 const NETWORK_PATH_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYLE}</head><body>
   <button id="reset" onclick="fetch('/reset;token=${REVIEW_SEEDS.networkPath}').catch(() => undefined); fetch('/missing.json').catch(() => undefined)">Reset</button>
 </body></html>`
@@ -198,6 +242,9 @@ const PAGES: Record<string, string> = {
   '/network-path': NETWORK_PATH_HTML,
   '/oversize': OVERSIZE_HTML,
   ...Object.fromEntries(ROOT_CASES.map((rootCase) => [rootCase.path, rootPage(rootCase.css)])),
+  ...Object.fromEntries(SURFACE_CASES.map((surfaceCase) => [surfaceCase.path, surfacePage(surfaceCase.css, surfaceCase.body)])),
+  '/surface-hidden': HIDDEN_SURFACES_HTML,
+  '/surface-contents-reflect': CONTENTS_REFLECT_HTML,
 }
 
 function serve(host: string, port: number, route: (path: string) => { status: number; body: string; contentType?: string }): Promise<Server> {
@@ -716,4 +763,50 @@ test('S3 review: an unreadable oversized input value fails closed before its ref
   expect(sealed.capture.completeness?.reasons).toContain('PRIVACY_REGISTRY_LIMIT')
   for (const image of images(sealed)) expect(count(image.pixels, isGreen, echo).hits, `retained image ${image.id}`).toBe(0)
   expect(JSON.stringify(sealed.capture)).not.toContain(REVIEW_SEEDS.oversize)
+})
+
+for (const surfaceCase of SURFACE_CASES) {
+  test(`S3 review 2: ${surfaceCase.name} is assessed before PNG retention`, async () => {
+    const frame = await targetFrame()
+    const recorder = await start(frame, surfaceCase.path)
+    await recorder.session.imagesSettled()
+    const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+    expect(count(control, isGreen).hits, 'control: the surface paints in Chromium').toBeGreaterThan(8)
+    await pointer(recorder, () => frame.click('#add'))
+    await recorder.session.imagesSettled()
+
+    const sealed = await recorder.finish()
+    expect(sealed.capture.state).toBe('unsupported')
+    expect(sealed.capture.completeness?.reasons).toContain(surfaceCase.reason)
+    expect(images(sealed).length).toBe(0)
+  })
+}
+
+test('S3 review 2: genuinely hidden, script and style text stays outside the assessment', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/surface-hidden')
+  await pointer(recorder, () => frame.click('#add'))
+  await recorder.session.imagesSettled()
+  const sealed = await recorder.finish()
+
+  expect(sealed.capture.state).toBe('ready')
+  expect(images(sealed).length).toBeGreaterThanOrEqual(2)
+  expect(JSON.stringify(sealed.capture)).not.toContain(SURFACE_SEEDS.hidden)
+})
+
+test('S3 review 2: a refused value reflected as bare text in a display: contents wrapper never reaches retained pixels', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/surface-contents-reflect')
+  await pointer(recorder, () => frame.click('#secret'))
+  await page.keyboard.insertText(SURFACE_SEEDS.mirror)
+  const echo = await boxIn(frame, '#echo-box')
+  const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+  expect(count(control, isGreen, echo).hits, 'control: the wrapper text paints in Chromium').toBeGreaterThan(8)
+  await pointer(recorder, () => frame.click('#add'))
+  await recorder.session.imagesSettled()
+  const sealed = await recorder.finish()
+
+  expect(sealed.capture.completeness?.reasons).toContain('IMAGE_SENSITIVE_TEXT')
+  for (const image of images(sealed)) expect(count(image.pixels, isGreen, echo).hits, `retained image ${image.id}`).toBe(0)
+  expect(JSON.stringify(sealed.capture)).not.toContain(SURFACE_SEEDS.mirror)
 })

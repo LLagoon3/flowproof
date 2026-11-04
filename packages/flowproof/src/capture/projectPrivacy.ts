@@ -659,14 +659,35 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
         chunks.push(value)
         return true
       }
+      const view = doc.defaultView
+      const urlImage = (style: any): boolean => [style.backgroundImage, style.listStyleImage, style.borderImageSource].some((image) => /url\(/i.test(String(image)))
+      // Flat-tree parent: text and elements directly in a shadow root paint inside its host.
+      const parentOf = (node: any): any => node.parentElement ?? node.parentNode?.host ?? null
+      const painting = new Map<any, boolean>()
+      // Box visibility is not paint visibility: a display: contents wrapper generates no box yet
+      // its text and ::before/::after content still paint. Content of `element` cannot paint only
+      // without layout (a display: none subtree or skipped content) or under a transparent box.
+      const contentPaints = (element: any): boolean => {
+        const known = painting.get(element)
+        if (known !== undefined) return known
+        const style = view.getComputedStyle(element)
+        const parent = parentOf(element)
+        const boxed = style.display !== 'contents'
+        const result =
+          (!boxed || (Number(style.opacity) !== 0 && (!element.checkVisibility || element.checkVisibility()))) && (parent === null || contentPaints(parent))
+        painting.set(element, result)
+        return result
+      }
       const appendPseudo = (element: any, pseudo: string): boolean => {
         let style: any
         try {
-          style = doc.defaultView.getComputedStyle(element, pseudo)
+          style = view.getComputedStyle(element, pseudo)
         } catch {
           return false
         }
-        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return true
+        // Image surfaces are uninspectable whatever the generated text or its visibility says.
+        if (urlImage(style)) return false
+        if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0) return true
         const content = String(style.content || '')
         if (content === '' || content === 'none' || content === 'normal' || content === '""' || content === "''") return true
         const attributes = [...content.matchAll(/attr\(\s*([A-Za-z_][A-Za-z0-9_.:-]*)\s*(?:,[^)]*)?\)/gi)]
@@ -680,9 +701,10 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
         }
         return true
       }
-      const appendElement = (element: any): boolean => {
-        const style = doc.defaultView.getComputedStyle(element)
-        if ([style.backgroundImage, style.listStyleImage, style.borderImageSource].some((image) => /url\(/i.test(image))) return false
+      // The element's own box paints only when it has one and is visible; its generated content
+      // carries its own visibility and is assessed regardless.
+      const appendElement = (element: any, ownBoxPaints: boolean): boolean => {
+        if (ownBoxPaints && urlImage(view.getComputedStyle(element))) return false
         for (const pseudo of ['::before', '::after', '::marker']) if (!appendPseudo(element, pseudo)) return false
         return true
       }
@@ -695,21 +717,23 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
           if (node.nodeType === 1) {
             const element = node as any
             if (!roots.has(element)) {
-              if (element.closest(masked) || (element.checkVisibility && !element.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
-              if (!appendElement(element)) return false
+              if (element.closest(masked) || !contentPaints(element)) continue
+              const style = view.getComputedStyle(element)
+              if (!appendElement(element, style.display !== 'contents' && style.visibility === 'visible')) return false
             }
             if (element.shadowRoot && !visit(element.shadowRoot)) return false
             continue
           }
-          const parent = node.parentElement
-          if (!parent || parent.closest(masked) || (parent.checkVisibility && !parent.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
+          // Text inherits visibility from its parent; layout and opacity come from box ancestors.
+          const parent = parentOf(node)
+          if (!parent || parent.closest(masked) || !contentPaints(parent) || view.getComputedStyle(parent).visibility !== 'visible') continue
           const value = String(node.data)
           if (!append(value)) return false
         }
         return true
       }
       if (!doc.documentElement) return ''
-      for (const root of roots) if (!appendElement(root)) return null
+      for (const root of roots) if (!appendElement(root, true)) return null
       return visit(doc.documentElement) ? chunks.join('\n') : null
     },
     { selector, max: MAX_RENDERED_TEXT_CHARS },
