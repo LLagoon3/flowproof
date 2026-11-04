@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "fixture_id": "vite-task-board",
+  "category": "vite-static-v1",
+  "sample_directory": "task-board",
+  "files": {
+    ".gitignore": {
+      "sha256": "790e3169bc19b046fe55ba1da6d13b976c28363c8c00462a2195fe5faf260910",
+      "mode": "100644"
+    },
+    "index.html": {
+      "sha256": "8a0630e144d72bbf83ee44b503d76b8c96b709fefbd054ede72f30131b575c30",
+      "mode": "100644"
+    },
+    "package-lock.json": {
+      "sha256": "edff91106eeeda834c3380ff623e7f0847dd12082aaff210847fa888fffa132a",
+      "mode": "100644"
+    },
+    "package.json": {
+      "sha256": "a8d7751d389ac58ea12c547b6a7ff97ba345750ad2d9323fff33e5b513dc244d",
+      "mode": "100644"
+    },
+    "src/App.jsx": {
+      "sha256": "76b45d10fd4cd5b9ea72ba0ab2456f4b3c7d8ecbee1dd28d3893d16b51f577cf",
+      "mode": "100644"
+    },
+    "src/main.jsx": {
+      "sha256": "5d21850afb029ef4c9e8ae77b71fef5b55c206130d7f0a67040d7772147641bc",
+      "mode": "100644"
+    },
+    "src/tasks.js": {
+      "sha256": "ed70682dfbed78c0fb884e9a430cdb713101e833b322e36669e1dd9cfc62738f",
+      "mode": "100644"
+    },
+    "tests/tasks.test.mjs": {
+      "sha256": "a32ceb24bdf182e15458e302e962d826c642de9a3262014ca392b4f11f02b365",
+      "mode": "100644"
+    },
+    "vite.config.js": {
+      "sha256": "042749aabbeadcae938c8ccd8b3bb3f6801f391049d3cfcf3dc01e1b6b618b4d",
+      "mode": "100644"
+    }
+  },
+  "lock": {
+    "path": "package-lock.json",
+    "sha256": "edff91106eeeda834c3380ff623e7f0847dd12082aaff210847fa888fffa132a"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.5"
+  },
+  "project_check": {
+    "id": "sample-unit",
+    "argv": [
+      "node",
+      "--test",
+      "tests/tasks.test.mjs"
+    ]
+  },
+  "build": {
+    "argv": [
+      "node",
+      "/opt/flowproof/toolchain/node_modules/vite/bin/vite.js",
+      "build",
+      "--configLoader",
+      "native"
+    ],
+    "output_directory": "dist"
+  },
+  "entry_path": "/",
+  "git": {
+    "initial_branch": "main",
+    "author_name": "FlowProof Fixture",
+    "author_email": "fixture@flowproof.invalid",
+    "date": "2026-11-04T00:00:00+00:00",
+    "message": "Add synthetic task board sample",
+    "tree_oid": "a036e8970c808d6353b98ce215bea0cf73219cf0",
+    "commit_oid": "b09f068f7001b8530086dec95b1128d8fdb49286"
+  }
+}
