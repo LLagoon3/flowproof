@@ -8,8 +8,11 @@
 **Authorization**: The owner requested Tasks after the Plan report, then requested an explicit slice
 scope and parallel-ready breakdown. This revision changes scheduling documents only: no source edits,
 image provisioning, product test execution, model calls, push, PR, merge or deployment.
-All tasks below are unexecuted. Later implementation must be authorized for the listed delivery slice;
-its actual live acceptance requires available permitted credentials, fixtures and runtime resources.
+On 2026-11-04 the owner authorized local S1 implementation only (message 25437: start from slice 1
+following the workflow skill); this excludes push, PR, merge, deployment, model calls and S2+.
+S1 (T001–T009) is implemented locally and marked from its evidence in [verification.md](verification.md);
+T010–T055 are unexecuted. Each later slice must be authorized separately; actual live acceptance
+requires available permitted credentials, fixtures and runtime resources.
 
 **Tests**: Required acceptance coverage comes from the Spec's independent tests/SC-001–SC-010 and the
 Plan's explicit risk-based verification/TDD strategy. Write focused parser/authority/path/privacy/race
@@ -30,9 +33,9 @@ Story phases describe integration order, not a blanket barrier on independent mo
 **Purpose**: Prepare deterministic permitted project inputs, the offline dependency profile and an
 explicit live-test boundary. These are internal prerequisites, not a delivered user-project feature.
 
-- [ ] T001 [P] Create a permitted deterministic DOM-bug sample under `tests/fixtures/project-live/` and `tests/helpers/projectLiveRepository.ts` that materializes a clean independent Git repository outside FlowProof, with committed React/Vite source, lockfile and a project check; keep expected fixes out of production admission/model selection and record original tracked/untracked/ignored/index/ref snapshots.
-- [ ] T002 Build the operator-only offline toolchain preparation in `tools/runtime/project-vite.Dockerfile` and `tools/runtime/prepare-project-vite.mjs`, using T001's locked dependency set; record the actual inspected immutable image/dependency digests and required tool paths without fabricating hashes or installing/pulling during the selected-project flow. No provider credential enters the image.
-- [ ] T003 [P] Update `vitest.config.ts` and `package.json` to exclude `tests/integration/project-live-meta-smoke.test.ts` from every default project and expose an explicit `project-meta-smoke` project; prove default discovery cannot invoke it. Keep a later manual full-live runner outside default Vitest/Playwright discovery.
+- [X] T001 [P] Create a permitted deterministic DOM-bug sample under `tests/fixtures/project-live/` and `tests/helpers/projectLiveRepository.ts` that materializes a clean independent Git repository outside FlowProof, with committed React/Vite source, lockfile and a project check; keep expected fixes out of production admission/model selection and record original tracked/untracked/ignored/index/ref snapshots.
+- [X] T002 Build the operator-only offline toolchain preparation in `tools/runtime/project-vite.Dockerfile` and `tools/runtime/prepare-project-vite.mjs`, using T001's locked dependency set; record the actual inspected immutable image/dependency digests and required tool paths without fabricating hashes or installing/pulling during the selected-project flow. No provider credential enters the image.
+- [X] T003 [P] Update `vitest.config.ts` and `package.json` to exclude `tests/integration/project-live-meta-smoke.test.ts` from every default project and expose an explicit `project-meta-smoke` project; prove default discovery cannot invoke it. Keep a later manual full-live runner outside default Vitest/Playwright discovery.
 
 **Checkpoint I1a**: Sample and real operator image/dependency manifest are prepared; missing runtime
 resources are a blocker, not an excuse to use host builds or a mutable tag. No model call is needed.
@@ -42,12 +45,12 @@ resources are a blocker, not an excuse to use host builds or a mutable tag. No m
 **Purpose**: Establish strict data/authority boundaries, outside-checkout artifacts and a fail-closed
 lifecycle before user-story orchestration. No user story bypasses these foundations.
 
-- [ ] T004 [P] Write `tests/contract/project-contracts.test.ts` for closed project-live objects, host-generated UUIDs/SHA-256 identities and every entity/status/limit in `data-model.md`; reject extra keys, client filesystem authority, malformed/boundary values and wrong run/capture/baseline identity before side effects.
-- [ ] T005 Implement shared entity contracts in `packages/flowproof/src/project/contracts.ts`: ProjectContext/ExecutionConfiguration, DemonstrationCapture/InteractionObservation/SafeObservation, Interpretation/FrozenVerificationDefinition, ProviderInvocation/Candidate/ProjectRunResult. Preserve the exact enums and constraints in the Constraint Register below; legacy diagnosis/gate/result schemas retain their meanings. Depends on T004.
-- [ ] T006 [P] Write `tests/unit/project-store.test.ts` for an owner-only state root outside the selected checkout, no-follow path/digest/registered-ID reads, original zero-write behavior, private permissions, discarded-report removal and rejection of a state/temp root inside the selected repository.
-- [ ] T007 Implement `packages/flowproof/src/evidence/projectStore.ts` using T005/T006: sanitized staging, closed per-run registration and exact-byte hash verification, 0700 directories/0600 files where supported, outside-checkout persistence and safe partial-result retention. Never create `.flowproof` or change `.gitignore` in the selected repository.
-- [ ] T008 [P] Write `tests/unit/project-lifecycle.test.ts` for sticky cancellation, idempotent ownership cleanup, late model/build completion, cleanup/integrity overriding provisional pass, and automatic timers excluding demonstration/clarification/interpretation/result human waiting states.
-- [ ] T009 Add the typed lifecycle/ownership skeleton in `packages/flowproof/src/project/run.ts` and shared state helpers in `packages/flowproof/src/project/contracts.ts` after T005/T008; implement the declared run-state sequence and check statuses, with no authority to pass before all obligations/finalization. Phase-specific operations are connected in US1–US3, not replaced with fixture shortcuts.
+- [X] T004 [P] Write `tests/contract/project-contracts.test.ts` for closed project-live objects, host-generated UUIDs/SHA-256 identities and every entity/status/limit in `data-model.md`; reject extra keys, client filesystem authority, malformed/boundary values and wrong run/capture/baseline identity before side effects.
+- [X] T005 Implement shared entity contracts in `packages/flowproof/src/project/contracts.ts`: ProjectContext/ExecutionConfiguration, DemonstrationCapture/InteractionObservation/SafeObservation, Interpretation/FrozenVerificationDefinition, ProviderInvocation/Candidate/ProjectRunResult. Preserve the exact enums and constraints in the Constraint Register below; legacy diagnosis/gate/result schemas retain their meanings. Depends on T004.
+- [X] T006 [P] Write `tests/unit/project-store.test.ts` for an owner-only state root outside the selected checkout, no-follow path/digest/registered-ID reads, original zero-write behavior, private permissions, discarded-report removal and rejection of a state/temp root inside the selected repository.
+- [X] T007 Implement `packages/flowproof/src/evidence/projectStore.ts` using T005/T006: sanitized staging, closed per-run registration and exact-byte hash verification, 0700 directories/0600 files where supported, outside-checkout persistence and safe partial-result retention. Never create `.flowproof` or change `.gitignore` in the selected repository.
+- [X] T008 [P] Write `tests/unit/project-lifecycle.test.ts` for sticky cancellation, idempotent ownership cleanup, late model/build completion, cleanup/integrity overriding provisional pass, and automatic timers excluding demonstration/clarification/interpretation/result human waiting states.
+- [X] T009 Add the typed lifecycle/ownership skeleton in `packages/flowproof/src/project/run.ts` and shared state helpers in `packages/flowproof/src/project/contracts.ts` after T005/T008; implement the declared run-state sequence and check statuses, with no authority to pass before all obligations/finalization. Phase-specific operations are connected in US1–US3, not replaced with fixture shortcuts.
 
 **Checkpoint I1b**: Foundation tests pass; it remains impossible to request a fake project success or
 write artifacts into the original. These are internal commit milestones, not an onboarding-only release.
@@ -354,4 +357,5 @@ field, extra key, bound and illegal transition, not only the abbreviated labels 
   any critical/high/Constitution finding before implementation. This task generation is not an Analyze
   report and does not claim such findings were checked by that separate command.
 - No task is marked complete because it has been written. Every live gate, browser/runtime behavior,
-  privacy/integrity check and human observation stays open until supporting evidence exists. This revision changes scheduling artifacts only; implementation remains unstarted.
+  privacy/integrity check and human observation stays open until supporting evidence exists. Only S1
+(T001–T009) has been implemented; its evidence and remaining gaps are in [verification.md](verification.md).

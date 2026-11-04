@@ -1,6 +1,8 @@
 # Parallel PR Slice Dispatch: Spec 006
 
-**Status**: Scheduling correction requested by the owner on 2026-11-04. No implementation task has run.
+**Status**: Scheduling correction requested by the owner on 2026-11-04. The owner then authorized local
+S1 only; S1 (T001–T009) is implemented locally and unpublished ([verification.md](verification.md)). No
+S2–S7 task has run.
 **Supersedes**: The single delivery I6/T001–T055 and shared-checkout four-lane schedule in `3783a8a`.
 **Delivery**: Seven PR-sized slices from [tasks.md](tasks.md#delivery-slices), not one 55-task PR.
 **Feature acceptance**: Real project -> direct demonstration -> actual image/code AI analysis -> derived
