@@ -85,3 +85,29 @@ listeners, 6/6 under the runner-like `::1`-first resolver, and in the focused se
 43150–43159. Logs: ignored `.flowproof/task-logs/006-project-live-verification/s2-decoy/`. The full
 serial and full concurrent suites were not rerun here; hosted CI after publication must prove the
 whole check.
+
+## Parent independent aggregate verification after review corrections
+
+Tested implementation HEAD: `c06981111c6505ddb584736bc0124b63c152f6a0` (includes merged S3/main `76df76a`). The parent
+inspected the actual product and test corrections, not only worker summaries. Under the exact
+`flock -w 1800 /tmp/flowproof-spec006-heavy.lock` for the complete process and cleanup:
+
+- `pnpm typecheck` and `pnpm build`: passed.
+- Independent owned listeners held both `127.0.0.1:43152` and `:43153` while the complete target
+  security file passed 6/6; the parent closed both listeners afterward.
+- Runner-like IPv6-first `localhost` resolution: target security 6/6 passed.
+- Eight focused admission/preparation/patch/runtime/security/route/worktree/editing-capture
+  files using default file concurrency: 129/129 passed, no skips.
+- Actual headed project setup journeys: 2/2 passed (real target/offline prepared runtime).
+- Prescribed full V1-style serial default Vitest: 63/63 files, 2028 passed,
+  5 existing opt-in Chromium replay skips, zero failures. Duration: 319.12s (tests 97%, import 3%).
+- All host container IDs before/after are identical; no runtime preparation, pull or image
+  rebuild was needed. Detailed logs and summary: ignored `pr30-parent-r3/` task-log directory.
+
+Historical local failures remain separate: the earlier full default-concurrent run at `fe4d26c`
+had 13 legacy timeouts and one `ENOTEMPTY` cleanup failure. All 14 passed in the earlier serial
+run, which instead exposed the now-corrected fixed-decoy-port startup defect. This new serial
+success is not a claim that the entire concurrent suite was rerun locally or that every historical
+failure has a proven shared cause. Exact published-HEAD hosted CI and completed review are required
+separate gates before merge. This remains S2 module verification, not live-model/full-feature or
+owner acceptance; no provider call or deployment occurred.
