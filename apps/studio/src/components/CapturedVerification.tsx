@@ -1,14 +1,17 @@
 import { useId } from 'react'
 
 import { isValidRequestText, studioError } from '../api.js'
-import type { CapturedCheckId, CapturedCheckStatus, CapturedVerificationResult, RunState, StudioError, StudioEventType } from '../api.js'
+import type { CapturedCheckId, CapturedCheckStatus, CapturedVerificationResult, StudioError, StudioEvent, StudioEventType } from '../api.js'
+import type { RunPresentation } from '../presentation.js'
 import { canStartRun, selectCapturedCheckSummary, selectCapturedChecks, selectCapturedCleanup, selectCapturedIdentity, selectCapturedOutcome } from '../state.js'
-import type { CapturedRunView, StreamStatus, StudioState } from '../state.js'
+import type { CapturedRunView, StudioState } from '../state.js'
+import { WorkTimeline } from './WorkTimeline.js'
+import type { ActivityWarning } from './WorkTimeline.js'
 
 // The candidate-verification surface of a host-fixed captured verification Studio. It takes the
 // place of the Meta chat and the nine legacy gates in the work panel: one action, the panel's entry,
-// starts this launch's one verification run with the case's committed goal, the current stage and
-// the bounded activity come from accepted live events, and the ten check rows, the final status,
+// starts this launch's one verification run with the case's committed goal, the observed work
+// shows every accepted live event (`WorkTimeline`), and the ten check rows, the final status,
 // the short candidate digest and baseline, the coverage note, and the cleanup and original-integrity
 // facts come only from the strict result bound to this run. Every value is rendered as text, errors
 // show only the client-authored message for their stable code, and the surface never claims more
@@ -18,6 +21,8 @@ import type { CapturedRunView, StreamStatus, StudioState } from '../state.js'
 export interface CapturedVerificationProps {
   /** The Studio state from `studioReducer`; the surface never changes it. */
   readonly state: StudioState
+  /** The run presentation of that state, the same one the collapsed workspace status shows. */
+  readonly presentation: RunPresentation
 }
 
 export interface CapturedStartProps {
@@ -27,18 +32,6 @@ export interface CapturedStartProps {
   readonly requestText: string
   /** Called only while this launch's one run may start. */
   readonly onStart: (requestText: string) => void
-}
-
-/** The captured flow's stages; the legacy-only phases are refused by the reducer before display. */
-const STAGE_LABELS: Readonly<Record<RunState, string>> = {
-  initialized: 'Admitted the candidate; preparing the recorded baseline',
-  reproducing: 'Reproducing the prepared defect on the recorded baseline',
-  failure_captured: 'Baseline failure captured',
-  applying: 'Preparing the candidate: application, build, and functional check',
-  replaying: 'Replaying the prepared scenario on the candidate build',
-  finalized: 'Finalized',
-  diagnosing: 'Not part of candidate verification',
-  candidate_validated: 'Not part of candidate verification',
 }
 
 export const CAPTURED_CHECK_LABELS: Readonly<Record<CapturedCheckId, string>> = {
@@ -80,17 +73,6 @@ const EVENT_LABELS: Readonly<Record<StudioEventType, string>> = {
   run_finalized: 'Finalized',
   agent_message: 'Activity',
 }
-
-const STREAM_LABELS: Readonly<Record<StreamStatus, string>> = {
-  connecting: 'Connecting to live activity',
-  open: 'Live activity connected',
-  ended: 'Live activity ended',
-  disconnected: 'Live activity disconnected',
-  rejected: 'Live activity stopped',
-}
-
-/** Only the most recent activity is listed; the stream itself is bounded by the engine. */
-const MAX_LISTED_ACTIVITY = 40
 
 const NO_MODEL_STATEMENT = 'No model diagnosis or citations were evaluated in this verification.'
 
@@ -180,66 +162,40 @@ function RunStatus({ run }: { readonly run: CapturedRunView | undefined }) {
     <section className="agent-panel__section captured-status" aria-label="Verification status">
       <h3 className="agent-panel__heading">Status</h3>
       <FinalStatus run={run} />
-      {run !== undefined && (
+      {identity !== null && (
         <dl className="captured-status__details">
           <div className="captured-status__row">
-            <dt>Stage</dt>
-            <dd data-phase={run.phase ?? 'none'}>{run.phase === null ? 'Not reported yet' : STAGE_LABELS[run.phase]}</dd>
+            <dt>Candidate patch SHA-256</dt>
+            <dd>
+              <code data-candidate-digest={identity.candidateDigest}>{identity.candidateDigestShort}</code>
+            </dd>
           </div>
           <div className="captured-status__row">
-            <dt>Live activity</dt>
-            <dd data-stream={run.stream.status}>{STREAM_LABELS[run.stream.status]}</dd>
+            <dt>Recorded baseline</dt>
+            <dd>
+              <code data-baseline-commit={identity.baselineCommit}>{identity.baselineCommitShort}</code>
+            </dd>
           </div>
-          {identity !== null && (
-            <>
-              <div className="captured-status__row">
-                <dt>Candidate patch SHA-256</dt>
-                <dd>
-                  <code data-candidate-digest={identity.candidateDigest}>{identity.candidateDigestShort}</code>
-                </dd>
-              </div>
-              <div className="captured-status__row">
-                <dt>Recorded baseline</dt>
-                <dd>
-                  <code data-baseline-commit={identity.baselineCommit}>{identity.baselineCommitShort}</code>
-                </dd>
-              </div>
-            </>
-          )}
         </dl>
       )}
       {identity?.coverageNote != null && <p className="captured-status__coverage">{identity.coverageNote}</p>}
       <p className="captured-status__scope">{NO_MODEL_STATEMENT}</p>
-      {run !== undefined && run.stream.error !== null && <ErrorNotice error={run.stream.error} />}
     </section>
   )
 }
 
-function ActivityLog({ run }: { readonly run: CapturedRunView | undefined }) {
-  const activity = (run?.activity ?? []).slice(-MAX_LISTED_ACTIVITY)
-  return (
-    <section className="agent-panel__section agent-activity" aria-label="Verification activity">
-      <h3 className="agent-panel__heading">Activity</h3>
-      {activity.length === 0 ? (
-        <p className="agent-panel__empty">{run === undefined ? 'No activity yet.' : 'Waiting for live activity.'}</p>
-      ) : (
-        // Rendered in the accepted order; missed events are neither inferred nor reordered.
-        <div className="agent-activity__log" role="log" aria-label="Ordered verification activity">
-          <ol className="agent-activity__list">
-            {activity.map((event) => (
-              <li key={event.event_id} className="agent-activity__item" data-type={event.type} data-phase={event.phase ?? 'none'}>
-                <p className="agent-activity__meta">
-                  <span className="agent-activity__sequence">#{event.sequence}</span> <span className="agent-activity__type">{EVENT_LABELS[event.type]}</span>
-                </p>
-                <p className="agent-activity__message">{event.message}</p>
-                {event.evidence_ids.length > 0 && <p className="agent-activity__detail">{event.evidence_ids.length} Evidence IDs announced.</p>}
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-    </section>
-  )
+const eventLabel = (event: StudioEvent): string => EVENT_LABELS[event.type]
+
+/** A raw captured event's announced Evidence IDs are counted; their phase manifests bind them. */
+function eventDetail(event: StudioEvent) {
+  return event.evidence_ids.length > 0 ? <p className="agent-activity__detail">{event.evidence_ids.length} Evidence IDs announced.</p> : null
+}
+
+/** The client-authored message of a pending run's live-activity problem; text carried by the error is never shown. */
+function activityWarning(run: CapturedRunView | undefined): ActivityWarning | null {
+  if (run === undefined || run.stream.error === null) return null
+  const safe = safeError(run.stream.error)
+  return { code: safe.code, message: safe.message }
 }
 
 function CheckTable({ run }: { readonly run: CapturedRunView | undefined }) {
@@ -322,13 +278,13 @@ function CleanupFacts({ run }: { readonly run: CapturedRunView | undefined }) {
   )
 }
 
-/** The candidate-verification stage, activity, checks, cleanup facts, and final status. */
-export function CapturedVerification({ state }: CapturedVerificationProps) {
+/** The candidate-verification final status, observed work, checks and cleanup facts. */
+export function CapturedVerification({ state, presentation }: CapturedVerificationProps) {
   const run = state.capturedRun
   return (
     <div className="captured" data-run-id={run?.runId ?? 'none'}>
       <RunStatus run={run} />
-      <ActivityLog run={run} />
+      <WorkTimeline presentation={presentation} eventLabel={eventLabel} eventDetail={eventDetail} activityWarning={activityWarning(run)} />
       <CheckTable run={run} />
       <CleanupFacts run={run} />
     </div>

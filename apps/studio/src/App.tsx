@@ -8,7 +8,7 @@ import { CapturedStart } from './components/CapturedVerification.js'
 import { ProofTrail } from './components/ProofTrail.js'
 import { TargetPane } from './components/TargetPane.js'
 import { WorkspaceShell } from './components/WorkspaceShell.js'
-import { selectCompactStatus, selectMeasuringTarget } from './presentation.js'
+import { compactStatusOf, selectMeasuringTarget, selectRunPresentation } from './presentation.js'
 import { canStartRun, initialStudioState, runEventHandlers, selectCapturedEvidence, selectCapturedTarget, selectStudioMode, studioReducer } from './state.js'
 import type { StudioState } from './state.js'
 import type { CapturedPaneLabel } from './components/TargetPane.js'
@@ -194,6 +194,8 @@ export function App({ client: providedClient }: AppProps) {
   // The finalized captured run's evidence replaces the released target; kept stable for the memoized pane.
   const completedEvidence = useMemo(() => selectCapturedEvidence(state.capturedRun), [state.capturedRun])
   const mode = selectStudioMode(state)
+  // One run presentation for the panel's observed work and the collapsed workspace status.
+  const presentation = selectRunPresentation(state)
 
   return (
     <div className="studio">
@@ -203,12 +205,12 @@ export function App({ client: providedClient }: AppProps) {
         </h1>
       </header>
       <WorkspaceShell
-        status={selectCompactStatus(state)}
+        status={compactStatusOf(presentation)}
         holdLayout={selectMeasuringTarget(state)}
         context={mode === 'captured' ? <CapturedContext state={state} /> : <CasePicker state={state} onSelect={selectScenario} />}
         work={
           <>
-            <AgentPanel state={state} />
+            <AgentPanel state={state} presentation={presentation} />
             <ProofTrail run={state.run} client={client} mode={mode} />
           </>
         }

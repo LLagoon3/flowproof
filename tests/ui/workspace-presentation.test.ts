@@ -654,6 +654,14 @@ describe('Work presentation: observed work in ordered contiguous groups', () => 
     expect(decided.cards.some((card) => card.isCurrent)).toBe(false)
   })
 
+  it('names the current observed work once in the summary detail, without a verdict', () => {
+    const applying = events([{ type: 'phase_started', phase: 'applying', message: 'Applying the candidate in the isolated worktree.' }], LEGACY_RUN_ID)
+    expect(selectRunPresentation(reduce([...LEGACY_RUNNING, ...eventActions(applying, LEGACY_RUN_ID)])).detail).toBe('Applying the candidate in the isolated worktree.')
+    const preparing = selectRunPresentation(reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 5), CAPTURED_RUN_ID), CAPTURED_RUN_ID)]))
+    expect(preparing.detail).toBe('Preparing the candidate: Event 5.')
+    expect(presentsNoVerdict(preparing)).toBe(true)
+  })
+
   it('reports the existing raw phase only: none before any event, then the accepted run phase', () => {
     const none = selectRunPresentation(reduce(LEGACY_RUNNING))
     expect(none).toMatchObject({ execution: 'active', phase: null, verdict: null, cards: [] })
@@ -887,5 +895,24 @@ describe('Compact status: the same run presentation outside the collapsed panel'
     expect(selectCompactStatus(lost)).toEqual({ label: FINALIZING, tone: 'progress', hasResult: false, activityNotice: 'Live activity disconnected' })
     expect(selectCompactStatus(reduce([capturedResult(PASSED)], ended))).toEqual({ label: CAPTURED_STATUS_LABELS.passed, tone: 'success', hasResult: true, activityNotice: null })
     expect(selectCompactStatus(reduce([capturedResult({ ...PASSED, run_id: OTHER_RUN_ID })], ended))).toEqual({ label: 'No final status', tone: 'warning', hasResult: false, activityNotice: null })
+  })
+})
+
+describe('Work timeline component boundary', () => {
+  it('reaches only React and the presentation types: no client, reducer, storage, network or inline style', () => {
+    const timeline = new URL('../../apps/studio/src/components/WorkTimeline.tsx', import.meta.url)
+    expect(existsSync(timeline)).toBe(true)
+    const source = readFileSync(timeline, 'utf8')
+    const runtime = [...source.matchAll(/^import\s+(?!type\b)[^'"]*from\s+'([^']+)'/gm)].map((match) => match[1]).sort()
+    expect(runtime).toEqual(['react'])
+    expect(source).not.toMatch(/\b(fetch|EventSource|createStudioClient|startRun|pollResult|openRunEvents|studioReducer|localStorage|sessionStorage|dangerouslySetInnerHTML)\b/)
+    expect(source).not.toMatch(/\bstyle\s*=|\.style\b/)
+    // The whole history stays rendered: no slice of the latest events.
+    expect(source).not.toMatch(/\.slice\(\s*-/)
+  })
+
+  it('removes the captured panel limit on listed activity', () => {
+    const captured = readFileSync(new URL('../../apps/studio/src/components/CapturedVerification.tsx', import.meta.url), 'utf8')
+    expect(captured).not.toMatch(/MAX_LISTED_ACTIVITY|\.slice\(\s*-/)
   })
 })

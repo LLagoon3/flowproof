@@ -378,8 +378,13 @@ function runView(mode: StudioMode, run: AnyRun): RunPresentation {
   if (run.activity.some((event) => event.type === 'run_finalized')) {
     return { ...pendingView, execution: 'result-pending', label: 'Result pending', detail: FINAL_EVENT_TEXT }
   }
-  const detail = current === undefined ? (activityNotice === null ? 'Waiting for live activity.' : 'No live activity was received.') : `${current.title}: ${current.statusText}`
+  const detail = current === undefined ? (activityNotice === null ? 'Waiting for live activity.' : 'No live activity was received.') : currentWorkText(current)
   return { ...pendingView, execution: 'active', label: ACTIVE_LABELS[mode], detail }
+}
+
+/** The current group's title and observed text, naming the work once when the text already starts with it. */
+function currentWorkText(card: WorkCardView): string {
+  return card.statusText.toLowerCase().startsWith(card.title.toLowerCase()) ? card.statusText : `${card.title}: ${card.statusText}`
 }
 
 /**
