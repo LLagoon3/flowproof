@@ -1,13 +1,16 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { expect, request as playwrightRequest, test } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Frame, Locator, Page } from '@playwright/test'
 
 import { admitProject } from '../../packages/flowproof/src/project/admission.js'
 import type { AdmittedProject } from '../../packages/flowproof/src/project/admission.js'
 import { admissionProfileOf, readProjectConfigFile, readRuntimeManifest } from '../../packages/flowproof/src/project/profile.js'
 import type { ProjectSettings } from '../../packages/flowproof/src/project/profile.js'
+import { PROJECT_META_ENDPOINT } from '../../packages/flowproof/src/model/projectClient.js'
 import type { ProjectModelFake } from '../../packages/flowproof/src/model/projectClient.js'
 import { startProjectStudio } from '../../packages/flowproof/src/studio/launch.js'
 import type { StudioInstance } from '../../packages/flowproof/src/studio/launch.js'
@@ -200,6 +203,193 @@ test('records real target actions, seals an immutable report, discards it, and r
     expect(browserModelRoutes).toEqual([`/api/project/captures/${captureId}/analyze`])
     expect(foreignRequests.filter((origin) => origin !== targetOrigin)).toEqual([])
     expect(changedSnapshotFacets(before, await snapshotOriginalProject(repository.root))).toEqual([])
+  } finally {
+    await instance?.close()
+    await rm(config.root, { recursive: true, force: true })
+    expect(await containersWithLabel(RUNTIME_LABEL)).toEqual(containersBefore)
+    expect(changedSnapshotFacets(before, await snapshotOriginalProject(repository.root))).toEqual([])
+    await repository.remove()
+  }
+})
+
+// T026 (S6 unit A4b1): the serialized report itself. A test-owned synthetic extension is committed
+// only into the temporary permitted repository (never the shared fixture, lock or profile) before
+// admission, adding a safe text field, a scroll container, an in-document pushState control and a
+// same-origin link; the sample's original defect and dependencies are untouched. The report is
+// observed only after an explicit Analyze, as the bounded request reaching the labelled
+// `test_transport` seam with a fixed synthetic key (never a real credential); the seam then fails.
+
+const execFileAsync = promisify(execFile)
+const SYNTHETIC_KEY = 'flowproof-synthetic-test-key-a4b1'
+
+async function commitRecordingSurfaces(root: string): Promise<void> {
+  const file = path.join(root, 'src/App.jsx')
+  const original = await readFile(file, 'utf8')
+  const anchorState = "  const [filter, setFilter] = useState('all')\n"
+  const anchorSummary = '      <p data-testid="task-summary">'
+  if (!original.includes(anchorState) || !original.includes(anchorSummary)) throw new Error('synthetic extension anchors are missing')
+  const surfaces = [
+    '      <label>',
+    "        Search tasks{' '}",
+    '        <input data-testid="task-search" type="text" value={query} onChange={(event) => setQuery(event.target.value)} />',
+    '      </label>',
+    "      <button type=\"button\" data-testid=\"show-archive\" onClick={() => window.history.pushState(null, '', '/archive')}>",
+    '        Archive view',
+    '      </button>',
+    "      <div data-testid=\"task-scroll\" style={{ height: '60px', overflowY: 'auto' }}>",
+    "        <div style={{ height: '900px' }}>Task notes</div>",
+    '      </div>',
+    '      <a data-testid="details-link" href="/index.html">',
+    '        Details',
+    '      </a>',
+    '',
+  ].join('\n')
+  await writeFile(file, original.replace(anchorState, `${anchorState}  const [query, setQuery] = useState('')\n`).replace(anchorSummary, `${surfaces}${anchorSummary}`))
+  await execFileAsync('git', ['-C', root, 'add', 'src/App.jsx'])
+  await execFileAsync('git', ['-C', root, '-c', 'user.name=FlowProof Test', '-c', 'user.email=test@flowproof.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'test: add synthetic recording surfaces'])
+}
+
+/** Waits until a user scroll has fully settled, then returns the container's final offset. */
+async function settledScrollTop(locator: Locator): Promise<number> {
+  let previous = -1
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const now = await locator.evaluate((node) => (node as HTMLElement).scrollTop)
+    if (now === previous && now > 0) return now
+    previous = now
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+  throw new Error('the scroll container did not settle')
+}
+
+function reportActions(body: string): Record<string, unknown>[] {
+  const request = JSON.parse(body) as { input?: { content?: { type?: string; text?: string }[] }[] }
+  for (const block of request.input?.[0]?.content ?? []) {
+    if (block.type !== 'input_text' || typeof block.text !== 'string' || !block.text.includes('"actions"')) continue
+    const context = JSON.parse(block.text.slice(block.text.indexOf('{'))) as { actions?: unknown }
+    if (Array.isArray(context.actions)) return context.actions as Record<string, unknown>[]
+  }
+  throw new Error('the analysis request carried no action context')
+}
+
+const testIds = (value: unknown): string[] => [...JSON.stringify(value ?? null).matchAll(/"kind":"test-id","value":"([A-Za-z0-9_.:-]+)"/g)].map((match) => match[1]!)
+
+test('serializes real fill, select, coalesced scroll and same-origin navigation in order and epoch, flushing at navigation and Finish', async () => {
+  const repository = await materializeProjectLiveRepository()
+  await commitRecordingSurfaces(repository.root)
+  const before = await snapshotOriginalProject(repository.root)
+  const config = await settingsFromFile()
+  const profile = await readRuntimeManifest(runtimeManifestPath())
+  const project = await admittedProject(repository)
+  const containersBefore = await containersWithLabel(RUNTIME_LABEL)
+  const exchanges: { readonly url: string; readonly body: string }[] = []
+  const modelFake: ProjectModelFake = Object.freeze({
+    label: 'test_transport' as const,
+    fetch: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      exchanges.push({ url: String(input instanceof Request ? input.url : input), body: typeof init?.body === 'string' ? init.body : '' })
+      throw new Error('test_transport: deliberate failure after observing the bounded request')
+    },
+  })
+  let instance: StudioInstance | null = null
+
+  try {
+    instance = await startProjectStudio({
+      repoRoot: process.cwd(),
+      project,
+      profile,
+      initialSettings: config.settings,
+      modelConfigured: true,
+      modelEnv: Object.freeze({ MODEL_API_KEY: SYNTHETIC_KEY }),
+      modelFake,
+    })
+    const page = instance.page
+    await page.getByRole('checkbox', { name: /I reviewed the committed project identity/ }).check()
+    await page.getByTestId('confirm-project-settings').click()
+    await expect(page.getByTestId('project-target')).toBeVisible({ timeout: 240_000 })
+    await expect(page.getByText('sample-unit: passed')).toBeVisible()
+    const target = page.frameLocator('[data-testid="project-target"]')
+    await expect(target.getByTestId('task-search')).toBeVisible()
+    const targetFrame = (): Frame => {
+      const frame = page.frames().find((candidate) => candidate.parentFrame() === page.mainFrame())
+      if (frame === undefined) throw new Error('target frame missing')
+      return frame
+    }
+    const pathOf = (): string => new URL(targetFrame().url()).pathname
+
+    const context = await api(page, 'GET', '/api/project/context')
+    const configurationId = (context.body.configuration as Record<string, unknown>).configuration_id as string
+    const outputSha = (context.body.preparation as Record<string, unknown>).output_sha256 as string
+    const started = await api(page, 'POST', '/api/project/captures', { configuration_id: configurationId, output_sha256: outputSha })
+    expect(started.status).toBe(200)
+    const runId = started.body.run_id as string
+    const captureId = started.body.capture_id as string
+    await expect(target.getByTestId('task-search')).toBeVisible()
+    expect(pathOf()).toBe('/')
+
+    // Epoch of the entry document.
+    const search = target.getByTestId('task-search')
+    const scroller = target.getByTestId('task-scroll')
+    const filter = target.getByTestId('task-filter')
+    await search.fill('milk')
+    await scroller.hover()
+    for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 120)
+    const firstScroll = await settledScrollTop(scroller)
+    const option = await filter.locator('option').nth(1).evaluate((node) => ({ value: (node as HTMLOptionElement).value, label: (node.textContent ?? '').trim() }))
+    await filter.selectOption(option.value)
+    await page.mouse.click(4, 4) // Studio document, outside the admitted frame.
+    await target.getByTestId('show-archive').click()
+    await expect.poll(pathOf).toBe('/archive')
+    await scroller.hover()
+    for (let step = 0; step < 2; step += 1) await page.mouse.wheel(0, 120)
+    const secondScroll = await settledScrollTop(scroller)
+    expect(secondScroll).toBeGreaterThan(firstScroll)
+    await targetFrame().evaluate(() => window.history.back()) // history traversal with a scroll still pending
+    await expect.poll(pathOf).toBe('/')
+    await target.getByTestId('details-link').click()
+    await expect.poll(pathOf).toBe('/index.html')
+
+    // A new document: the next epoch, then pending input drained only by Finish.
+    await expect(target.getByTestId('task-search')).toBeVisible()
+    await target.getByTestId('task-search').fill('eggs')
+    await target.getByTestId('task-scroll').hover()
+    await page.mouse.wheel(0, 120)
+    const lastScroll = await settledScrollTop(target.getByTestId('task-scroll'))
+
+    const finished = await api(page, 'POST', `/api/project/captures/${captureId}/finish`, {})
+    expect(finished.status).toBe(200)
+    expect(finished.body).toMatchObject({ run_id: runId, capture_id: captureId, state: 'ready' })
+    expect(exchanges).toEqual([])
+
+    const analyzed = await api(page, 'POST', `/api/project/captures/${captureId}/analyze`, { submit: true })
+    expect(analyzed.status).toBe(502)
+    expect(String(codeOf(analyzed))).toMatch(/^PROVIDER_/)
+    expect(exchanges.map((exchange) => exchange.url)).toEqual([PROJECT_META_ENDPOINT])
+    const body = exchanges[0]!.body
+    expect(body.includes(SYNTHETIC_KEY)).toBe(false)
+    const actions = reportActions(body)
+    const epoch0 = actions[0]!.document_epoch as number
+    const shape = actions.map((entry) => {
+      const action = entry.action as Record<string, unknown>
+      return [(entry.document_epoch as number) - epoch0, action.type, action.type === 'navigate' ? action.path : testIds(action)[0] ?? null]
+    })
+    expect(shape).toEqual([
+      [0, 'fill', 'task-search'],
+      [0, 'scroll', 'task-scroll'],
+      [0, 'select', 'task-filter'],
+      [0, 'click', 'show-archive'],
+      [0, 'navigate', '/archive'],
+      [0, 'scroll', 'task-scroll'],
+      [0, 'navigate', '/'],
+      [0, 'click', 'details-link'],
+      [1, 'navigate', '/index.html'],
+      [1, 'fill', 'task-search'],
+      [1, 'scroll', 'task-scroll'],
+    ])
+    expect(actions.map((entry) => entry.sequence)).toEqual(actions.map((_, index) => index + 1))
+    const action = (index: number): Record<string, unknown> => actions[index]!.action as Record<string, unknown>
+    expect(action(0).value).toEqual({ kind: 'safe', text: 'milk' })
+    expect(action(9).value).toEqual({ kind: 'safe', text: 'eggs' })
+    expect([action(1).y, action(5).y, action(10).y]).toEqual([firstScroll, secondScroll, lastScroll])
+    expect([option.value, option.label]).toContain((action(2).value as Record<string, unknown>).option)
   } finally {
     await instance?.close()
     await rm(config.root, { recursive: true, force: true })
