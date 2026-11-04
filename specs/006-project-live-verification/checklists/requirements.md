@@ -59,8 +59,9 @@
   assumption. “A manually written step sequence, executable test, or formal assertion MUST NOT
   be required” (FR-004); capture and AI interpretation are required in FR-018/FR-019. AI can analyze
   the report before baseline replay, but independent reproduction and frozen checks precede editing.
-- The owner agreed to the direction and requested Specify, not Plan or implementation. Detailed
-  defaults and outcomes are ready for owner review/Clarify; Plan and Tasks have not been created.
+- Following the capture correction, the owner requested the next stage on 2026-11-04, authorizing
+  Plan. Remaining proposed defaults are explicit planning boundaries rather than blanket product
+  approval. Tasks and implementation are not authorized by that request.
 
 ### Acceptance Coverage
 
@@ -97,6 +98,7 @@ Story/scenario references below refer to the numbered acceptance scenarios in [t
   No optional auto-commit hook was executed; a reviewed manual Conventional Commit records this work.
 - Only this specification and quality checklist are included. Existing Spec 005 acceptance edits
   in a separate local worktree are not incorporated. No source code, Plan, Tasks, model calls,
-  push, PR, merge, or deployment is part of this Specify execution.
+  push, PR, merge, or deployment was part of the Specify execution. Plan artifacts follow separately.
 - The owner's later correction is recorded in the specification's Clarifications section and a
-  separate local documentation commit; it does not approve the remaining proposed defaults or Plan.
+  separate local documentation commit. The subsequent next-stage request authorizes Plan, not
+  implementation or unrestricted expansion of the remaining proposed defaults.

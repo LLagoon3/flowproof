@@ -4,8 +4,9 @@
 
 **Created**: 2026-11-04
 
-**Status**: Draft. The owner agreed to the product direction and requested Specify.
-Review of this specification's detailed scope, assumptions, and acceptance outcomes precedes Plan.
+**Status**: Planning authorized on 2026-11-04 after the owner clarified and confirmed the
+user-demonstration flow. Remaining proposed defaults are carried as explicit Plan boundaries,
+not blanket approval of implementation or additional product scope.
 No implementation, live model execution, publication, or deployment is authorized by this document.
 
 **Input**: Let a developer identify the local project that has a problem, configure its execution,
@@ -25,6 +26,8 @@ slice rather than delivering another prepared-candidate-only demonstration. Depl
 - Interaction/evidence capture and AI-assisted reproduction/check derivation are required in this
   feature, not deferred enhancements. A description or expected result can supplement the capture;
   the user is not required to author a step list, executable test, or formal assertion.
+- After this correction, the owner requested the next stage on 2026-11-04; Plan is authorized.
+  Tasks, implementation, model execution, publication, and deployment are not authorized by that request.
 - Capture starts/ends under user control. AI analysis may precede automatic baseline reproduction;
   editing still requires an established defect and frozen verification obligations. An ambiguous
   intended outcome is clarified with the user rather than invented by the model.
