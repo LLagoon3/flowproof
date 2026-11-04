@@ -41,3 +41,33 @@ The synthetic selected-project snapshots reported no source/index/ref/ignored-st
 ## Skips and stop boundary
 
 No provider/model calls, V2 live-meta smoke, S3/S4/S5/S6/S7 work, complete feature acceptance, full repository-wide `pnpm test`, push, PR, merge or deployment were run. S2 proves its local slice only; later slices and actual live-model acceptance remain open.
+
+
+## Source-parent independent verification
+
+The source parent reviewed S2 at `d42ed72739ea7717f70dca45baf41b6206244eff` after the recovery writer settled, including the candidate/runtime compatibility correction, nested output boundary, additive CLI and guarded setup UI/server/browser policy. Under `/tmp/flowproof-spec006-heavy.lock`, independent workspace typecheck and build passed. The exact nine-file focused set passed **153/153**, with no skips, when run serially; the actual headed Chromium setup journey passed **2/2**. The whole-host container-ID lists before/after were identical, and selected-project tracked/untracked/ignored/index/ref/Git snapshots remained unchanged in the tests.
+
+A separate built-module probe passed **22 assertions**, including cleanup: a different valid comment patch was applied only to an owned candidate copy and built/checked with the retained immutable image; the candidate's default expected-tree verification succeeded; subsequent candidate tampering failed verification and runtime admission; declaring nested `tests/parent-build` output did not hide a changed committed sibling; `src` output was refused; stale original edits were detected and restored; original repository snapshots were unchanged. The probe used only the permitted synthetic fixture materializer, not implementation test assertions or a model-produced correction.
+
+The first parent concurrent test attempt is retained honestly in `parent-final/focused.log`: one test path was misspelled, so only eight files ran; an expensive multi-process CLI case exceeded its default 5 s test timeout; one suite's global runtime-label assertion observed another suite's legitimate container. The corrected nine-file serial pass was diagnostic, not a waiver of default-runner compatibility. A focused same-worker follow-up corrected runtime ownership assertions and scoped CLI timing; the final default-concurrent result is recorded below. No sibling container was removed and no global test setting was relaxed.
+
+Parent logs and the independent probe are ignored under `.flowproof/task-logs/006-project-live-verification/parent-final/`. The parent verified all 55 task definitions unchanged, the precise 13 S2 task marks, and an unchanged requirements-quality checklist. This is local S2 evidence; S3/S4 remain separate branches, not a combined production workflow. Provider calls, S5+ and deployment remain unrun.
+
+### Final default-concurrent source-parent recheck
+
+At `eb5b8f9353d1ca6dc5184e1f95c0d404079ddc6c`, the source parent independently ran
+`pnpm test` with the same exact nine focused file paths and no serial/file-parallelism overrides,
+under the shared `/tmp/flowproof-spec006-heavy.lock`: **9 files, 153 tests passed**, no skips,
+exit 0, 25.14 s. This is separate from the child's corrected concurrent pass. The only changes
+since the parent-verified typecheck/build were three test files and evidence; all tracked
+`packages/`, `apps/`, `tools/` and workspace configuration bytes were unchanged, so those passing
+build/typecheck and 22 direct-probe assertions still describe the same product code.
+
+The parent compared all host container IDs before and after: **46 -> 46, identical IDs**, no
+runtime-labelled containers, and no listeners on S2 ports 43150–43159. Test cleanup retained no
+sibling-removal workaround. Log: `parent-final/focused-default-parent-final.log`; machine-readable
+resource/result summary: `parent-final/focused-default-parent-summary.json`, both under the ignored
+slice log root above. The historical authorization paragraph in `tasks.md` now records the actual
+S1 merge and parallel S2/S3/S4 authorization without copying sibling task marks or claiming their
+integration. Optional Git auto-commit hooks remain skipped under the repository policy; this final
+reviewed evidence is committed manually. No full default repository suite or live model was run.

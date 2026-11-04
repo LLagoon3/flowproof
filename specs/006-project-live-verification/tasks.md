@@ -5,16 +5,20 @@
 
 **Branch**: `feat/006-project-live-verification` | **Created**: 2026-11-04
 
-**Authorization**: The owner requested Tasks after the Plan report, then requested an explicit slice
-scope and parallel-ready breakdown. That scheduling revision changed documents only; it did not
-execute source edits, image provisioning, product tests, model calls, push, PR, merge or deployment.
-On 2026-11-04 the owner authorized local S1 implementation only (message 25437: start from slice 1
-following the workflow skill); that S1 authorization excluded push, PR, merge, deployment, model calls and S2+.
-S1 (T001–T009) is implemented locally and marked from its evidence in [verification-s1-pr27.md](verification-s1-pr27.md).
-On 2026-11-04 the owner separately authorized local S2 implementation for T010–T020, T035 and T039;
-that slice is recorded in [verification-s2.md](verification-s2.md). T021–T034, T036–T038 and
-T040–T055 remain unexecuted and require separate authorization. No provider/live acceptance, push,
-PR, merge or deployment is authorized by the S2 slice.
+**Authorization**: Earlier Tasks and parallel-scheduling revisions changed documents only. The
+owner subsequently authorized S1 implementation, then S1 publication, a bounded Codex review loop,
+and conditional merge followed by parallel S2/S3/S4 implementation. S1 was merged through
+[PR #27](https://github.com/LLagoon3/flowproof/pull/27) at
+`2b1155fd6c949afa62c7710d1353d7a06d87f6ef`; its evidence remains in
+[verification-s1-pr27.md](verification-s1-pr27.md).
+
+This branch implements only S2: T010–T020, T035 and T039, recorded in
+[verification-s2.md](verification-s2.md). S3 (T021, T022, T024, T025) and S4 (T034, T037) were
+implemented concurrently in separate sibling worktrees from the same merged S1 base. Their task
+marks and evidence are not copied here before integration. Unchecked sibling tasks in this branch
+do not revoke that authorization or describe the sibling worktrees' status. S5–S7, provider/live
+acceptance and deployment remain outside this implementation run. No publication or merge of the
+S2/S3/S4 branches is inferred from their local implementation authorization.
 
 **Tests**: Required acceptance coverage comes from the Spec's independent tests/SC-001–SC-010 and the
 Plan's explicit risk-based verification/TDD strategy. Write focused parser/authority/path/privacy/race
