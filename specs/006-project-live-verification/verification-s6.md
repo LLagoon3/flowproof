@@ -66,3 +66,38 @@ recorder refuses is `CAPTURE_DISCARD_REFUSED` and stops the run. Late completion
 Logs: ignored `.flowproof/task-logs/006-project-live-verification/s6-unit-a2/`. Fakes only (`test_recorder`,
 `test_transport`); no provider, Chromium or UI evidence. Task marks unchanged. Remaining: A3 routes, A4
 real launcher-owned Chromium recorder (T026), then UI.
+
+## Unit A3 — guarded demonstration routes (T029 server foundation; launcher wiring open)
+
+Base `75e5db2`. Server source `fd7ad01`; final HEAD adds only an unused-import test fix and this note.
+
+Implemented in `studio/server.ts` (project mode only; legacy/captured routes untouched):
+`POST /api/project/captures` (closed `{configuration_id, output_sha256}` bound to the confirmed
+configuration and the ready prepared output; host mints the run, creates the S4 lifecycle and the
+A2 service from launcher ports), `POST /api/project/captures/:id/{finish,discard}` (strict `{}`),
+`POST /api/project/captures/:id/analyze` (`{submit: true, description?}` with the S1 safe-text bound),
+`POST /api/project/runs/:id/clarify` (`{question_id, answer}`), `POST /api/project/runs/:id/cancel`
+(strict `{}`, 202, idempotent) and additive `GET /api/project/runs/:id` (safe service view: state,
+capture ID, `report` sealed/claimed/submitted, interpretation, question ID; no registry/key/raw
+evidence). All pass through the existing launch-session Host/Origin/cookie/fetch-metadata guard and
+JSON content-type/body bound; bodies are validated before identity, identity before side effects;
+unknown/foreign capture or run IDs are 404, stale configuration/output 409. New optional port
+`ProjectStudioMode.openDemonstration` supplies `startRecorder`/`loadSources`/`model` per host run;
+absent, capture start is `409 DEMONSTRATION_UNAVAILABLE`. A settings change and server close end the
+demonstration (invalidate, then cancel) before releasing the prepared target.
+
+| Step | Tested SHA | Result |
+| --- | --- | --- |
+| Red-first route cases (fixtures moved to `tests/support/projectDemonstration.ts`) | `0c99b59` | 5 failed, 12 passed; service suite unchanged 23 passed |
+| Green routes | `fd7ad01` | `project-studio.test.ts` 17 passed |
+| Contract project (lock) | `fd7ad01` | 13 files, 483 passed |
+| Service / lifecycle (lock) | `fd7ad01` | 23 / 15 passed |
+| Build (lock) | `fd7ad01` | passed |
+| Typecheck (lock) | `fd7ad01` | failed: unused `IMAGE_BYTES` import in the moved test; fixed, then passed |
+
+Fakes only: labelled `test_recorder` and `test_transport`; the route tests use the real admitted
+sample, profile validation and guard. Not yet done (marks unchanged): the launcher implementation of
+`openDemonstration` in `startProjectStudio` (real `startProjectRecorder` on the Studio page's target
+frame via `demonstrationRecorderOf`, `CaptureBinding` from configuration/output digest, frozen admitted
+`src/` sources from an admission snapshot, host `MODEL_API_KEY` session), then A4 real Chromium T026.
+Source selection beyond the builder's 32-file/256-KiB bound is not defined; such projects fail closed.
