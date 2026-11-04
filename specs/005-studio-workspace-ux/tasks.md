@@ -6,7 +6,8 @@
 
 **Status**: Slice 1 (T001-T008) merged in PR #23 at `3c7acb3`. Slice 2 (T009-T016) was locally
 implemented and verified on 2026-11-04 using the coding workflow; see the exact-revision record below.
-T017+ and push, PR creation, review triggers, merge and deployment are outside this request.
+The owner subsequently authorized slice 2 publication and the repository review loop on 2026-11-04.
+T017+, merge and deployment remain unauthorized.
 Only verified work is checked off; human-only usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
@@ -320,3 +321,14 @@ Later timeline, six-state comprehension and comparison reviews remain for their 
 Optional before/after Git hooks were skipped with auto-commit disabled; no mandatory implement
 hook is registered. T009-T016 stop here. No T017+, push, PR, bot review, merge, deployment or
 preview republication was performed.
+
+
+## Slice 2 publication authorization (2026-11-04)
+
+After local completion, the owner explicitly requested a pull request and review loop. This
+authorizes pushing this slice to `LLagoon3/flowproof`, opening a PR against `main`, and the
+repository-required GitHub Codex review with up to three remediation rounds. In-scope findings
+may be corrected, verified and pushed before requesting a review of the new exact HEAD.
+Publication is being prepared; the PR link will be recorded before requesting review.
+The implementation and verification record above is unchanged. T017+, merge and deployment
+remain unauthorized. CI is verification-only; this repository has no automatic PR deployment.

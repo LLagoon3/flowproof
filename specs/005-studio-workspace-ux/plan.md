@@ -5,8 +5,8 @@
 **Status**: Plan direction approved on 2026-11-03. Slice 1's isolated minimalist preview is
 implemented and its visual direction was accepted on 2026-11-04. The owner authorized a slice 1
 PR and review/correction loop on 2026-11-04, then explicitly authorized its merge. Slice 1 merged
-in PR #23. Local slice 2 implementation (T009-T016) was authorized on 2026-11-04; publication,
-merge of slice 2 and later slices remain unauthorized.
+in PR #23. Slice 2 implementation (T009-T016), publication and the repository review/correction
+loop were authorized on 2026-11-04. Merge, deployment and later slices remain unauthorized.
 
 **Input**: [Approved product direction and acceptance specification](./spec.md#clarifications).
 Baseline: merged Specs 001-004 at `8c40140`; specification clarification recorded separately.
