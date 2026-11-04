@@ -1974,6 +1974,7 @@ test('captured finalization: the actual producer scan and cleanup events show as
     results.release()
     await expect(page.locator('.captured-status__final')).toHaveText('Candidate verification passed')
     const after = await readingPosition(finalizingEvents)
+    review.record('readingPosition:result', { before, after })
     expect(after.focused).toBe(true)
     expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2)
     await expect(work.details).toHaveAttribute('aria-expanded', 'true')

@@ -127,8 +127,8 @@ export function CapturedStart({ state, requestText, onStart }: CapturedStartProp
 }
 
 /**
- * The non-final status, kept for assistive technology and the run's status marker but not shown:
- * the work summary already states it, and a verdict comes only from the result summary.
+ * The non-final status marker, kept in the document but not rendered: the work summary already
+ * states the run's state, and a verdict comes only from the result summary.
  */
 function PendingStatus({ run }: { readonly run: CapturedRunView | undefined }) {
   if (run === undefined) {
@@ -157,7 +157,9 @@ const checkLabel = (id: string): string => CAPTURED_CHECK_LABELS[id as CapturedC
 
 function RunStatus({ run, summary, onCompare }: { readonly run: CapturedRunView | undefined; readonly summary: ResultSummaryView | null; readonly onCompare: () => void }) {
   return (
-    <section className={`agent-panel__section captured-status${summary === null ? ' visually-hidden' : ''}`} aria-label="Verification status" data-final={summary !== null}>
+    // Without a result the section is not rendered, never repositioned, so result arrival keeps the
+    // browser's scroll anchoring and the reader's position in the work log.
+    <section className="agent-panel__section captured-status" aria-label="Verification status" data-final={summary !== null} hidden={summary === null}>
       {summary === null ? <PendingStatus run={run} /> : <ResultSummary view={summary} labelOf={checkLabel} onCompare={onCompare} />}
     </section>
   )

@@ -18,10 +18,14 @@ import { REPO_ROOT, listTree } from '../support/repoFixture.js'
 import { CAPTURED_SCENARIO_ID, DEMO_PORT, openCapturedVerificationHarness } from '../support/studioHarness.js'
 import type { CapturedStudioHarness, CleanupReport } from '../support/studioHarness.js'
 
-/** Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). */
+/**
+ * Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). The
+ * pane recording counts every real pointer press and key press as an input attempt on the target,
+ * so the disclosure is activated by its click event alone, which adds neither.
+ */
 async function openWorkDetails(page: Page): Promise<void> {
   const toggle = page.locator('section.work-timeline button[data-disclosure="details"]')
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.dispatchEvent('click')
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 }
 

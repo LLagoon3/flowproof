@@ -182,8 +182,8 @@ export function RequestComposer({ state, requestText, onRequestTextChange, onSta
 }
 
 /**
- * The non-final status, kept for assistive technology and the run's status marker but not shown:
- * the work summary already states it, and a verdict comes only from the result summary.
+ * The non-final status marker, kept in the document but not rendered: the work summary already
+ * states the run's state, and a verdict comes only from the result summary.
  */
 function PendingStatus({ run, starting }: { readonly run: RunView | null; readonly starting: boolean }) {
   if (run === null) {
@@ -219,7 +219,9 @@ const gateLabel = (id: string): string => GATE_LABELS[id as GateId]
 
 function RunStatus({ state, summary, onCompare }: { readonly state: StudioState; readonly summary: ResultSummaryView | null; readonly onCompare: () => void }) {
   return (
-    <section className={`agent-panel__section agent-status${summary === null ? ' visually-hidden' : ''}`} aria-label="Run status" data-final={summary !== null}>
+    // Without a result the section is not rendered, never repositioned, so result arrival keeps the
+    // browser's scroll anchoring and the reader's position in the work log.
+    <section className="agent-panel__section agent-status" aria-label="Run status" data-final={summary !== null} hidden={summary === null}>
       {summary === null ? <PendingStatus run={state.run} starting={state.pendingStart !== null} /> : <ResultSummary view={summary} labelOf={gateLabel} onCompare={onCompare} />}
     </section>
   )
