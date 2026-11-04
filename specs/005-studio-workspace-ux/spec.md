@@ -4,10 +4,10 @@
 
 **Created**: 2026-11-03
 
-**Status**: Slice 1's standalone minimalist preview is implemented and its visual direction was
-accepted by the owner on 2026-11-04. The owner authorized publishing this slice as a PR with a
-review/correction loop on 2026-11-04. Production slices, merge and deployment are not authorized.
-The exact preview source and mechanical verification gaps are recorded in `design-system.md`.
+**Status**: The owner accepted the minimalist preview on 2026-11-04. Slices 1 and 2 merged
+in PR #23 and PR #24. Local slice 3 implementation (T017-T023) was subsequently authorized;
+publication, merge, deployment and slice 4 remain outside that instruction. The accepted preview
+source and mechanical verification gaps are recorded in `design-system.md`.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements
 and requested a separate specification. Use conversation-plus-canvas references such as Claude

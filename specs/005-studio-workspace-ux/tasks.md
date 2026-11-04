@@ -4,10 +4,10 @@
 [data-model.md](./data-model.md), [UI contract](./contracts/workspace-ui.md), and
 [validation guide](./quickstart.md).
 
-**Status**: Slice 1 (T001-T008) merged in PR #23 at `3c7acb3`. Slice 2 (T009-T016) was locally
-implemented and verified on 2026-11-04 using the coding workflow; see the exact-revision record below.
-The owner subsequently authorized slice 2 publication and the repository review loop on 2026-11-04.
-T017+, merge and deployment remain unauthorized.
+**Status**: Slices 1 and 2 (T001-T016) merged in PR #23 and PR #24. The owner authorized
+local slice 3 implementation (T017-T023) through the coding workflow on 2026-11-04.
+The accepted minimalist summary plus initially closed Details/log rows is the visual reference.
+T024+, push, PR creation, review triggers, merge and deployment are outside this request.
 Only verified work is checked off; human-only usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
@@ -334,3 +334,24 @@ Exact-head CI, Codex review and any correction rounds are tracked in PR metadata
 creating a new source commit solely to record their outcome.
 The implementation and verification record above is unchanged. T017+, merge and deployment
 remain unauthorized. CI is verification-only; this repository has no automatic PR deployment.
+
+
+## Slice 3 implementation authorization (2026-11-04)
+
+The owner requested the coding workflow for T017-T023 after clarifying that work presentation
+means the collapsible logs in the left panel, similar to observable tool-use entries, not a new
+wall of cards. Work starts from PR #24's merged `main` at
+`f9aa8e4ccbbdfd74324852b985b1320687f5ae65` on `feat/005-studio-workspace-ux-work`.
+
+Follow the accepted minimalist revision in `design-system.md` and the actual preview: a brief
+current-work summary, one initially closed Details disclosure, flat chronological work rows,
+and nested Events details. Internal card/group identities are not permission to introduce
+persistent bordered card surfaces, repeated badges or dense always-visible logs. Preserve
+work, raw accepted records, focus, reading position, and disclosure state through updates and
+panel changes; never invent tool calls, progress or hidden reasoning. Existing result/evidence
+consumption remains unchanged until slice 4. No new animation, dependency, engine contract,
+CSP exception or fault-injection product option is authorized.
+
+Implement locally, verify on clean committed source, then record the tested SHA and observed
+results separately. Human six-state comprehension remains pending actual owner feedback.
+No push, PR, review trigger, merge, deployment, preview republication or T024+ is authorized.
