@@ -751,14 +751,31 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
   let targetOwned = false
   let preparationSequence = 0
   let demonstration: { readonly runId: string; readonly service: ProjectDemonstration } | null = null
-  /** Ends the demonstration of the prepared target; always before that target is released. */
-  const closeDemonstration = async (): Promise<void> => {
+  // True from the first state change of a configuration request until its revocation and target
+  // release settled: no capture, preparation or other configuration is admitted meanwhile.
+  let configurationChanging = false
+  /**
+   * Synchronously revokes the demonstration (no later request reaches it, and the service generation
+   * moves so pending work is refused), then settles its unsubmitted evidence deletion. Always runs
+   * before the prepared target is released.
+   */
+  const revokeDemonstration = (): Promise<void> => {
     const current = demonstration
     demonstration = null
-    if (current === null) return
-    await current.service.invalidate().catch(() => undefined)
+    if (current === null) return Promise.resolve()
+    const invalidated = current.service.invalidate()
     current.service.cancel()
+    return invalidated.catch(() => undefined)
   }
+  const closeDemonstration = (): Promise<void> => revokeDemonstration()
+  /** Every branch that rejects or replaces the configuration starts here, before its first await. */
+  const revokeForConfigurationChange = (): Promise<void> => {
+    configurationChanging = true
+    configuration = null
+    return revokeDemonstration()
+  }
+  const changingRefusal = (): StudioRequestError => fail(409, 'CONFIGURATION_CHANGING', 'The project configuration is changing.')
+  const revokedRefusal = (): StudioRequestError => fail(409, 'CAPTURE_INVALIDATED', 'The demonstration was revoked by a configuration change.')
   const refuseDemonstration = (code: string): StudioRequestError => fail(demonstrationStatus(code), code, 'The demonstration request was refused.')
   const runView = (current: { readonly runId: string; readonly service: ProjectDemonstration }): Record<string, unknown> => ({ run_id: current.runId, ...current.service.view() })
 
@@ -834,6 +851,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
     if (pathname === '/api/project/configuration') {
       if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
       const body = await parseJsonRequest(req)
+      if (configurationChanging) throw changingRefusal()
       if (!hasOnlyKeys(body, PROJECT_SETTING_FIELDS)) throw fail(400, 'REQUEST_FIELD_REJECTED', 'The project configuration request contains unsupported fields.')
       if (body.confirm !== true) throw fail(400, 'CONFIRMATION_REQUIRED', 'Review and confirm the project settings before continuing.')
       if (admissionState !== 'ready') throw fail(409, 'PROJECT_BASELINE_STALE', 'The admitted project baseline is stale.')
@@ -843,8 +861,13 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       if (activePreparation !== null || preparation.state === 'preparing') throw fail(409, 'PROJECT_PREPARATION_ACTIVE', 'Project preparation is already active.')
       const parsedSettings = ProjectSettingsSchema.safeParse(body.settings)
       if (!parsedSettings.success) {
-        configuration = null
+        const settled = revokeForConfigurationChange()
         configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: Object.freeze(['CONFIGURATION_INVALID']), settings: configurationView.settings })
+        try {
+          await settled
+        } finally {
+          configurationChanging = false
+        }
         throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are invalid.')
       }
       const confirmedAt = new Date().toISOString()
@@ -856,8 +879,13 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       }
       if (!result.ok) {
         const reasons = projectReasonList(result.reasons)
-        configuration = null
+        const settled = revokeForConfigurationChange()
         configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons, settings: parsedSettings.data })
+        try {
+          await settled
+        } finally {
+          configurationChanging = false
+        }
         throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are not supported by the admitted profile.')
       }
       const checked = parseExecutionConfiguration(result.configuration)
@@ -868,12 +896,24 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
         checked.value.target_origin !== targetOrigin ||
         checked.value.confirmation.state !== 'confirmed'
       ) {
-        configuration = null
+        const settled = revokeForConfigurationChange()
         configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: Object.freeze(['CONFIGURATION_INVALID']), settings: parsedSettings.data })
+        try {
+          await settled
+        } finally {
+          configurationChanging = false
+        }
         throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are not supported by the admitted profile.')
       }
-      await closeDemonstration()
-      await releaseTarget().catch(() => undefined)
+      const settled = revokeForConfigurationChange()
+      preparation = projectPreparationView('idle')
+      try {
+        await settled
+        await releaseTarget().catch(() => undefined)
+      } finally {
+        configurationChanging = false
+      }
+      if (closed) throw fail(409, 'CONFIGURATION_CHANGING', 'The Studio is closing.')
       configuration = checked.value
       configurationView = Object.freeze({
         state: 'confirmed',
@@ -890,6 +930,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
     if (pathname === '/api/project/prepare') {
       if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
       const body = await parseJsonRequest(req)
+      if (configurationChanging) throw changingRefusal()
       if (!hasOnlyKeys(body, PROJECT_PREPARE_FIELDS)) throw fail(400, 'REQUEST_FIELD_REJECTED', 'The project preparation request contains unsupported fields.')
       if (admissionState !== 'ready') throw fail(409, 'PROJECT_BASELINE_STALE', 'The admitted project baseline is stale.')
       if (configuration === null || configurationView.state !== 'confirmed') throw fail(409, 'CONFIGURATION_REQUIRED', 'Confirm project settings before preparing the target.')
@@ -911,6 +952,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
     if (pathname === '/api/project/captures') {
       if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
       const body = await parseJsonRequest(req)
+      if (configurationChanging) throw changingRefusal()
       if (!hasOnlyKeys(body, PROJECT_CAPTURE_FIELDS) || typeof body.configuration_id !== 'string' || typeof body.output_sha256 !== 'string') {
         throw fail(400, 'REQUEST_FIELD_REJECTED', 'The capture request contains unsupported fields.')
       }
@@ -932,6 +974,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       }
       const current = demonstration
       const outcome = await current.service.start()
+      if (demonstration !== current) throw revokedRefusal()
       if (!outcome.ok) throw refuseDemonstration(outcome.code)
       sendJson(res, 200, { run_id: current.runId, capture_id: outcome.value.capture_id, state: 'recording' })
       return
@@ -955,14 +998,17 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       if (current === null || !projectUuidSchema.safeParse(captureId).success) throw fail(404, 'CAPTURE_UNKNOWN', 'The capture does not exist.')
       if (action === 'finish') {
         const outcome = await current.service.finish(captureId)
+        if (demonstration !== current) throw revokedRefusal()
         if (!outcome.ok) throw refuseDemonstration(outcome.code)
         sendJson(res, 200, { run_id: current.runId, ...outcome.value })
       } else if (action === 'discard') {
         const outcome = await current.service.discard(captureId)
+        if (demonstration !== current) throw revokedRefusal()
         if (!outcome.ok) throw refuseDemonstration(outcome.code)
         sendJson(res, 200, { run_id: current.runId, capture_id: captureId, state: 'discarded' })
       } else {
         const outcome = await current.service.analyze(captureId, { description: typeof body.description === 'string' ? body.description : null })
+        if (demonstration !== current) throw revokedRefusal()
         if (!outcome.ok) throw refuseDemonstration(outcome.code)
         sendJson(res, 200, { run_id: current.runId, interpretation: outcome.value.interpretation })
       }
@@ -996,6 +1042,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
         return
       }
       const outcome = await current.service.clarify(body.question_id as string, body.answer as string)
+      if (demonstration !== current) throw revokedRefusal()
       if (!outcome.ok) throw refuseDemonstration(outcome.code)
       sendJson(res, 200, { run_id: current.runId, interpretation: outcome.value.interpretation })
       return
