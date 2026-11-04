@@ -416,8 +416,12 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
   const discarded = new Set<string>()
   const submittedCaptures = new Set<string>()
   const discardedCaptures = new Set<string>()
+  /** Settled-never-rejecting handles of writes that have not finished; Discard joins them. */
+  const inflight = new Set<Promise<void>>()
   let sealed = false
   let total = 0
+  /** Writes reserved against the artifact bound but not yet registered or failed. */
+  let reserved = 0
 
   const assertRunPath = async (): Promise<void> => {
     await assertRootUnchanged(context)
@@ -426,27 +430,46 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
     if (info === null || !info.isDirectory() || !sameIdentity(info, runIdentity)) fail('PROJECT_STORE_RUN_REPLACED', 'The run directory changed.')
   }
 
+  /** Why a write may no longer publish: sealing, submission or discard revoke in-flight writes too. */
+  const revocation = (captureId: string | null): ProjectStoreErrorCode | null => {
+    if (sealed) return 'PROJECT_STORE_RUN_SEALED'
+    if (captureId !== null && submittedCaptures.has(captureId)) return 'PROJECT_STORE_CAPTURE_SUBMITTED'
+    if (captureId !== null && discardedCaptures.has(captureId)) return 'PROJECT_STORE_CAPTURE_DISCARDED'
+    return null
+  }
+
+  const assertNotRevoked = (captureId: string | null): void => {
+    const code = revocation(captureId)
+    if (code !== null) fail(code, 'The run or capture no longer accepts this artifact.')
+  }
+
   const captureOf = (options: ArtifactWriteOptions | undefined): string | null => {
     const captureId = options?.captureId
     if (captureId === undefined) return null
     if (!validUuid(captureId)) return fail('PROJECT_STORE_CAPTURE_ID_INVALID', 'Capture identities are host UUIDs.')
-    if (submittedCaptures.has(captureId)) return fail('PROJECT_STORE_CAPTURE_SUBMITTED', 'A submitted capture report is immutable.')
-    if (discardedCaptures.has(captureId)) return fail('PROJECT_STORE_CAPTURE_DISCARDED', 'A discarded capture is never reused.')
     return captureId
   }
 
-  const assertWritable = (): void => {
-    if (sealed) fail('PROJECT_STORE_RUN_SEALED', 'The run no longer accepts writes.')
-    if (total >= PROJECT_STORE_MAX_ARTIFACTS) fail('PROJECT_STORE_ARTIFACT_LIMIT', 'The run artifact bound was reached.')
-  }
-
-  const persist = async (kind: ProjectArtifactKind, spec: KindSpec, content: PreparedContent, captureId: string | null): Promise<ProjectArtifactRecord> => {
-    assertWritable()
+  /**
+   * Publishes prepared bytes. Revocation is re-checked before staging, before publication and,
+   * synchronously, right before registration (after the last await), so a write revoked while it
+   * was in flight removes its published file instead of registering it.
+   */
+  const persist = async (
+    kind: ProjectArtifactKind,
+    spec: KindSpec,
+    content: PreparedContent,
+    captureId: string | null,
+    claimReservation: () => void,
+  ): Promise<ProjectArtifactRecord> => {
+    assertNotRevoked(captureId)
     await assertRunPath()
+    assertNotRevoked(captureId)
     const artifactId = newProjectUuid()
     const file = path.join(runRoot, `${artifactId}.${spec.extension}`)
     const staging = path.join(runRoot, `.staging-${randomBytes(8).toString('hex')}`)
     const handle = await open(staging, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    let info: Stats
     try {
       try {
         await handle.chmod(0o600)
@@ -455,12 +478,26 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
       } finally {
         await handle.close()
       }
+      assertNotRevoked(captureId)
       // A hard link publishes the complete file atomically and never overwrites.
       await link(staging, file)
+      try {
+        info = await lstat(file)
+      } catch (error) {
+        await unlink(file).catch(() => undefined)
+        throw error
+      }
     } finally {
       await unlink(staging).catch(() => undefined)
     }
-    const info = await lstat(file)
+    const revoked = revocation(captureId)
+    if (revoked !== null) {
+      await unlink(file).catch((error: unknown) => {
+        if (!isNodeError(error, 'ENOENT')) throw error
+      })
+      return fail(revoked, 'The run or capture revoked this artifact before it was registered.')
+    }
+    // No await between the revocation check above and registration.
     const record: ProjectArtifactRecord = Object.freeze({
       artifact_id: artifactId,
       run_id: runId,
@@ -473,8 +510,38 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
       redaction_count: content.redactionCount,
     })
     registry.set(artifactId, { record, file, dev: info.dev, ino: info.ino })
+    claimReservation()
     total += 1
     return record
+  }
+
+  /**
+   * The per-run write boundary. Lifecycle checks and the artifact-bound reservation run
+   * synchronously at call time, so concurrent callers cannot exceed the bound, and every write is
+   * tracked until it settles so Discard can join it.
+   */
+  const write = (kind: ProjectArtifactKind, spec: KindSpec, options: ArtifactWriteOptions | undefined, prepare: () => PreparedContent): Promise<ProjectArtifactRecord> => {
+    const captureId = captureOf(options)
+    assertNotRevoked(captureId)
+    if (total + reserved >= PROJECT_STORE_MAX_ARTIFACTS) fail('PROJECT_STORE_ARTIFACT_LIMIT', 'The run artifact bound was reached.')
+    reserved += 1
+    let held = true
+    const release = (): void => {
+      if (held) {
+        held = false
+        reserved -= 1
+      }
+    }
+    const task = Promise.resolve()
+      .then(() => persist(kind, spec, prepare(), captureId, release))
+      .finally(release)
+    const tracked = task.then(
+      () => undefined,
+      () => undefined,
+    )
+    inflight.add(tracked)
+    void tracked.then(() => inflight.delete(tracked))
+    return task
   }
 
   const specFor = (kind: unknown, formats: readonly KindFormat[]): KindSpec => {
@@ -491,23 +558,17 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
 
     async writeJson(kind, value, options) {
       const spec = specFor(kind, ['contract-json', 'json'])
-      assertWritable()
-      const captureId = captureOf(options)
-      return persist(kind, spec, prepareJson(kind, spec, value, runId), captureId)
+      return write(kind, spec, options, () => prepareJson(kind, spec, value, runId))
     },
 
     async writeText(kind, text, options) {
       const spec = specFor(kind, ['text', 'exact-text'])
-      assertWritable()
-      const captureId = captureOf(options)
-      return persist(kind, spec, prepareText(spec, text), captureId)
+      return write(kind, spec, options, () => prepareText(spec, text))
     },
 
     async writePng(bytes, options) {
       const spec = KIND_SPECS['observation-image']
-      assertWritable()
-      const captureId = captureOf(options)
-      return persist('observation-image', spec, preparePng(spec, bytes, options?.maskingPolicyVersion), captureId)
+      return write('observation-image', spec, options, () => preparePng(spec, bytes, options?.maskingPolicyVersion))
     },
 
     async read(artifactId, sha256) {
@@ -522,6 +583,7 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
       try {
         handle = await open(entry.file, constants.O_RDONLY | constants.O_NOFOLLOW)
       } catch (error) {
+        if (discarded.has(artifactId)) return fail('PROJECT_STORE_ARTIFACT_DISCARDED', 'The artifact was discarded.')
         if (isNodeError(error, 'ELOOP')) return fail('PROJECT_STORE_PATH_SYMLINK', 'Artifacts are never read through symlinks.')
         if (isNodeError(error, 'ENOENT')) return fail('PROJECT_STORE_ARTIFACT_REPLACED', 'The artifact file is missing.')
         throw error
@@ -534,6 +596,8 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
         if (bytes.length !== entry.record.bytes || sha256Hex(bytes) !== entry.record.sha256) {
           return fail('PROJECT_STORE_INTEGRITY_MISMATCH', 'The artifact changed after it was persisted.')
         }
+        // A discard that completed while this read was in flight wins: discarded bytes never return.
+        if (discarded.has(artifactId)) return fail('PROJECT_STORE_ARTIFACT_DISCARDED', 'The artifact was discarded.')
         return Object.freeze({ record: entry.record, bytes })
       } finally {
         await handle.close()
@@ -554,18 +618,22 @@ function createRunStore(context: RootContext, runId: string, runRoot: string, ru
       if (!validUuid(captureId)) return fail('PROJECT_STORE_CAPTURE_ID_INVALID', 'Capture identities are host UUIDs.')
       if (sealed) return fail('PROJECT_STORE_RUN_SEALED', 'The run no longer accepts discards.')
       if (submittedCaptures.has(captureId)) return fail('PROJECT_STORE_CAPTURE_SUBMITTED', 'A submitted capture report is not retroactively discarded.')
+      // Revokes every in-flight and future write of this capture, then joins in-flight writes so
+      // none can publish or leave a file after this discard resolves.
       discardedCaptures.add(captureId)
+      await Promise.all([...inflight])
       await assertRunPath()
       let removed = 0
       for (const [artifactId, entry] of [...registry.entries()]) {
-        if (entry.record.capture_id !== captureId) continue
+        if (entry.record.capture_id !== captureId || !registry.has(artifactId)) continue
+        // Claim the entry synchronously so concurrent discards and reads see it as discarded.
+        registry.delete(artifactId)
+        discarded.add(artifactId)
+        removed += 1
         await unlink(entry.file).catch((error: unknown) => {
           if (!isNodeError(error, 'ENOENT')) throw error
         })
         if ((await lstatOrNull(entry.file)) !== null) return fail('PROJECT_STORE_ARTIFACT_REPLACED', 'A discarded artifact could not be removed.')
-        registry.delete(artifactId)
-        discarded.add(artifactId)
-        removed += 1
       }
       return Object.freeze({ removed })
     },

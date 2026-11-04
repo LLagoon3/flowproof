@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { META_MODEL_ID } from '../../packages/flowproof/src/contracts/index.js'
 import {
   PROJECT_ARTIFACT_KINDS,
+  PROJECT_STORE_MAX_ARTIFACTS,
   ProjectStoreError,
   createProjectTempDirectory,
   openProjectStateRoot,
@@ -404,5 +405,98 @@ describe('discard, partial retention and sealing', () => {
     expect(await filesBelow(root.path)).toHaveLength(1)
     expect((await stat(path.join(root.path, (await filesBelow(root.path))[0] as string))).size).toBe(record.bytes)
     expect(await readFile(path.join(root.path, (await filesBelow(root.path))[0] as string), 'utf8')).toBe('partial evidence')
+  })
+})
+
+describe('serialized run mutations under concurrency', () => {
+  const macroturns = async (count: number): Promise<void> => {
+    for (let index = 0; index < count; index += 1) await new Promise((resolve) => setImmediate(resolve))
+  }
+  const runFiles = async (root: ProjectStateRoot, runId: string): Promise<string[]> => filesBelow(path.join(root.path, 'runs', runId))
+  const settle = async <T>(promise: Promise<T>): Promise<{ value?: T; code?: string }> => {
+    try {
+      return { value: await promise }
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProjectStoreError)
+      return { code: (error as ProjectStoreError).code }
+    }
+  }
+  // Revocation is applied after 0..N event-loop turns so it lands before staging, during the
+  // write, around publication and after registration; every interleaving must keep the invariant.
+  const TURNS = [0, 1, 2, 3, 4, 6, 8, 12, 16, 24]
+
+  it('never keeps or publishes a capture write that races its discard', async () => {
+    const { root } = await openRoot()
+    const exact = await root.createRun(newProjectUuid())
+    const capture = newProjectUuid()
+    const pending = settle(exact.writeText('observation-text', 'safe', { captureId: capture }))
+    expect(await exact.discardCapture(capture)).toEqual({ removed: 0 })
+    expect(await pending).toEqual({ code: 'PROJECT_STORE_CAPTURE_DISCARDED' })
+    expect(exact.list()).toEqual([])
+    expect(await runFiles(root, exact.runId)).toEqual([])
+
+    for (const turns of TURNS) {
+      const run = await root.createRun(newProjectUuid())
+      const raced = newProjectUuid()
+      const kept = await run.writeText('observation-text', 'kept', { captureId: newProjectUuid() })
+      const write = settle(run.writeText('observation-text', 'raced', { captureId: raced }))
+      await macroturns(turns)
+      const discarded = await run.discardCapture(raced)
+      const outcome = await write
+      // After discard resolves, the raced capture has no registry entry, readable bytes or file.
+      expect(run.list().map((record) => record.artifact_id)).toEqual([kept.artifact_id])
+      expect(await runFiles(root, run.runId)).toEqual([`${kept.artifact_id}.txt`])
+      if (outcome.value !== undefined) {
+        expect(discarded).toEqual({ removed: 1 })
+        await expectCode(run.read(outcome.value.artifact_id, outcome.value.sha256), 'PROJECT_STORE_ARTIFACT_DISCARDED')
+      } else {
+        expect(outcome.code).toBe('PROJECT_STORE_CAPTURE_DISCARDED')
+        expect(discarded).toEqual({ removed: 0 })
+      }
+    }
+  })
+
+  it('rejects and removes an in-flight write once the run is sealed or its capture submitted', async () => {
+    const { root } = await openRoot()
+    const sealedRun = await root.createRun(newProjectUuid())
+    const pending = settle(sealedRun.writeText('observation-text', 'late'))
+    sealedRun.seal()
+    expect(await pending).toEqual({ code: 'PROJECT_STORE_RUN_SEALED' })
+    expect(sealedRun.list()).toEqual([])
+    expect(await runFiles(root, sealedRun.runId)).toEqual([])
+
+    for (const turns of TURNS) {
+      for (const revoke of ['seal', 'submit'] as const) {
+        const run = await root.createRun(newProjectUuid())
+        const capture = newProjectUuid()
+        const write = settle(run.writeText('observation-text', 'in flight', { captureId: capture }))
+        await macroturns(turns)
+        if (revoke === 'seal') run.seal()
+        else run.markCaptureSubmitted(capture)
+        const outcome = await write
+        const files = await runFiles(root, run.runId)
+        if (outcome.value !== undefined) {
+          // Only a write registered before the revocation survives, and it stays readable.
+          expect(run.list()).toEqual([outcome.value])
+          expect(files).toEqual([`${outcome.value.artifact_id}.txt`])
+          expect((await run.read(outcome.value.artifact_id, outcome.value.sha256)).bytes.toString('utf8')).toBe('in flight')
+        } else {
+          expect(outcome.code).toBe(revoke === 'seal' ? 'PROJECT_STORE_RUN_SEALED' : 'PROJECT_STORE_CAPTURE_SUBMITTED')
+          expect(run.list()).toEqual([])
+          expect(files).toEqual([])
+        }
+      }
+    }
+  })
+
+  it('enforces the per-run artifact bound across concurrent writes', async () => {
+    const { root, run } = await openRun()
+    const results = await Promise.all(
+      Array.from({ length: PROJECT_STORE_MAX_ARTIFACTS + 3 }, (_, index) => settle(run.writeText('observation-text', `entry ${index}`))),
+    )
+    expect(results.filter((result) => result.value !== undefined)).toHaveLength(PROJECT_STORE_MAX_ARTIFACTS)
+    expect(results.filter((result) => result.code === 'PROJECT_STORE_ARTIFACT_LIMIT')).toHaveLength(3)
+    expect(run.list()).toHaveLength(PROJECT_STORE_MAX_ARTIFACTS)
+    expect(await runFiles(root, run.runId)).toHaveLength(PROJECT_STORE_MAX_ARTIFACTS)
   })
 })
