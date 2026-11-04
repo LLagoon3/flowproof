@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { chmod, cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { chmod, cp, lstat, mkdir, readFile, readdir, readlink, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
@@ -22,6 +23,7 @@ interface ScriptModule {
   withManifestDigest(body: Record<string, unknown>): Record<string, unknown>
   pinnedBaseReferences(text: string): string[]
   dockerEnvironment(source: Record<string, string | undefined>): Record<string, string>
+  writePrivateJson(target: string, value: unknown): Promise<void>
 }
 
 const script = (await import(pathToFileURL(SCRIPT).href)) as ScriptModule
@@ -234,5 +236,136 @@ describe('operator toolchain preparation', () => {
       DOCKER_AUTH_CONFIG: 'secret',
     })
     expect(Object.keys(environment).sort()).toEqual(['DOCKER_CLI_HINTS', 'DOCKER_HOST', 'HOME', 'LC_ALL', 'PATH'])
+  })
+})
+
+// The manifest writer behind `prepare` (its only caller). Every path lives in this test's own
+// sandbox: an existing directory keeps its exact mode, only directories this write creates are
+// 0700, the manifest is a new 0600 file renamed into place, and an unusable path stays unchanged.
+describe('private manifest output', () => {
+  const MANIFEST = { schema_version: 1, profile_id: 'vite-static-v1', note: 'manifest' }
+  const modeOf = async (target: string): Promise<string> => ((await lstat(target)).mode & 0o7777).toString(8)
+
+  async function directoryWithMode(name: string, mode: number): Promise<string> {
+    const directory = path.join(sandbox.path, name)
+    await mkdir(directory)
+    await chmod(directory, mode)
+    return directory
+  }
+
+  /** Type, exact mode (including sticky bits), digest or link target of every entry below root. */
+  async function treeOf(root: string): Promise<Record<string, string>> {
+    const entries: Record<string, string> = {}
+    const walk = async (relative: string): Promise<void> => {
+      for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
+        const name = path.join(relative, entry.name)
+        const absolute = path.join(root, name)
+        if (entry.isSymbolicLink()) entries[name] = `symlink:${await readlink(absolute)}`
+        else if (entry.isDirectory()) entries[name] = `dir:${await modeOf(absolute)}`
+        else entries[name] = `file:${await modeOf(absolute)}:${createHash('sha256').update(await readFile(absolute)).digest('hex')}`
+        if (entry.isDirectory() && !entry.isSymbolicLink() && (await lstat(absolute)).mode & 0o400) await walk(name)
+      }
+    }
+    await walk('')
+    return entries
+  }
+
+  async function outcomeOf(operation: Promise<unknown>): Promise<string> {
+    try {
+      await operation
+      return 'written'
+    } catch (error) {
+      return String((error as { code?: unknown }).code ?? 'unknown')
+    }
+  }
+
+  async function written(directory: string): Promise<{ directory: string; file: string; entries: string[]; content: unknown }> {
+    return {
+      directory: await modeOf(directory),
+      file: await modeOf(path.join(directory, 'manifest.json')),
+      entries: (await readdir(directory)).sort(),
+      content: JSON.parse(await readFile(path.join(directory, 'manifest.json'), 'utf8')),
+    }
+  }
+
+  it('keeps the exact mode of an existing sticky, shared or private manifest directory', async () => {
+    const observed: Record<string, unknown> = {}
+    const expected: Record<string, unknown> = {}
+    for (const mode of [0o1777, 0o755, 0o770, 0o700]) {
+      const label = mode.toString(8)
+      const directory = await directoryWithMode(`existing-${label}`, mode)
+      await script.writePrivateJson(path.join(directory, 'manifest.json'), MANIFEST)
+      observed[label] = await written(directory)
+      expected[label] = { directory: label, file: '600', entries: ['manifest.json'], content: MANIFEST }
+    }
+    expect(observed).toEqual(expected)
+  })
+
+  it('creates only the missing directories, privately, below an unchanged existing or symlinked ancestor', async () => {
+    const base = await directoryWithMode('base', 0o755)
+    await script.writePrivateJson(path.join(base, 'a/b/c/manifest.json'), MANIFEST)
+    const real = await directoryWithMode('real', 0o1777)
+    await symlink(real, path.join(sandbox.path, 'link'))
+    await script.writePrivateJson(path.join(sandbox.path, 'link/new/manifest.json'), MANIFEST)
+    expect({
+      base: await modeOf(base),
+      created: [await modeOf(path.join(base, 'a')), await modeOf(path.join(base, 'a/b'))],
+      nested: await written(path.join(base, 'a/b/c')),
+      real: await modeOf(real),
+      link: await readlink(path.join(sandbox.path, 'link')),
+      linked: await written(path.join(real, 'new')),
+    }).toEqual({
+      base: '755',
+      created: ['700', '700'],
+      nested: { directory: '700', file: '600', entries: ['manifest.json'], content: MANIFEST },
+      real: '1777',
+      link: real,
+      linked: { directory: '700', file: '600', entries: ['manifest.json'], content: MANIFEST },
+    })
+  })
+
+  it('atomically replaces an existing regular manifest with a new private file', async () => {
+    const directory = await directoryWithMode('replace', 0o755)
+    const target = path.join(directory, 'manifest.json')
+    await writeFile(target, '{"old":true}\n', { mode: 0o644 })
+    await chmod(target, 0o644)
+    const before = (await lstat(target)).ino
+    await script.writePrivateJson(target, MANIFEST)
+    expect(await written(directory)).toEqual({ directory: '755', file: '600', entries: ['manifest.json'], content: MANIFEST })
+    expect((await lstat(target)).ino).not.toBe(before)
+  })
+
+  it('refuses an unusable manifest path unchanged and leaves no temporary file or directory', async () => {
+    const elsewhere = await directoryWithMode('elsewhere', 0o755)
+    await writeFile(path.join(elsewhere, 'kept.json'), '{"kept":true}\n')
+    await symlink(elsewhere, path.join(sandbox.path, 'linked-dir'))
+    await writeFile(path.join(sandbox.path, 'plain-file'), 'not a directory\n')
+    const holder = await directoryWithMode('holder', 0o755)
+    await mkdir(path.join(holder, 'manifest.json'))
+    await writeFile(path.join(holder, 'manifest.json/inside.txt'), 'inside\n')
+    const linkHolder = await directoryWithMode('link-holder', 0o755)
+    await symlink(path.join(elsewhere, 'kept.json'), path.join(linkHolder, 'manifest.json'))
+    const cases: Record<string, string> = {
+      'symlinked manifest directory': path.join(sandbox.path, 'linked-dir/manifest.json'),
+      'manifest directory is a file': path.join(sandbox.path, 'plain-file/manifest.json'),
+      'ancestor is a file': path.join(sandbox.path, 'plain-file/sub/manifest.json'),
+      'target is a directory': path.join(holder, 'manifest.json'),
+      'target is a symlink': path.join(linkHolder, 'manifest.json'),
+    }
+    const expected: Record<string, string> = Object.fromEntries(Object.keys(cases).map((name) => [name, 'OUTPUT_INVALID']))
+    const unwritable = typeof process.getuid === 'function' && process.getuid() !== 0
+    if (unwritable) {
+      const readOnly = await directoryWithMode('read-only', 0o500)
+      cases['existing unwritable directory'] = path.join(readOnly, 'manifest.json')
+      cases['missing child of an unwritable directory'] = path.join(readOnly, 'new/manifest.json')
+      expected['existing unwritable directory'] = 'OUTPUT_WRITE_FAILED'
+      expected['missing child of an unwritable directory'] = 'OUTPUT_WRITE_FAILED'
+    }
+    const before = await treeOf(sandbox.path)
+    const outcomes: Record<string, string> = {}
+    for (const [name, target] of Object.entries(cases)) outcomes[name] = await outcomeOf(script.writePrivateJson(target, MANIFEST))
+    const after = await treeOf(sandbox.path)
+    if (unwritable) await chmod(path.join(sandbox.path, 'read-only'), 0o700)
+    expect({ outcomes, tree: after }).toEqual({ outcomes: expected, tree: before })
   })
 })

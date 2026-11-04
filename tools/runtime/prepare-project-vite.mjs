@@ -22,7 +22,7 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, rmdir, stat, symlink, unlink } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -413,21 +413,66 @@ export function parseManifest(value) {
   return manifest
 }
 
-async function writePrivateJson(target, value) {
-  const directory = path.dirname(target)
-  await mkdir(directory, { recursive: true, mode: 0o700 })
-  const info = await lstat(directory)
-  if (!info.isDirectory() || info.isSymbolicLink()) fail('OUTPUT_INVALID', 'The manifest directory is not a real directory.')
-  await chmod(directory, 0o700)
-  const temporary = path.join(directory, `.${path.basename(target)}.${randomBytes(6).toString('hex')}.tmp`)
-  const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`)
-    await handle.sync()
-  } finally {
-    await handle.close()
+/**
+ * Returns the missing directories of the manifest path, outermost first, without creating any.
+ * An existing manifest directory must be a real directory; a deeper existing ancestor only has to
+ * resolve to a directory (a symlinked home stays usable).
+ */
+async function missingManifestDirectories(directory) {
+  const missing = []
+  for (let current = directory; ; current = path.dirname(current)) {
+    let info
+    try {
+      info = await lstat(current)
+    } catch (error) {
+      if (error?.code !== 'ENOENT' || path.dirname(current) === current) fail('OUTPUT_INVALID', 'The manifest directory path is not usable.')
+      missing.unshift(current)
+      continue
+    }
+    if (missing.length === 0 && (info.isSymbolicLink() || !info.isDirectory())) fail('OUTPUT_INVALID', 'The manifest directory is not a real directory.')
+    if (missing.length > 0 && !(await stat(current).catch(() => null))?.isDirectory()) fail('OUTPUT_INVALID', 'A manifest directory ancestor is not a directory.')
+    return missing
   }
-  await rename(temporary, target)
+}
+
+/**
+ * Writes the manifest as a new 0600 file renamed over `target`. Existing directories keep their
+ * exact mode (a shared or sticky directory is used, never repaired); only missing directories are
+ * created, each 0700. A symlinked or non-directory manifest directory and a target that is not a
+ * regular file are refused unchanged. On failure the call removes only its own temporary file and
+ * the empty directories it created.
+ */
+export async function writePrivateJson(target, value) {
+  const directory = path.dirname(target)
+  const missing = await missingManifestDirectories(directory)
+  const created = []
+  let staged = null
+  try {
+    for (const next of missing) {
+      // mode 0o700 is reduced, never widened, by the umask; nothing pre-existing is chmod-ed.
+      await mkdir(next, { mode: 0o700 })
+      created.push(next)
+    }
+    const existing = await lstat(target).catch((error) => (error?.code === 'ENOENT' ? null : fail('OUTPUT_INVALID', 'The manifest path is not usable.')))
+    if (existing !== null && !existing.isFile()) fail('OUTPUT_INVALID', 'The manifest path exists and is not a regular file.')
+    const temporary = path.join(directory, `.${path.basename(target)}.${randomBytes(6).toString('hex')}.tmp`)
+    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    staged = temporary
+    try {
+      await handle.chmod(0o600)
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await rename(temporary, target)
+    staged = null
+  } catch (error) {
+    if (staged !== null) await unlink(staged).catch(() => undefined)
+    for (const owned of created.reverse()) await rmdir(owned).catch(() => undefined)
+    if (error instanceof PreparationError) throw error
+    fail('OUTPUT_WRITE_FAILED', 'The manifest could not be written.')
+  }
 }
 
 export function defaultManifestPath(environment = process.env) {
