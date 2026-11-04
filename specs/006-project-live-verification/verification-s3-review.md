@@ -78,3 +78,28 @@ All heavy steps ran under `flock -w 1800 /tmp/flowproof-spec006-heavy.lock` on o
 - This round did not assess these surfaces: closed shadow roots (not readable from page script), `::backdrop`, `::first-line`/`::first-letter` backgrounds, and url values in `mask-image`, `filter` or `-webkit-box-reflect`.
 - Pseudo url checks now fail closed even when the pseudo is hidden or not generated (`content: none`), and for inherited `list-style-image` in hidden subtrees. These are deliberate false positives.
 - Integration, UI and the full e2e suite were not rerun in this unit.
+
+# S3 PR28 parent correction before review 3 — URL image surfaces
+
+Scope: the parent's pre-publication probe (`pr28-parent-r2/surface-probe.mjs`) showed retained unmasked synthetic pixels for `::first-letter` (2046), `::first-line` (1878) and a modal `::backdrop` (11594), all `ok=true`. These were listed as gaps in round 2. They are the same fail-closed image-surface boundary, so they are fixed here rather than accepted. Base `76b5696`, fix commit `2d1e821`. Synthetic values only.
+
+Fix (`renderedText`, shared): one computed-property list now carries every URL-bearing image property checked on each element and every pseudo surface: background, list-style and border images, `mask-image`, `-webkit-mask-image`, `-webkit-mask-box-image-source`, `filter`, `backdrop-filter`, `-webkit-box-reflect`, `clip-path` and `content`. Any `url(` fails closed as `IMAGE_TEXT_UNVERIFIED`. `::first-line` and `::first-letter` join `::before`/`::after`/`::marker`. `::backdrop` is checked for every element, masked or not, and for html/body, because a top-layer backdrop paints outside its element's mask.
+
+## Results (logs in ignored `.flowproof/task-logs/006-project-live-verification/s3-parent-r2/`)
+
+| Check | Result | Log |
+| --- | --- | --- |
+| Red before fix, 10 new headed tests | 10/10 failed: each sealed `incomplete` with its start image retained. The 6 pixel controls passed first: `::first-letter`, `::first-line`, modal `::backdrop`, masked-modal `::backdrop`, text-shaped `mask-image` and element `content: url()`. The `filter`, `backdrop-filter`, `-webkit-box-reflect` and `clip-path` cases are URL-only, with no pixel leak shown | `red-e2e.log` |
+| Workspace `pnpm typecheck` / `pnpm build` | passed / passed | `green-typecheck.log`, `green-build.log` |
+| `vitest --project unit --project contract` | 37 files, 1252 passed, 5 skipped (existing opt-in `runIf(CHROMIUM)` replay tests) | `green-unit-contract.log` |
+| Headed Chromium `project-privacy.spec.ts` | 32/32 (the 22 earlier tests + 10 new), 0 skipped | `green-e2e.log` |
+| Parent probe rerun against the new build (read-only, own output) | first-letter, first-line, backdrop and filter now `ok=false IMAGE_TEXT_UNVERIFIED` with 0 retained; public and hidden controls still `ok=true`; contents and empty-pseudo unchanged `ok=false` | `parent-probe-rerun.json` |
+
+Heavy steps ran under `flock -w 1800 /tmp/flowproof-spec006-heavy.lock`. The e2e tests used owned ports 43160-43161; the probe used an OS-assigned loopback port that it closed.
+
+## Remaining limits (not a universal privacy guarantee)
+
+- Closed shadow roots cannot be inspected from page script, so text or images inside them are not assessed. That would need browser-level DOM access and stays an open threat.
+- The property and pseudo lists are an explicit enumeration of known URL-bearing paint surfaces in current Chromium. A property outside the list is not inspected.
+- The URL checks deliberately fail closed for surfaces that may not paint: hidden or ungenerated pseudos, a `::backdrop` rule with no open modal, `clip-path: url(#local)` and inherited `list-style-image`. This can mark some safe pages unsupported.
+- Integration, UI and the full e2e suite were not rerun in this unit.
