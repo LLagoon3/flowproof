@@ -168,3 +168,31 @@ The new published HEAD still requires completed exact-head Codex review and full
 
 The correctly targeted `tests/integration/probe-install-order.test.ts` independently passed 1/1;
 combined focused coverage is seven files and 92 passed, with the six-file and one-file runs distinct.
+
+## Review 3 finding 4473944353 — accepted file larger than the served-file limit
+
+`acceptOutput` (project runtime) enforced only the profile aggregate (32 MiB, 2,000 files), while
+both target servers refuse any single file above 16 MiB (`readServedFile`), so an accepted output
+holding one 16 MiB + 1 file was ready yet 404 for that file. Fix: the 16 MiB limit is now one named
+constant, `MAX_TARGET_FILE_BYTES` in the dependency-free `contracts/schemas.ts`; the target uses it
+unchanged (legacy prepared-mode serving keeps exactly 16 MiB) and `acceptOutput` rejects any single
+output file above it with the existing `RUNTIME_OUTPUT_TOO_LARGE`, before any output is copied or
+served. Aggregate/file-count profile limits, the configuration contract and server limits are
+unchanged; no module cycle (runtime and target both import the leaf contracts module).
+
+Other acceptance -> serving assumptions checked in source, all already coherent: accepted path
+segments use the runtime's `SAFE_SEGMENT`, a length-bounded subset of the target's, so every
+accepted path is requestable; acceptance hashes the copied bytes and the target re-hashes each
+response against them; symlinks and non-regular files are refused on both sides; the entry file is
+checked at acceptance and at `serve`.
+
+Red (real offline runtime, exact heavy lock): the new `project-runtime` test accepted a 16 MiB file,
+served it over real HTTP, and then failed because the base also accepted 16 MiB + 1 (aggregate stays
+below 32 MiB). Green: 16 MiB is accepted, `GET` returns exactly its bytes (hash matches) and `HEAD`
+its length; six path-confusion forms are 404; a same-size different-bytes copy is 404; 16 MiB + 1 is
+`RUNTIME_OUTPUT_TOO_LARGE` with no output; no runtime-labelled container remains and the original
+project is unchanged. Also passes under the runner-like `::1`-first resolver. `pnpm typecheck` and
+`pnpm build` exit 0; unit project 870 passed / 5 skipped; focused `project-runtime`,
+`project-target-directory`, `project-target-security`, `project-studio` 33/33. Host containers
+46 -> 46 identical; temporary entries unchanged; no listeners on 43150–43159. Logs: ignored
+`.flowproof/task-logs/006-project-live-verification/s2-size/`. Full suites and hosted CI not run here.

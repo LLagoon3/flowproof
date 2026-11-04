@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
-import { lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { request } from 'node:http'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -460,4 +461,66 @@ describe('nested output integrity boundaries', () => {
     expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
     expect(changedSnapshotFacets(prepared.before, await snapshotOriginalProject(prepared.repository.root))).toEqual([])
   }, DOCKER_TIMEOUT * 3)
+})
+
+describe('accepted output stays servable', () => {
+  // The documented single-file limit of the project target; an accepted output never exceeds it.
+  const SERVED_FILE_LIMIT = 16 * 1_024 * 1_024
+
+  const fetchTarget = (port: number, rawPath: string, method: 'GET' | 'HEAD'): Promise<{ status: number; length: string | undefined; body: Buffer }> =>
+    new Promise((resolve, reject) => {
+      const req = request({ host: 'localhost', port, method, path: rawPath }, (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => chunks.push(chunk))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, length: res.headers['content-length'], body: Buffer.concat(chunks) }))
+      })
+      req.on('error', reject)
+      req.end()
+    })
+
+  it('accepts and serves one file of exactly the served-file limit, and rejects one byte more before any output exists', async () => {
+    const prepared = await prepare({
+      'tests/sized-output.mjs':
+        "import { mkdirSync, writeFileSync } from 'node:fs'\nmkdirSync('dist', { recursive: true })\nwriteFileSync('dist/index.html', '<!doctype html><title>sized</title>')\nwriteFileSync('dist/large.bin', Buffer.alloc(Number(process.argv[2]), 7))\n",
+    })
+    const sized = (bytes: number): Promise<ExecutionConfiguration> =>
+      configure(prepared.project, { build: { argv: ['node', 'tests/sized-output.mjs', String(bytes)], output_directory: 'dist' } })
+
+    const atLimitConfiguration = await sized(SERVED_FILE_LIMIT)
+    // The single-file boundary is below the aggregate profile limit, so only the file size decides.
+    expect(SERVED_FILE_LIMIT + 1 + 64).toBeLessThan(atLimitConfiguration.profile.byte_limits.max_output_bytes)
+    const atLimit = await runtime.build({ snapshot: await snapshotOf(prepared.project), configuration: atLimitConfiguration })
+    expect(atLimit.status).toBe('passed')
+    const output = keep(atLimit.output)
+    const large = output.files.find((file) => file.path === 'large.bin')
+    expect(large?.size).toBe(SERVED_FILE_LIMIT)
+
+    const { startProjectTargetApp } = await import('../../packages/flowproof/src/studio/targetApp.js')
+    const target = await startProjectTargetApp({ port: 0 })
+    try {
+      target.setFrameAncestor('http://127.0.0.1:43141')
+      await target.serve(output, { entryPath: '/' })
+      const served = await fetchTarget(target.port, '/large.bin', 'GET')
+      expect(served.status).toBe(200)
+      expect(served.length).toBe(String(SERVED_FILE_LIMIT))
+      expect(sha256Hex(served.body)).toBe(large?.sha256)
+      const head = await fetchTarget(target.port, '/large.bin', 'HEAD')
+      expect([head.status, head.length, head.body.length]).toEqual([200, String(SERVED_FILE_LIMIT), 0])
+      for (const rawPath of ['/large.bin/', '/./large.bin', '//large.bin', '/large.bin%2F', '/%2e%2e/large.bin', '/missing.bin']) {
+        expect((await fetchTarget(target.port, rawPath, 'GET')).status, rawPath).toBe(404)
+      }
+      // Same size, different bytes: the accepted hash still decides what is served.
+      await chmod(path.join(output.root, 'large.bin'), 0o644)
+      await writeFile(path.join(output.root, 'large.bin'), Buffer.alloc(SERVED_FILE_LIMIT, 8))
+      expect((await fetchTarget(target.port, '/large.bin', 'GET')).status).toBe(404)
+    } finally {
+      await target.close()
+    }
+
+    const overLimit = await runtime.build({ snapshot: await snapshotOf(prepared.project), configuration: await sized(SERVED_FILE_LIMIT + 1) })
+    if (overLimit.output !== null) keep(overLimit.output)
+    expect(overLimit).toMatchObject({ status: 'failed', reason: 'RUNTIME_OUTPUT_TOO_LARGE', output: null })
+    expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
+    await expectOriginalUnchanged(prepared)
+  }, DOCKER_TIMEOUT * 2)
 })

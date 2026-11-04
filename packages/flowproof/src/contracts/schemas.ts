@@ -58,6 +58,9 @@ export const REASON_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/
 export const EVIDENCE_ID_PATTERN =
   /^ev_(failure|replay)_(actions|dataset|chart|screenshot|console|network|source)_([0-9]{3})$/
 export const LOCALHOST_APP_URL_PATTERN = /^http:\/\/localhost:[0-9]+(?:\/.*)?$/
+
+/** The largest single file a target app serves; project output admission rejects anything larger. */
+export const MAX_TARGET_FILE_BYTES = 16 * 1024 * 1024
 const FAILURE_EVIDENCE_ID_PATTERN =
   /^ev_failure_(?:actions|dataset|chart|screenshot|console|network|source)_[0-9]{3}$/
 const STUDIO_EVENT_ID_PATTERN = /^[0-9a-fA-F-]{36}:[1-9][0-9]*$/

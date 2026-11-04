@@ -4,6 +4,7 @@ import { constants } from 'node:fs'
 import { chmod, lstat, mkdir, open, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+import { MAX_TARGET_FILE_BYTES } from '../contracts/index.js'
 import { sanitizeText } from '../evidence/sanitize.js'
 import { createProjectTempDirectory } from '../evidence/projectStore.js'
 import { ExecutionConfigurationSchema, newProjectUuid, projectDigest } from './contracts.js'
@@ -188,6 +189,8 @@ async function acceptOutput(source: string, configuration: ExecutionConfiguratio
         if (nested !== null) return nested
         continue
       }
+      // Every accepted file must stay servable: the target serves no single file above this size.
+      if (info.size > MAX_TARGET_FILE_BYTES) return 'RUNTIME_OUTPUT_TOO_LARGE'
       bytes += info.size
       if (listing.filter((item) => !item.directory).length + 1 > limits.max_output_files || bytes > limits.max_output_bytes) return 'RUNTIME_OUTPUT_TOO_LARGE'
       listing.push({ relative: child, directory: false })

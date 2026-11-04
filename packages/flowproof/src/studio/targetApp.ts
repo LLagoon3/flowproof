@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { Frame } from 'playwright'
 
-import { LOCALHOST_APP_URL_PATTERN } from '../contracts/index.js'
+import { LOCALHOST_APP_URL_PATTERN, MAX_TARGET_FILE_BYTES } from '../contracts/index.js'
 import type { LoadedScenario } from '../scenario/loadScenario.js'
 
 // The target-app lifecycle owner. One FlowProof-owned static server binds the scenario's fixed
@@ -22,7 +22,7 @@ export type TargetStage = (typeof TARGET_STAGES)[number]
 
 export const DEFAULT_RECONNECT_TIMEOUT_MS = 30_000
 const PROBE_POLLING_MS = 50
-const MAX_SERVED_FILE_BYTES = 16 * 1024 * 1024
+const MAX_SERVED_FILE_BYTES = MAX_TARGET_FILE_BYTES
 
 export type TargetAppErrorCode =
   | 'TARGET_URL_INVALID'
