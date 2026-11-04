@@ -667,8 +667,8 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
           if (node.nodeType === 1) {
             const element = node as any
             if (element.closest(masked) || (element.checkVisibility && !element.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
-            const background = doc.defaultView.getComputedStyle(element).backgroundImage
-            if (/url\(/i.test(background)) return false
+            const style = doc.defaultView.getComputedStyle(element)
+            if ([style.backgroundImage, style.listStyleImage, style.borderImageSource].some((image) => /url\(/i.test(image))) return false
             for (const pseudo of ['::before', '::after', '::marker']) if (!appendPseudo(element, pseudo)) return false
             if (node.shadowRoot && !visit(node.shadowRoot)) return false
             continue

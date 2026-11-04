@@ -149,6 +149,11 @@ const BACKGROUND_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARG
   <div id="background-private" style="width: 240px; height: 26px; background-image: url('/private.svg')"></div>
 </body></html>`
 
+const LIST_IMAGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+  body { margin: 0; padding: 6px; background: white; }
+  #list-private { list-style-image: url('/private.svg'); list-style-position: inside; width: 260px; height: 32px; }
+</style></head><body><ul><li id="list-private">Synthetic list item</li></ul><button id="add">Add</button></body></html>`
+
 const PAGES: Record<string, string> = {
   '/blank': '<!doctype html><title>blank</title>',
   '/decoy': `<!doctype html><body style="margin:0"><button id="decoy" style="width:280px;height:100px">Decoy ${SEEDS.decoy}</button></body>`,
@@ -157,6 +162,7 @@ const PAGES: Record<string, string> = {
   '/next': NEXT_HTML,
   '/reflect': REFLECT_HTML,
   '/background': BACKGROUND_HTML,
+  '/list-image': LIST_IMAGE_HTML,
 }
 
 function serve(host: string, port: number, route: (path: string) => { status: number; body: string; contentType?: string }): Promise<Server> {
@@ -573,6 +579,22 @@ test('uninspectable CSS background images make image evidence unavailable', asyn
   const background = await boxIn(frame, '#background-private')
   const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
   expect(count(control, isGreen, background).hits, 'control: CSS background image renders').toBeGreaterThan(8)
+
+  const sealed = await recorder.finish()
+  expect(sealed.capture.state).toBe('unsupported')
+  expect(sealed.capture.completeness?.reasons).toContain('IMAGE_TEXT_UNVERIFIED')
+  expect(images(sealed).length).toBe(0)
+})
+
+test('CSS list-style images are treated as uninspectable visual evidence', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/list-image')
+  await recorder.session.imagesSettled()
+
+  const item = await boxIn(frame, '#list-private')
+  const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+  expect(count(control, isGreen, item).hits, 'control: CSS list image renders').toBeGreaterThan(8)
+  await pointer(recorder, () => frame.click('#add'))
 
   const sealed = await recorder.finish()
   expect(sealed.capture.state).toBe('unsupported')
