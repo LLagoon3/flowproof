@@ -48,3 +48,57 @@ Open for unit B (T023 stays partial): client/auth/redirect/no-retry/no-tools, ca
 90 s timeout, sticky cancellation, requested/observed model + response-ID validation, wire
 `text.format` strict-schema mapping, and the isolated live-smoke discovery gate (T028, T031).
 Live strict-schema/image compatibility remains unproven until T053.
+
+## Unit B — project Meta client and opt-in live gate (T023 complete, T028; T031 authored only)
+
+Base: `503d0ec` (unit A). No provider was called; every client result below came from in-process
+HTTP fakes explicitly labelled `test_transport`, which can never satisfy live acceptance.
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Red-first | `npx vitest run --project contract tests/contract/project-model.test.ts` before `projectClient.ts` existed | failed: module `projectClient.js` not found (no tests ran) |
+| Green | same command | 1 file, 47 tests passed, 0 skipped |
+| Typecheck | `flock -w 1800 /tmp/flowproof-spec006-heavy.lock npm run typecheck` | passed |
+| Contract project | `npx vitest run --project contract` (under the same lock) | 12 files, 451 tests passed |
+| Discovery (T003 test) | `npx vitest run --project integration tests/integration/project-live-discovery.test.ts` | 5 passed |
+| Real lister | `vitest list --filesOnly` with the default `unit/contract/integration/ui` projects vs `--project project-meta-smoke` | default 59 files, 0 smoke files; explicit project lists only `tests/integration/project-live-meta-smoke.test.ts` |
+
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/s5-unit-b/`.
+
+Proven in-process for `packages/flowproof/src/model/projectClient.ts`:
+
+- One stateless POST to the fixed `https://api.meta.ai/v1/responses`, `muse-spark-1.3`,
+  `store: false`, body keys exactly `model/instructions/input/store/text`; `input` equals the prompt's
+  structured blocks, so the decoded `input_image` bytes hash to the retained PNGs; strict closed
+  phase formats (analysis `{result: ready|clarify|unsupported}`, clarified `{result: ready|unsupported}`,
+  correction `{summary, citations, target_paths, patch}`); `redirect: 'error'`; only
+  accept/authorization/content-type headers.
+- Key read only from the explicit host `env.MODEL_API_KEY`; process `MODEL_API_KEY`/`OPENAI_*`
+  values (base URL, custom headers, key) are ignored; a blank key fails before any send.
+- Completed records parse as S1 `ProviderInvocation` with the validated observed model and response
+  ID, prompt `input_sha256`/included IDs and the actual wire `request_bytes` (within 8 MiB for the
+  largest fitted prompt). A different/missing model or a missing/malformed response ID fails as
+  `PROVIDER_IDENTITY_MISMATCH`; nothing is copied from configuration.
+- Strict output: an uncited observation, an unwrapped or extra-field result, non-JSON, an incomplete,
+  refused or multi-part response and a foreign question ID all fail with codes; correction targets
+  outside the included sources fail. HTTP 500/429/400/401/307 fail once with fixed text, no retry
+  or redirect, and the provider error text, reasoning and key never appear in results or records.
+- Per-run budgets: one analysis (a failed one is not retried), one clarified re-analysis admitted
+  only by this run's validated `clarify` with the same question/capture, one correction admitted
+  only after this run's validated `ready` analysis of the same capture. A concurrent call is
+  `PROVIDER_BUSY`. Tampered, foreign-run or wrong-route prompts are refused before sending.
+- The 90 s default per-exchange budget is enforced (shortened in tests) even when the provider
+  never answers; cancellation is sticky; a late valid response stays `cancelled`; later calls
+  send nothing.
+- Prompt builder (unit A API preserved, additive): the manifest binds the answered clarification;
+  `serialized` keeps a 32 KiB envelope reserve under 8 MiB; the 64-observation cap includes exactly
+  64 in host order, discloses `REQUEST_OBSERVATION_LIMIT` omissions and rejects essential overflow.
+- Legacy `diagnose()`, `prompt.ts`, `metaClient.ts` and `transport.ts` are unchanged.
+
+Boundaries and gaps:
+
+- The correction prompt's `baseline.outcome` is a host-supplied boundary. Neither this client nor
+  its fakes prove an executed baseline replay; S6 (T038/T041) must derive it from actual replay.
+- T031 `tests/integration/project-live-meta-smoke.test.ts` is authored, typechecked and isolated
+  but NOT executed. Without `MODEL_API_KEY` it fails with a blocker message (no skip). Live
+  strict-schema, image interpretation, quota and identity compatibility remain unproven until T053.
