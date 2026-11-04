@@ -196,3 +196,21 @@ project is unchanged. Also passes under the runner-like `::1`-first resolver. `p
 `project-target-directory`, `project-target-security`, `project-studio` 33/33. Host containers
 46 -> 46 identical; temporary entries unchanged; no listeners on 43150–43159. Logs: ignored
 `.flowproof/task-logs/006-project-live-verification/s2-size/`. Full suites and hosted CI not run here.
+
+## Parent independent review-3 correction verification
+
+At clean implementation `855b98e31ec01b97a53ae52f5b85efe98653121b`, the parent inspected the full
+five-file correction and independently ran `pnpm typecheck` and `pnpm build` (both exit 0), followed
+by actual offline-runtime and HTTP boundary tests together with directory, target-security and
+project-studio contracts: four files, 33/33 passed. The first command also named a nonexistent
+integration legacy-target path; that did not add coverage. The parent then ran the actual
+`tests/unit/target-app.test.ts`: one file, 27/27 passed. These are separate runs, not one 60-test run.
+
+The real runtime test proves inclusive 16 MiB acceptance/GET bytes and digest/HEAD length, rejection
+of 16 MiB + 1 before output exists, six path/missing negatives, same-size byte tampering refusal,
+original integrity and owned-runtime cleanup. The fixed single-file admission limit and the legacy
+reader share one unchanged constant; aggregate and file-count limits remain enforced. Parent tests
+used the exact shared `/tmp/flowproof-spec006-heavy.lock`; all 46 host container IDs were unchanged.
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/pr30-parent-r3/`. No actual provider
+request, full local suite or hosted result for this new revision is claimed here. The final permitted
+remediation review and exact-head hosted CI remain publication gates.
