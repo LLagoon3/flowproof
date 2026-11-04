@@ -16,7 +16,7 @@ import { createProjectDemonstration, createProjectRun } from '../../packages/flo
 type Json = Record<string, any>
 const sha256 = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex')
 
-import { CONFIGURATION, IMAGE_BYTES, SECRET, SOURCES, TestRecorder } from '../support/projectDemonstration.js'
+import { CONFIGURATION, SECRET, SOURCES, TestRecorder } from '../support/projectDemonstration.js'
 
 type Answer = (recorder: TestRecorder, body: Json) => unknown
 const hostQuestion = (body: Json): string => JSON.parse(String(body.input[0].content[0].text).split('\n').slice(1).join('\n')).binding.question_id
