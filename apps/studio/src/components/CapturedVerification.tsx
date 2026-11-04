@@ -2,27 +2,34 @@ import { useId } from 'react'
 
 import { isValidRequestText, studioError } from '../api.js'
 import type { CapturedCheckId, CapturedCheckStatus, CapturedVerificationResult, StudioError, StudioEvent, StudioEventType } from '../api.js'
-import type { RunPresentation } from '../presentation.js'
-import { canStartRun, selectCapturedCheckSummary, selectCapturedChecks, selectCapturedCleanup, selectCapturedIdentity, selectCapturedOutcome } from '../state.js'
+import type { ResultSummaryView, RunPresentation } from '../presentation.js'
+import { canStartRun, selectCapturedCheckSummary, selectCapturedChecks, selectCapturedCleanup, selectCapturedIdentity } from '../state.js'
 import type { CapturedRunView, StudioState } from '../state.js'
+import { ResultSummary } from './ResultSummary.js'
 import { WorkTimeline } from './WorkTimeline.js'
 import type { ActivityWarning } from './WorkTimeline.js'
 
 // The candidate-verification surface of a host-fixed captured verification Studio. It takes the
 // place of the Meta chat and the nine legacy gates in the work panel: one action, the panel's entry,
-// starts this launch's one verification run with the case's committed goal, the observed work
-// shows every accepted live event (`WorkTimeline`), and the ten check rows, the final status,
-// the short candidate digest and baseline, the coverage note, and the cleanup and original-integrity
-// facts come only from the strict result bound to this run. Every value is rendered as text, errors
+// starts this launch's one verification run with the case's committed goal, and the observed work
+// shows every accepted live event (`WorkTimeline`). Once the strict result is bound to this run, a
+// concise result (`ResultSummary`) states its exact verdict, the result's own fixed message and
+// every failed or unevaluable check by name; the ten check rows, the short candidate digest and
+// baseline, the coverage note and the cleanup and original-integrity facts stay in the closed
+// Details on demand, all from that strict result only. Every value is rendered as text, errors
 // show only the client-authored message for their stable code, and the surface never claims more
-// than candidate verification. Its captured before/after screenshots replace the released target
-// pane. The final status carries `data-workspace-result` for the collapsed workspace's result entry.
+// than candidate verification. Its stored before/after evidence replaces the released target pane.
+// The final status carries `data-workspace-result` for the collapsed workspace's result entry.
 
 export interface CapturedVerificationProps {
   /** The Studio state from `studioReducer`; the surface never changes it. */
   readonly state: StudioState
   /** The run presentation of that state, the same one the collapsed workspace status shows. */
   readonly presentation: RunPresentation
+  /** The concise final result of the run (`selectResultSummary`); null without a bound strict result. */
+  readonly summary: ResultSummaryView | null
+  /** Moves focus to the stored before/after evidence in the canvas. */
+  readonly onCompare: () => void
 }
 
 export interface CapturedStartProps {
@@ -119,49 +126,49 @@ export function CapturedStart({ state, requestText, onStart }: CapturedStartProp
   )
 }
 
-function FinalStatus({ run }: { readonly run: CapturedRunView | undefined }) {
+/**
+ * The non-final status, kept for assistive technology and the run's status marker but not shown:
+ * the work summary already states it, and a verdict comes only from the result summary.
+ */
+function PendingStatus({ run }: { readonly run: CapturedRunView | undefined }) {
   if (run === undefined) {
     return (
-      <p className="captured-status__final" role="status" data-captured-status="none">
+      <p className="captured-status__final" data-captured-status="none">
         No candidate verification yet.
-      </p>
-    )
-  }
-  if (run.status === 'running') {
-    return (
-      <p className="captured-status__final" role="status" data-captured-status="pending">
-        Final status pending until the strict verification result is available.
       </p>
     )
   }
   if (run.status === 'failed') {
     const safe = safeError(run.error)
     return (
-      <p className="captured-status__final" role="status" data-captured-status="unavailable" data-code={safe.code}>
+      <p className="captured-status__final" data-captured-status="unavailable" data-code={safe.code}>
         No final status. {safe.message}
       </p>
     )
   }
-  const outcome = selectCapturedOutcome(run)
-  if (outcome === null) return null
   return (
-    <div className="captured-status__final" role="status" data-captured-status={outcome.status} data-workspace-result="" tabIndex={-1}>
-      <p className="captured-status__verdict">{outcome.label}</p>
-      {outcome.reasonCode !== null && (
-        <p className="captured-status__reason">
-          <code>{outcome.reasonCode}</code> {outcome.message}
-        </p>
-      )}
-    </div>
+    <p className="captured-status__final" data-captured-status="pending">
+      Final status pending until the strict verification result is available.
+    </p>
   )
 }
 
-function RunStatus({ run }: { readonly run: CapturedRunView | undefined }) {
+const checkLabel = (id: string): string => CAPTURED_CHECK_LABELS[id as CapturedCheckId]
+
+function RunStatus({ run, summary, onCompare }: { readonly run: CapturedRunView | undefined; readonly summary: ResultSummaryView | null; readonly onCompare: () => void }) {
+  return (
+    <section className={`agent-panel__section captured-status${summary === null ? ' visually-hidden' : ''}`} aria-label="Verification status" data-final={summary !== null}>
+      {summary === null ? <PendingStatus run={run} /> : <ResultSummary view={summary} labelOf={checkLabel} onCompare={onCompare} />}
+    </section>
+  )
+}
+
+/** The executed candidate identity and coverage, from the strict result only, and the scope statement. */
+function CandidateIdentity({ run }: { readonly run: CapturedRunView | undefined }) {
   const identity = selectCapturedIdentity(run)
   return (
-    <section className="agent-panel__section captured-status" aria-label="Verification status">
-      <h3 className="agent-panel__heading">Status</h3>
-      <FinalStatus run={run} />
+    <section className="agent-panel__section captured-identity" aria-label="Candidate identity">
+      <h3 className="agent-panel__heading">Candidate identity</h3>
       {identity !== null && (
         <dl className="captured-status__details">
           <div className="captured-status__row">
@@ -278,15 +285,25 @@ function CleanupFacts({ run }: { readonly run: CapturedRunView | undefined }) {
   )
 }
 
-/** The candidate-verification final status, observed work, checks and cleanup facts. */
-export function CapturedVerification({ state, presentation }: CapturedVerificationProps) {
+/** The candidate-verification result, observed work, and on demand its checks, identity and cleanup facts. */
+export function CapturedVerification({ state, presentation, summary, onCompare }: CapturedVerificationProps) {
   const run = state.capturedRun
   return (
     <div className="captured" data-run-id={run?.runId ?? 'none'}>
-      <RunStatus run={run} />
-      <WorkTimeline presentation={presentation} eventLabel={eventLabel} eventDetail={eventDetail} activityWarning={activityWarning(run)} />
-      <CheckTable run={run} />
-      <CleanupFacts run={run} />
+      <RunStatus run={run} summary={summary} onCompare={onCompare} />
+      <WorkTimeline
+        presentation={presentation}
+        eventLabel={eventLabel}
+        eventDetail={eventDetail}
+        activityWarning={activityWarning(run)}
+        details={
+          <>
+            <CheckTable run={run} />
+            <CandidateIdentity run={run} />
+            <CleanupFacts run={run} />
+          </>
+        }
+      />
     </div>
   )
 }

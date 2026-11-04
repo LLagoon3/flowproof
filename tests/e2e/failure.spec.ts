@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
-import type { Locator } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 
 import { GATE_IDS, parseDiagnosis, parseEvidenceBundle } from '../../packages/flowproof/src/contracts/index.js'
 import type { EvidenceBundle, GateId, RunResult } from '../../packages/flowproof/src/contracts/index.js'
@@ -10,6 +10,13 @@ import { callTrustedProbe } from '../../packages/flowproof/src/studio/targetApp.
 import { REPO_ROOT, git, listTree } from '../support/repoFixture.js'
 import { DEMO_PORT, openStudioHarness } from '../support/studioHarness.js'
 import type { CleanupReport, StudioHarness } from '../support/studioHarness.js'
+
+/** Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). */
+async function openWorkDetails(page: Page): Promise<void> {
+  const toggle = page.locator('section.work-timeline button[data-disclosure="details"]')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
 
 // T057/T060: the headed deterministic Failure run. The committed
 // `canvas-filter-failure-invalid-citation` case runs the same app, actions, oracles, and permitted
@@ -71,11 +78,20 @@ async function expectFailureTrail(harness: StudioHarness, runId: string, section
   expect(await items.evaluateAll((elements) => elements.map((element) => element.getAttribute('data-evidence-id')))).toEqual(
     bundle.items.map((item) => item.evidence_id),
   )
+  // The screenshot is shown once, with the stored evidence in the canvas, which the trail opens on
+  // this phase; the trail itself reads no image.
   const screenshot = bundle.items.find((item) => item.type === 'screenshot')
-  const image = section.locator('img')
+  const page = section.page()
+  const phase = await section.getAttribute('data-phase')
+  await expect(section.locator('img')).toHaveCount(0)
+  await section.getByRole('button', { name: `View ${phase ?? ''} screenshot` }).click()
+  await expect(page.getByRole('tab', { name: 'Evidence' })).toHaveAttribute('aria-selected', 'true')
+  const image = page.locator(`.evidence-view [data-evidence-phase="${phase ?? ''}"] img`)
   await expect(image).toHaveCount(1)
+  await expect(image).toBeVisible()
   await expect(image).toHaveAttribute('src', `/api/runs/${runId}/evidence/${screenshot?.evidence_id ?? ''}`)
   await expect.poll(() => loadedSize(image)).toEqual(scenario.scenario.app.canvas)
+  await page.getByRole('tab', { name: 'Target' }).click()
   for (const item of bundle.items.filter((candidate) => candidate.type !== 'screenshot')) {
     const shown = section.locator(`li[data-evidence-id="${item.evidence_id}"] pre`)
     await expect(shown).toHaveCount(1)
@@ -175,6 +191,7 @@ test('the injected invalid-citation fixture is rejected before application and s
     const rejectionNotice = activity.findIndex((item) => item.type === 'agent_message' && /rejected before patch application/i.test(item.message))
     expect(citationUpdate).toBeGreaterThanOrEqual(0)
     expect(rejectionNotice).toBeGreaterThan(citationUpdate)
+    await openWorkDetails(page)
     await expect(page.getByRole('region', { name: 'Candidate', exact: true }).locator('[data-candidate]')).toHaveAttribute('data-candidate', 'absent')
 
     // The visible target still serves the known-bad build: it reconnected once for the

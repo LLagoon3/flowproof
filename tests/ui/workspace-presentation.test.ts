@@ -1197,3 +1197,27 @@ describe('Selected evidence and the canvas view', () => {
     expect(selectCanvasView(capturedFinal({ ...PASSED, run_id: OTHER_RUN_ID }), selected)).toEqual({ tabs: false, tab: 'target', selected: null })
   })
 })
+
+describe('Result and evidence component boundaries', () => {
+  const runtimeImports = (source: string): string[] => [...source.matchAll(/^import\s+(?!type\b)[^'"]*from\s+'([^']+)'/gm)].map((match) => match[1] as string).sort()
+
+  it('renders the summary from its view only: no client, reducer, storage, network or inline style', () => {
+    const file = new URL('../../apps/studio/src/components/ResultSummary.tsx', import.meta.url)
+    expect(existsSync(file)).toBe(true)
+    const source = readFileSync(file, 'utf8')
+    expect(runtimeImports(source).filter((specifier) => specifier !== 'react')).toEqual([])
+    expect(source).not.toMatch(/\b(fetch|EventSource|createStudioClient|startRun|pollResult|openRunEvents|readEvidence|studioReducer|localStorage|sessionStorage|dangerouslySetInnerHTML)\b/)
+    expect(source).not.toMatch(/\bstyle\s*=|\.style\b/)
+  })
+
+  it('reads screenshots only through the closed evidence route URL, with no raw path, cache or other request', () => {
+    const file = new URL('../../apps/studio/src/components/EvidenceComparison.tsx', import.meta.url)
+    expect(existsSync(file)).toBe(true)
+    const source = readFileSync(file, 'utf8')
+    expect(runtimeImports(source)).toEqual(['../api.js', 'react'])
+    expect(source).toMatch(/^import \{ evidenceUrl \} from '\.\.\/api\.js'$/m)
+    expect(source).not.toMatch(/\b(fetch|EventSource|createStudioClient|readEvidence|readCandidateDiff|studioReducer|localStorage|sessionStorage|caches|dangerouslySetInnerHTML)\b/)
+    expect(source).not.toMatch(/screenshot_path|manifest_path|artifact_path|screenshotPath/)
+    expect(source).not.toMatch(/\bstyle\s*=|\.style\b/)
+  })
+})

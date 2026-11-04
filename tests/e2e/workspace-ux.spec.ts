@@ -745,7 +745,9 @@ test('the legacy workspace keeps the draft, the target frame, one run and pendin
     expect(await separatorWidth(workspace)).toBe(26)
     await expect(request).toHaveValue(draft)
 
-    // The held read is still pending, and survives another collapse until it is released.
+    // The held read is still pending, and survives another collapse until it is released. The Proof
+    // Trail stays mounted in the closed work Details, which the reader opens on demand.
+    await openDetails(page)
     const proofTrail = page.getByRole('region', { name: 'Proof Trail', exact: true })
     await expect(proofTrail).toHaveAttribute('data-run-id', finished.runId)
     const failureSection = proofTrail.getByRole('region', { name: 'Failure evidence', exact: true })
@@ -983,7 +985,7 @@ async function recordCapturedRun(harness: CapturedStudioHarness, runId: string, 
  * A page that received none of the run's evidence events shows each side as not received instead.
  */
 function expectBoundEvidence(record: CapturedRunRecord, received = true): void {
-  const side = (evidenceId: string | null): unknown => (received ? { state: 'shown', evidenceId } : { state: 'not-received', evidenceId: null })
+  const side = (evidenceId: string | null): unknown => (received ? { state: 'available', evidenceId } : { state: 'not-received', evidenceId: null })
   expect(record.shown.before).toEqual(side(record.manifestScreenshots.failure))
   expect(record.shown.after).toEqual(side(record.manifestScreenshots.replay))
   expect(record.manifestScreenshots.failure).toMatch(/^ev_failure_screenshot_[0-9]{3}$/)
@@ -1271,7 +1273,7 @@ const windowMetrics = (page: Page): Promise<WindowMetrics> =>
 test('native-zoom-review: the real Studio reflows at actual native 200% browser zoom on the same page', async () => {
   test.skip(process.env.FLOWPROOF_ZOOM_REVIEW !== '1', 'Opt-in operator review: set FLOWPROOF_ZOOM_REVIEW=1 and follow quickstart.md.')
   test.setTimeout(900_000)
-  const review = await reviewCase('native-zoom-review')
+  const review = await reviewCase('native-zoom-review', 'slice4')
   const zoomedMarker = path.join(review.dir, 'zoomed.ack')
   const resetMarker = path.join(review.dir, 'reset.ack')
   let harness: StudioHarness | undefined
@@ -1343,6 +1345,76 @@ test('native-zoom-review: the real Studio reflows at actual native 200% browser 
     expect(reset).toEqual(before)
     expectSideBySide(await layoutOf(page), 24)
     await review.shot(page, 'native-100-after.png')
+
+    // Slice 4: the run measures at native 100%; only after finalization is the page zoomed again,
+    // to check the final result, the compare entry and the Target and Evidence tabs at 200%.
+    const finalZoomedMarker = path.join(review.dir, 'final-zoomed.ack')
+    const finalResetMarker = path.join(review.dir, 'final-reset.ack')
+    await rm(finalZoomedMarker, { force: true })
+    await rm(finalResetMarker, { force: true })
+    await page.getByRole('button', { name: /^(start|send|run)\b/i }).click()
+    const finished = await harness.waitForResult(RUN_BUDGET_MS)
+    expect(finished.result.status).toBe('Verified Fix')
+    const summary = resultOf(page, 'legacy')
+    const canvas = canvasOf(page)
+    await expect(summary.verdict).toHaveText('Verified Fix')
+    await expect(canvas.tablist).toBeVisible()
+    const navigationsAfterRun = tracker.navigations()
+    const finalZoomPrompt = Date.now()
+    const finalZoomInstruction = `The run finalized. In the visible Studio browser window, press Ctrl+= until the zoom indicator reads 200% again. Do not resize the window. Then run:\n  touch '${finalZoomedMarker}'`
+    await writeFile(path.join(review.dir, 'INSTRUCTIONS.txt'), `${finalZoomInstruction}\n`)
+    console.log(`\n[native-zoom-review] ${finalZoomInstruction}\n`)
+    await waitForAck(finalZoomedMarker, finalZoomPrompt, 'final zoom')
+    const finalZoomed = await windowMetrics(page)
+    review.record('metrics:finalZoomed', finalZoomed)
+    expect(finalZoomed.devicePixelRatio).toBe(2)
+    expect(Math.abs(finalZoomed.innerWidth - 640)).toBeLessThanOrEqual(1)
+    expect(Math.abs(finalZoomed.innerHeight - 360)).toBeLessThanOrEqual(1)
+    expect({ outerWidth: finalZoomed.outerWidth, outerHeight: finalZoomed.outerHeight }).toEqual({ outerWidth: before.outerWidth, outerHeight: before.outerHeight })
+    const finalLayout = await layoutOf(page)
+    review.record('layout:finalZoomed', finalLayout)
+    expectStacked(finalLayout)
+    expect(finalLayout.scrollWidth).toBeLessThanOrEqual(finalLayout.clientWidth)
+    await summary.verdict.scrollIntoViewIfNeeded()
+    await expect(summary.verdict).toBeVisible()
+    await review.shot(page, 'native-200-final-summary.png')
+    await summary.compare.scrollIntoViewIfNeeded()
+    await summary.compare.focus()
+    await page.keyboard.press('Enter')
+    await expect(canvas.evidenceTab).toBeFocused()
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(canvas.evidence).toBeVisible()
+    await expect(canvas.side('before')).toHaveAttribute('data-evidence-load', 'loaded')
+    await canvas.side('before').scrollIntoViewIfNeeded()
+    expect((await layoutOf(page)).scrollWidth).toBeLessThanOrEqual((await layoutOf(page)).clientWidth)
+    await review.shot(page, 'native-200-final-evidence.png')
+    await expectAccessible(page, review, 'native-200-final-evidence')
+    await canvas.evidenceTab.focus()
+    await page.keyboard.press('ArrowLeft')
+    await expect(canvas.targetTab).toBeFocused()
+    await expect(canvas.live).not.toHaveAttribute('data-concealed', 'true')
+    await tracker.expectSameFrame()
+    expect(tracker.navigations()).toBe(navigationsAfterRun)
+    await workspace.collapse.scrollIntoViewIfNeeded()
+    await workspace.collapse.focus()
+    await page.keyboard.press('Enter')
+    await expect(workspace.restore).toBeFocused()
+    await expect(workspace.status).toHaveText('Verified Fix')
+    await workspace.viewResult.focus()
+    await page.keyboard.press('Enter')
+    await expect.poll(() => focusedIsResult(page)).toBe(true)
+    await review.shot(page, 'native-200-final-restored.png')
+
+    const finalResetPrompt = Date.now()
+    const finalResetInstruction = `Reset the Studio browser zoom with Ctrl+0, then run:\n  touch '${finalResetMarker}'`
+    await writeFile(path.join(review.dir, 'INSTRUCTIONS.txt'), `${finalResetInstruction}\n`)
+    console.log(`\n[native-zoom-review] ${finalResetInstruction}\n`)
+    await waitForAck(finalResetMarker, finalResetPrompt, 'final reset')
+    const finalReset = await windowMetrics(page)
+    review.record('metrics:finalReset', finalReset)
+    expect(finalReset).toEqual(before)
+    expectSideBySide(await layoutOf(page), 24)
+    await review.shot(page, 'native-100-final-after.png')
     if (original !== null) await page.setViewportSize(original)
   } catch (error) {
     failure = error
@@ -2559,6 +2631,31 @@ test('legacy activity lost before the result shows a separate warning and no ver
     review.record('abortedStreams', aborted)
     expect(aborted).toBeGreaterThan(0)
     await expect(page.locator('tr.agent-gate')).toHaveCount(GATE_IDS.length)
+
+    // Slice 4: the concise unsuccessful result names every failed or unevaluable gate, and its stored
+    // evidence states what the result recorded but this session never received, or never produced.
+    const summary = resultOf(page, 'legacy')
+    await expect(summary.explanation).toHaveText('The candidate was rejected before patch application, so it was never applied or replayed.')
+    await expect(summary.unsuccessful).toHaveAttribute('data-unsuccessful', finished.result.failed_gate_ids.join(' '))
+    await expect(summary.unsuccessful).toContainText('Citations valid: Fail')
+    expect(await visibleText(workspace.panel)).not.toMatch(DIAGNOSTIC_TEXT)
+    const canvas = canvasOf(page)
+    await summary.compare.click()
+    await expect(canvas.evidenceTab).toBeFocused()
+    await expect(canvas.live).toHaveAttribute('data-concealed', 'true')
+    const cited = finished.result.gates.flatMap((item) => item.evidence_ids).filter((id) => /^ev_failure_screenshot_[0-9]{3}$/.test(id))
+    const expectedBefore = finished.result.failure_screenshot_path === null ? 'not-produced' : cited.length > 0 ? 'available' : 'not-received'
+    review.record('evidenceSides', { before: expectedBefore, after: 'not-produced', citedScreenshots: cited })
+    await expect(canvas.side('before')).toHaveAttribute('data-evidence-state', expectedBefore)
+    if (expectedBefore === 'not-received') await expect(canvas.side('before')).toContainText('its Evidence ID was not received in this session')
+    expect(finished.result.replay_screenshot_path).toBeNull()
+    await expect(canvas.side('after')).toHaveAttribute('data-evidence-state', 'not-produced')
+    await expect(canvas.side('after')).toContainText('No replay screenshot was recorded in this run')
+    await expect(canvas.side('after').locator('img')).toHaveCount(0)
+    await canvas.targetTab.click()
+    await expect(canvas.live).not.toHaveAttribute('data-concealed', 'true')
+    await expect(page.locator('iframe')).toBeVisible()
+    await expect(summary.verdict).toHaveText('Unverified')
     expect(watched.errors).toEqual([])
     expect(watched.csp).toEqual([])
   } catch (error) {
@@ -2571,6 +2668,409 @@ test('legacy activity lost before the result shows a separate warning and no ver
     await review.finish(failure)
   }
   expectNothingLeft(cleanup, harness?.baseline)
+})
+
+// ---------------------------------------------------------------------------------------
+// Slice 4: the final result and the stored before/after evidence (T025, T031)
+// ---------------------------------------------------------------------------------------
+//
+// The work panel states the exact family verdict as one heading with a short explanation and the
+// names of every failed or unevaluable gate or check; all other run details stay in the closed
+// Details. The canvas shows the run's stored before/after evidence: the legacy Studio in an
+// Evidence tab over the same kept frame, hidden and inert but never unmounted, and the captured
+// Studio in place of its released target, with no frame left. Test-local routes hold one stored
+// screenshot read (loading) and fail another (unreadable); an in-page event barrier delivers the
+// final live events only after the bound result, so late activity is observed against the verdict
+// and the evidence selection. Every route and barrier is released in `finally`.
+
+/** Always-visible diagnostic text the concise result must not show: Evidence IDs, digests, hosts, reason codes. */
+const DIAGNOSTIC_TEXT = /\bev_(failure|replay)_[a-z]+_[0-9]{3}\b|localhost|127\.0\.0\.1|\b[0-9a-f]{12,}\b|\b[A-Z][A-Z0-9]+(_[A-Z0-9]+)+\b/
+
+/** The text a sighted reader sees in `root`: no hidden, collapsed or visually hidden content. */
+const visibleText = (root: Locator): Promise<string> =>
+  root.evaluate((node) => {
+    const parts: string[] = []
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+    for (let text = walker.nextNode(); text !== null; text = walker.nextNode()) {
+      const parent = text.parentElement
+      if (parent === null || parent.closest('.visually-hidden, [hidden], option') !== null || parent.getClientRects().length === 0) continue
+      if (getComputedStyle(parent).visibility === 'hidden') continue
+      parts.push(text.textContent ?? '')
+    }
+    return parts.join(' ')
+  })
+
+const resultOf = (page: Page, mode: 'legacy' | 'captured') => {
+  const region = page.getByRole('region', { name: mode === 'legacy' ? 'Run status' : 'Verification status', exact: true })
+  return {
+    region,
+    summary: region.locator('.result-summary'),
+    verdict: region.locator('.result-summary__verdict'),
+    explanation: region.locator('.result-summary__explanation'),
+    unsuccessful: region.locator('.result-summary__unsuccessful'),
+    compare: region.getByRole('button', { name: 'Compare before and after' }),
+  }
+}
+
+const canvasOf = (page: Page) => {
+  const pane = page.locator('section.target-pane')
+  return {
+    pane,
+    tablist: pane.getByRole('tablist', { name: 'Canvas view' }),
+    targetTab: pane.getByRole('tab', { name: 'Target' }),
+    evidenceTab: pane.getByRole('tab', { name: 'Evidence' }),
+    live: pane.locator('.target-pane__live'),
+    evidence: pane.locator('.evidence-view'),
+    title: pane.locator('.evidence-view__title'),
+    stored: pane.locator('[data-target-presentation="stored-evidence"]'),
+    side: (side: 'before' | 'after') => pane.locator(`.evidence-view [data-evidence-side="${side}"]`),
+  }
+}
+
+/** Opens the work panel's Details on demand, as the reader does. */
+async function openDetails(page: Page): Promise<void> {
+  const toggle = workLogOf(page).details
+  if ((await toggle.getAttribute('aria-expanded', { timeout: ELEMENT_TIMEOUT_MS })) !== 'true') await toggle.click({ timeout: ELEMENT_TIMEOUT_MS })
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
+const naturalSize = (image: Locator): Promise<{ width: number; height: number } | null> =>
+  image.evaluate((node: HTMLImageElement) => (node.complete && node.naturalWidth > 0 ? { width: node.naturalWidth, height: node.naturalHeight } : null))
+
+const isScreenshotRead = (phase: 'failure' | 'replay') => (url: URL): boolean => new RegExp(`^/api/runs/[^/]+/evidence/ev_${phase}_screenshot_[0-9]{3}$`).test(url.pathname)
+
+/** Fails every matching stored-screenshot read with the closed route's not-found status. */
+async function failReads(page: Page, matches: (url: URL) => boolean): Promise<() => number> {
+  let failed = 0
+  await page.route(
+    (url) => matches(url),
+    async (route: Route) => {
+      failed += 1
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'EVIDENCE_NOT_FOUND', message: 'Not found.' } }) })
+    },
+  )
+  return () => failed
+}
+
+/** The stored screenshot Evidence ID of a run phase, from its persisted manifest. */
+async function manifestScreenshot(harness: { readJson(runId: string, file: string): Promise<unknown> }, runId: string, phase: 'failure' | 'replay'): Promise<string> {
+  const bundle = parseEvidenceBundle(await harness.readJson(runId, `evidence/${phase}/manifest.json`))
+  if (!bundle.ok) throw new Error(`The ${phase} manifest violates the evidence-bundle contract.`)
+  const screenshot = bundle.value.items.find((item) => item.type === 'screenshot')
+  if (screenshot === undefined) throw new Error(`The ${phase} manifest has no screenshot.`)
+  return screenshot.evidence_id
+}
+
+test('legacy final result: one exact verdict with Details on demand, and Target and Evidence tabs over the same kept frame through loading, unreadable, late activity and layout changes', async () => {
+  test.setTimeout(RUN_BUDGET_MS + 240_000)
+  const review = await reviewCase('legacy-final-evidence', 'slice4')
+  let harness: StudioHarness | undefined
+  let cleanup: CleanupReport | undefined
+  let failure: unknown
+  let barrier: EventBarrier | undefined
+  let held: Barrier | undefined
+  try {
+    harness = await openStudioHarness({ scenarioId: HERO })
+    const { page } = harness
+    const workspace = workspaceOf(page)
+    const work = workLogOf(page)
+    const canvas = canvasOf(page)
+    const result = resultOf(page, 'legacy')
+    const requests = logRequests(page)
+    const watched = watchPage(page)
+    await page.setViewportSize({ width: 1280, height: 720 })
+    const tracker = await trackFrame(page)
+
+    // Nothing of a result exists before a run: no verdict, tabs or stored evidence.
+    await expect(work.heading).toHaveText('Ready')
+    await expect(result.summary).toHaveCount(0)
+    await expect(canvas.tablist).toHaveCount(0)
+    await expect(canvas.evidence).toHaveCount(0)
+
+    // Test-local routes: the failure screenshot read is held, the replay screenshot read fails, and
+    // live delivery stops after the integrity gate, so the final event arrives after the result.
+    held = await holdRequests(page, isScreenshotRead('failure'))
+    const failedReads = await failReads(page, isScreenshotRead('replay'))
+    barrier = await installEventBarrier(page, { type: 'gate_updated', gate: 'original_worktree_unchanged' })
+    await page.getByRole('button', { name: /^(start|send|run)\b/i }).click()
+    await expect.poll(() => requests.starts()).toBe(1)
+    // A starting or running measurement is never hidden behind evidence.
+    await expect(canvas.tablist).toHaveCount(0)
+    const integrity = await barrier.held(RUN_BUDGET_MS)
+    expect(integrity).toMatchObject({ type: 'gate_updated', gate: 'original_worktree_unchanged' })
+    const finished = await harness.waitForResult(RUN_BUDGET_MS)
+    expect(finished.result.status).toBe('Verified Fix')
+    const { runId } = finished
+    const failureShot = await manifestScreenshot(harness, runId, 'failure')
+    const replayShot = await manifestScreenshot(harness, runId, 'replay')
+
+    // The concise result: the exact verdict as one heading, one sentence and one quiet entry.
+    await expect(result.verdict).toHaveText('Verified Fix')
+    await expect(result.explanation).toHaveText('All nine required gates passed in the final result.')
+    await expect(result.unsuccessful).toHaveCount(0)
+    await expect(result.compare).toBeVisible()
+    await expect(work.details).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('region', { name: 'Proof Trail', exact: true })).toHaveCount(0)
+    await expect(page.locator('section.proof-trail')).toHaveAttribute('data-run-id', runId)
+    const panelText = await visibleText(workspace.panel)
+    review.record('visiblePanelText', panelText)
+    expect(panelText).not.toMatch(DIAGNOSTIC_TEXT)
+    expect(panelText.match(/Verified Fix/g)).toHaveLength(1)
+    await review.shot(page, 'final-summary.png')
+
+    // The Target tab is selected; the stored evidence is mounted but hidden, its reads issued once.
+    await expect(canvas.tablist).toBeVisible()
+    await expect(canvas.targetTab).toHaveAttribute('aria-selected', 'true')
+    await expect(canvas.evidence).toBeHidden()
+    await expect(canvas.live).not.toHaveAttribute('data-concealed', 'true')
+    await expect(page.locator('iframe')).toBeVisible()
+    await expect.poll(() => held?.held() ?? 0).toBe(1)
+    await expect.poll(() => failedReads()).toBe(1)
+    await tracker.expectSameFrame()
+    const navigations = tracker.navigations()
+
+    // Compare: the Evidence tab is selected and focused; the frame's wrapper is hidden and inert.
+    await result.compare.click()
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(canvas.evidenceTab).toBeFocused()
+    await expect(canvas.evidence).toBeVisible()
+    await expect(canvas.stored).toHaveText('Stored evidence (not live)')
+    await expect(canvas.live).toHaveAttribute('data-concealed', 'true')
+    await expect(canvas.live).toHaveAttribute('inert', '')
+    await expect(page.locator('iframe')).toBeHidden()
+    await tracker.expectSameFrame()
+    // Distinct side states: the held read is loading; the failed read is unreadable, with no image.
+    const before = canvas.side('before')
+    const after = canvas.side('after')
+    await expect(before).toHaveAttribute('data-evidence-phase', 'failure')
+    await expect(before).toHaveAttribute('data-evidence-state', 'available')
+    await expect(before).toHaveAttribute('data-evidence-load', 'loading')
+    await expect(before).toContainText('Loading the stored screenshot.')
+    await expect(before).toHaveAttribute('data-selected', 'true')
+    await expect(after).toHaveAttribute('data-evidence-phase', 'replay')
+    await expect(after).toHaveAttribute('data-evidence-state', 'available')
+    await expect(after).toHaveAttribute('data-evidence-load', 'failed')
+    await expect(after.getByRole('alert')).toHaveText('The stored screenshot could not be read through the closed evidence route.')
+    await expect(after.locator('img')).toHaveCount(0)
+    await expect(canvas.pane.locator('a[href], input, select, textarea, [contenteditable]')).toHaveCount(0)
+    await review.shot(page, 'evidence-loading-unreadable.png')
+    held.release()
+    const image = before.locator('img')
+    await expect(before).toHaveAttribute('data-evidence-load', 'loaded')
+    await expect(image).toBeVisible()
+    await expect(image).toHaveAttribute('src', `/api/runs/${runId}/evidence/${failureShot}`)
+    await expect(image).toHaveAttribute('data-evidence-id', failureShot)
+    await expect.poll(() => naturalSize(image)).toEqual(CANVAS)
+    await expect(before).toContainText(failureShot)
+    await expect(after).toContainText(replayShot)
+
+    // The final event arrives after the result: the verdict and the selection stay as they are.
+    await barrier.release(null)
+    await expect(page.locator('li.agent-activity__item[data-type="run_finalized"]')).toHaveCount(1)
+    await expect(result.verdict).toHaveText('Verified Fix')
+    await expect(workspace.status).toHaveText('Verified Fix')
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(before).toHaveAttribute('data-selected', 'true')
+
+    // The selection survives collapse, a width change, the stacked layout and the way back.
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeHidden()
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await workspace.restore.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeVisible()
+    await workspace.separator.focus()
+    await page.keyboard.press('ArrowRight')
+    expect(await separatorWidth(workspace)).toBe(26)
+    await page.setViewportSize({ width: 900, height: 720 })
+    expectStacked(await layoutOf(page))
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await review.shot(page, 'evidence-stacked-900x720.png')
+    await page.setViewportSize({ width: 1280, height: 720 })
+    expectSideBySide(await layoutOf(page), 26)
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(before).toHaveAttribute('data-selected', 'true')
+    await page.mouse.move(1, 1)
+    await expectAccessible(page, review, 'legacy-evidence-tab-1280x720')
+
+    // The tabs follow the arrow, Home and End keys, and Target returns the same element and frame.
+    await canvas.evidenceTab.focus()
+    await page.keyboard.press('ArrowLeft')
+    await expect(canvas.targetTab).toHaveAttribute('aria-selected', 'true')
+    await expect(canvas.targetTab).toBeFocused()
+    await expect(canvas.live).not.toHaveAttribute('data-concealed', 'true')
+    await expect(canvas.live).not.toHaveAttribute('inert', '')
+    await expect(canvas.evidence).toBeHidden()
+    await expect(page.locator('iframe')).toBeVisible()
+    await tracker.expectSameFrame()
+    await page.keyboard.press('End')
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(canvas.evidenceTab).toBeFocused()
+    await page.keyboard.press('Home')
+    await expect(canvas.targetTab).toHaveAttribute('aria-selected', 'true')
+    await tracker.expectSameFrame()
+
+    // Details on demand: provenance, diff and gates; the trail opens the replay side in the canvas.
+    await openDetails(page)
+    const trail = page.getByRole('region', { name: 'Proof Trail', exact: true })
+    await expect(trail.getByRole('region', { name: 'Diagnosis provenance' }).locator('[data-provenance]')).toHaveAttribute('data-provenance', 'meta')
+    await expect(trail.getByRole('region', { name: 'Verified diff' }).locator('pre')).toBeVisible()
+    await expect(trail.locator('li.proof-gate')).toHaveCount(GATE_IDS.length)
+    await expect(trail.locator('img')).toHaveCount(0)
+    await trail.getByRole('button', { name: 'View replay screenshot' }).click()
+    await expect(canvas.evidenceTab).toHaveAttribute('aria-selected', 'true')
+    await expect(canvas.evidenceTab).toBeFocused()
+    await expect(after).toHaveAttribute('data-selected', 'true')
+    await expect(before).not.toHaveAttribute('data-selected', 'true')
+    await review.shot(page, 'details-open-replay-selected.png')
+    await page.mouse.move(1, 1)
+    await expectAccessible(page, review, 'legacy-details-open-evidence')
+
+    // One read of each artifact: no tab, panel or layout change read, navigated or replaced anything.
+    const reads = requests.evidenceReads()
+    review.record('evidenceReads', reads)
+    expect(new Set(reads).size).toBe(reads.length)
+    expect(reads.filter((read) => read.endsWith(`/${failureShot}`))).toHaveLength(1)
+    expect(reads.filter((read) => read.endsWith(`/${replayShot}`))).toHaveLength(1)
+    expect(failedReads()).toBe(1)
+    expect(tracker.navigations()).toBe(navigations)
+    expect(tracker.frameChanges()).toBe(0)
+    expect(requests.starts()).toBe(1)
+    await expect(result.verdict).toHaveText('Verified Fix')
+    expect(watched.errors).toEqual([])
+    expect(watched.csp).toEqual([])
+    review.record('result', { runId, status: finished.result.status, failureShot, replayShot })
+  } catch (error) {
+    failure = error
+    throw error
+  } finally {
+    held?.release()
+    await releaseAll(barrier)
+    cleanup = await harness?.close()
+    review.record('cleanup', cleanup ?? null)
+    await review.finish(failure)
+  }
+  expectNothingLeft(cleanup, harness?.baseline)
+})
+
+test('captured final result: the stored evidence replaces the released target with no frame left, through loading, unreadable, late activity and panel changes', async () => {
+  test.setTimeout(RUN_BUDGET_MS + 240_000)
+  const review = await reviewCase('captured-final-evidence', 'slice4')
+  let harness: CapturedStudioHarness | undefined
+  let cleanup: CleanupReport | undefined
+  let failure: unknown
+  let barrier: EventBarrier | undefined
+  let held: Barrier | undefined
+  try {
+    harness = await openCapturedVerificationHarness({ capture: produceCanvasFix })
+    const { page } = harness
+    const workspace = workspaceOf(page)
+    const work = workLogOf(page)
+    const canvas = canvasOf(page)
+    const result = resultOf(page, 'captured')
+    const requests = logRequests(page)
+    const watched = watchPage(page)
+    const tracker = await trackFrame(page)
+    await expect(work.heading).toHaveText('Ready')
+    await expect(result.summary).toHaveCount(0)
+    await expect(canvas.evidence).toHaveCount(0)
+
+    held = await holdRequests(page, isScreenshotRead('failure'))
+    const failedReads = await failReads(page, isScreenshotRead('replay'))
+    // Delivery stops after the producer's scan event: cleanup and the final event arrive after the result.
+    barrier = await installEventBarrier(page, { type: 'agent_message', after: { type: 'evidence_added', phase: 'replaying' } })
+    await page.getByRole('button', { name: 'Start candidate verification' }).click()
+    await expect.poll(() => requests.starts()).toBe(1)
+    await barrier.held(RUN_BUDGET_MS)
+    const finished = await harness.waitForCapturedResult(RUN_BUDGET_MS)
+    expect(finished.result.status).toBe('passed')
+    const { runId } = finished
+    const failureShot = await manifestScreenshot(harness, runId, 'failure')
+    const replayShot = await manifestScreenshot(harness, runId, 'replay')
+
+    // The released target left no frame; the stored evidence took its place, with no tabs or controls.
+    await expect(result.verdict).toHaveText('Candidate verification passed')
+    expect(tracker.detached()).toBe(true)
+    await expect(page.locator('iframe')).toHaveCount(0)
+    expect(page.frames()).toHaveLength(1)
+    await expect(canvas.tablist).toHaveCount(0)
+    await expect(canvas.pane.locator('[data-target-presentation]')).toHaveAttribute('data-target-presentation', 'completed-evidence')
+    await expect(canvas.evidence).toBeVisible()
+    await expect(canvas.evidence).toHaveAttribute('data-captured-evidence', 'completed')
+    await expect(canvas.evidence).toHaveAttribute('data-run-id', runId)
+    await expect(canvas.pane.locator('iframe, a[href], input, select, textarea, button, [contenteditable], [tabindex="0"]')).toHaveCount(0)
+
+    // The concise result: the exact captured verdict, no legacy claim, Details closed.
+    await expect(result.explanation).toHaveText('All ten checks passed in the strict verification result.')
+    await expect(result.unsuccessful).toHaveCount(0)
+    await expect(work.details).toHaveAttribute('aria-expanded', 'false')
+    const panelText = await visibleText(workspace.panel)
+    review.record('visiblePanelText', panelText)
+    expect(panelText).not.toMatch(DIAGNOSTIC_TEXT)
+    expect(await page.locator('body').innerText()).not.toMatch(/Verified Fix|Unverified/)
+
+    // Loading and unreadable sides are distinct; compare moves focus to the stored evidence.
+    const before = canvas.side('before')
+    const after = canvas.side('after')
+    await expect.poll(() => held?.held() ?? 0).toBe(1)
+    await expect(before).toHaveAttribute('data-evidence-load', 'loading')
+    await expect(before).toContainText('Loading the stored screenshot.')
+    await expect(after).toHaveAttribute('data-evidence-load', 'failed')
+    await expect(after.getByRole('alert')).toHaveText('The captured screenshot could not be read through the closed evidence route.')
+    await expect(after.locator('img')).toHaveCount(0)
+    await result.compare.click()
+    await expect(canvas.title).toBeFocused()
+    await expect(before).toHaveAttribute('data-selected', 'true')
+    await review.shot(page, 'captured-evidence-loading-unreadable.png')
+    held.release()
+    await expect(before).toHaveAttribute('data-evidence-load', 'loaded')
+    await expect(before.locator('img')).toHaveAttribute('src', `/api/runs/${runId}/evidence/${failureShot}`)
+    await expect.poll(() => naturalSize(before.locator('img'))).toEqual(CANVAS)
+    await expect(before).toContainText('Captured screenshot, not live')
+    await expect(after).toContainText(replayShot)
+
+    // Late cleanup and final events change neither the verdict nor the selection, nor recreate a target.
+    await barrier.release(null)
+    await expect(page.locator('li.agent-activity__item[data-type="run_finalized"]')).toHaveCount(1)
+    await expect(result.verdict).toHaveText('Candidate verification passed')
+    await expect(before).toHaveAttribute('data-selected', 'true')
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.status).toHaveText('Candidate verification passed')
+    await workspace.restore.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(page.locator('iframe')).toHaveCount(0)
+    await expect(before).toHaveAttribute('data-selected', 'true')
+
+    // Details on demand: all ten checks, the candidate identity, the scope statement and cleanup.
+    await openDetails(page)
+    await expect(page.locator('tr.captured-check')).toHaveCount(CAPTURED_CHECK_IDS.length)
+    await expect(page.locator(`[data-candidate-digest="${finished.result.candidate_patch_sha256}"]`)).toBeVisible()
+    await expect(page.getByText('No model diagnosis or citations were evaluated in this verification.')).toBeVisible()
+    await expect(page.locator('.captured-cleanup')).toHaveAttribute('data-cleanup-complete', String(finished.result.cleanup.complete))
+    await review.shot(page, 'captured-details-open.png')
+    await page.mouse.move(1, 1)
+    await expectAccessible(page, review, 'captured-final-evidence')
+
+    const reads = requests.evidenceReads()
+    review.record('evidenceReads', reads)
+    expect(new Set(reads).size).toBe(reads.length)
+    expect(reads.filter((read) => read.endsWith(`/${failureShot}`))).toHaveLength(1)
+    expect(failedReads()).toBe(1)
+    expect(requests.starts()).toBe(1)
+    expect(page.frames()).toHaveLength(1)
+    expect(watched.errors).toEqual([])
+    expect(watched.csp).toEqual([])
+    review.record('result', { runId, status: finished.result.status, failureShot, replayShot })
+  } catch (error) {
+    failure = error
+    throw error
+  } finally {
+    held?.release()
+    await releaseAll(barrier)
+    cleanup = await harness?.close()
+    review.record('cleanup', cleanup ?? null)
+    await review.finish(failure)
+  }
+  expectNothingLeft(cleanup, harness?.baseline)
+  expect(harness?.blockedRequests).toEqual([])
 })
 
 // ---------------------------------------------------------------------------------------
@@ -2597,19 +3097,34 @@ async function instruct(review: ReviewCase, text: string): Promise<number> {
   return Date.now()
 }
 
-for (const mode of ['legacy', 'captured'] as const) {
-  test(`owner-review: ${mode} start, observed work and final shell on the real Studio (opt-in, bounded)`, async () => {
+const OWNER_REVIEW_CASES = [
+  { mode: 'legacy', outcome: 'successful', source: HERO },
+  { mode: 'legacy', outcome: 'unsuccessful', source: FAILURE },
+  { mode: 'captured', outcome: 'successful', source: 'canvas-fix' },
+  { mode: 'captured', outcome: 'unsuccessful', source: 'canvas-plausible-wrong' },
+] as const
+
+for (const { mode, outcome, source } of OWNER_REVIEW_CASES) {
+  test(`owner-review: ${mode} ${outcome} start, observed work, result and stored evidence on the real Studio (opt-in, bounded)`, async () => {
     test.skip(process.env.FLOWPROOF_OWNER_REVIEW !== '1', 'Opt-in owner review: set FLOWPROOF_OWNER_REVIEW=1 on a visible desktop and follow quickstart.md.')
     test.setTimeout(900_000)
-    const review = await reviewCase(`owner-review-${mode}`, 'slice3')
+    const review = await reviewCase(`owner-review-${mode}-${outcome}`, 'slice4')
     const finalMarker = path.join(review.dir, 'final-reviewed.ack')
     let legacy: StudioHarness | undefined
     let captured: CapturedStudioHarness | undefined
     let cleanup: CleanupReport | undefined
     let failure: unknown
     try {
-      if (mode === 'legacy') legacy = await openStudioHarness({ scenarioId: HERO })
-      else captured = await openCapturedVerificationHarness({ capture: produceCanvasFix })
+      if (mode === 'legacy') legacy = await openStudioHarness({ scenarioId: source, ...(source === FAILURE ? { recordedTransport: false } : {}) })
+      else {
+        captured = await openCapturedVerificationHarness({
+          capture: async ({ repoRoot, tmpRoot }) => {
+            const canvas = await produceCanvasCandidate({ caseName: source, repositoryRoot: repoRoot, tmpRoot })
+            expect(canvas.result.capture.status).toBe('captured')
+            return canvas.result
+          },
+        })
+      }
       const page = (legacy ?? captured)?.page
       if (page === undefined) throw new Error('The Studio did not open.')
       const requests = logRequests(page)
@@ -2617,6 +3132,7 @@ for (const mode of ['legacy', 'captured'] as const) {
       await page.bringToFront()
       await expect(work.heading).toHaveText('Ready')
       await rm(finalMarker, { force: true })
+      review.record('case', { mode, outcome, source })
 
       // SC-001: the owner's own start, timed from the prompt to the observed admission request.
       const prompted = await instruct(review, 'Without coaching: identify the prepared case or fixed candidate in the visible Studio window and start it.')
@@ -2628,13 +3144,29 @@ for (const mode of ['legacy', 'captured'] as const) {
       // The ordinary bounded run; captured target disposal completes before the final shell review.
       const finished = legacy !== undefined ? await legacy.waitForResult(RUN_BUDGET_MS) : await (captured as CapturedStudioHarness).waitForCapturedResult(RUN_BUDGET_MS)
       review.record('result', { runId: finished.runId, status: finished.result.status })
-      await expect(page.locator('[data-workspace-result]')).toBeVisible({ timeout: RUN_BUDGET_MS })
+      expect(finished.result.status === 'Verified Fix' || finished.result.status === 'passed').toBe(outcome === 'successful')
+      const summary = resultOf(page, mode)
+      await expect(summary.verdict).toBeVisible({ timeout: RUN_BUDGET_MS })
+      await expect(page.locator('[data-workspace-result]')).toBeVisible()
+      if (mode === 'captured') await expect(page.locator('iframe')).toHaveCount(0)
+      else await expect(canvasOf(page).tablist).toBeVisible()
+      const verdict = await summary.verdict.innerText()
+      review.record('summary', {
+        verdict,
+        unsuccessful: (await summary.unsuccessful.count()) === 0 ? null : await summary.unsuccessful.getAttribute('data-unsuccessful'),
+      })
+      await review.shot(page, 'final-shell.png')
 
-      // The final shell stays open for the owner's own walkthrough, then a terminal acknowledgement.
-      const reviewPrompt = await instruct(review, `Review the observed work and the result in the Studio window, then run:\n  touch '${finalMarker}'`)
+      // SC-003: the final shell stays open for the owner's own walkthrough, then a terminal acknowledgement.
+      const reviewPrompt = await instruct(
+        review,
+        `Without coaching: find the result, any failed or unevaluable checks, and the stored before/after evidence (and, if needed, the Details). Then run:\n  touch '${finalMarker}'`,
+      )
       await waitForMarker(finalMarker, reviewPrompt, OWNER_ACK_TIMEOUT_MS, 'OWNER_REVIEW_ACK_MISSING')
-      review.record('finalReviewSeconds', (Date.now() - reviewPrompt) / 1000)
+      review.record('sc003:finalReviewSeconds', (Date.now() - reviewPrompt) / 1000)
       review.record('ownerAnswers', 'recorded separately by the owner; not collected by this test')
+      // The walkthrough changed nothing about the result.
+      await expect(summary.verdict).toHaveText(verdict)
     } catch (error) {
       failure = error
       throw error

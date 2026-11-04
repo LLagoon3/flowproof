@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
 import { GATE_IDS, parseRunResult } from '../../packages/flowproof/src/contracts/index.js'
 import type { GateId, RunResult } from '../../packages/flowproof/src/contracts/index.js'
@@ -8,6 +9,13 @@ import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario
 import { REPO_ROOT, listTree } from '../support/repoFixture.js'
 import { openStudioHarness } from '../support/studioHarness.js'
 import type { CleanupReport, StudioHarness } from '../support/studioHarness.js'
+
+/** Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). */
+async function openWorkDetails(page: Page): Promise<void> {
+  const toggle = page.locator('section.work-timeline button[data-disclosure="details"]')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
 
 // T062: a target frame that cannot load the prepared application. A route refuses the Studio
 // target iframe's reproduction load, as an unreachable application would. The run then stops
@@ -74,6 +82,7 @@ test('a target frame that cannot load the prepared app stops the run before mode
     )
     await expect(page.locator('.agent-activity__item[data-type="evidence_added"]')).toHaveCount(0)
     await expect(page.locator('.agent-activity__item[data-type="phase_started"]:not([data-phase="reproducing"])')).toHaveCount(0)
+    await openWorkDetails(page)
     const proofTrail = page.getByRole('region', { name: 'Proof Trail', exact: true })
     await expect(proofTrail).toHaveAttribute('data-run-id', runId)
     await expect(proofTrail.getByRole('region', { name: 'Proof Trail final status' })).toHaveAttribute('data-status', 'unverified')

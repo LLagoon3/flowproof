@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from 'react'
 import type { ReactNode } from 'react'
 
-import { evidenceUrl, studioError, toStudioError } from '../api.js'
+import { studioError, toStudioError } from '../api.js'
 import type { EvidencePhase, EvidenceType, GateId, GateOutcome, PhaseDurations, StudioClient, StudioError } from '../api.js'
 import { selectProofTrail } from '../state.js'
 import type { ProofTrailCapture, ProofTrailEvidence, ProofTrailView, RunView, StudioMode } from '../state.js'
@@ -9,14 +9,16 @@ import { GATE_LABELS, GATE_STATUS_LABELS } from './AgentPanel.js'
 
 // The in-workspace Proof Trail of a finalized run: its final status with the candidate guard that
 // rejected it before patch application, if any, who produced the diagnosis (an injected fixture is
-// labeled as such and its content is never shown), the failure capture with its screenshot, the
-// candidate diff, the replay capture with its screenshot, all nine gate outcomes, and the phase
-// timing. The trail comes only from the authoritative result and the Evidence IDs the session
-// holds; artifact contents are read through the closed evidence and candidate-diff routes and
-// rendered as text or same-origin images, never as markup. A phase the run never reached is
-// reported absent. A captured verification Studio has no model diagnosis, provider or candidate
-// diff, so it renders no Proof Trail; its strict result is shown by the candidate-verification
-// surface.
+// labeled as such and its content is never shown), the failure capture, the candidate diff, the
+// replay capture, all nine gate outcomes, and the phase timing. The trail comes only from the
+// authoritative result and the Evidence IDs the session holds; artifact contents are read through
+// the closed evidence and candidate-diff routes and rendered as text, never as markup. A phase the
+// run never reached is reported absent. Each capture's screenshot is shown once, with the stored
+// before/after evidence in the canvas, which this trail opens on that phase; the trail itself reads
+// no image. The trail is the one owner of its run's reads: it stays mounted inside the closed work
+// Details, through collapse and result updates, so nothing is read twice. A captured verification
+// Studio has no model diagnosis, provider or candidate diff, so it renders no Proof Trail; its
+// strict result is shown by the candidate-verification surface.
 
 export interface ProofTrailProps {
   /** The current run from `studioReducer`; the trail appears once its result is final. */
@@ -25,6 +27,8 @@ export interface ProofTrailProps {
   readonly client: StudioClient
   /** The host-selected Studio mode; the legacy trail is the default. */
   readonly mode?: StudioMode
+  /** Shows the stored screenshot of a capture phase in the canvas. */
+  readonly onViewEvidence?: ((phase: EvidencePhase) => void) | undefined
 }
 
 type Loaded<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: StudioError }
@@ -172,16 +176,18 @@ function Provenance({ trail }: { readonly trail: ProofTrailView }) {
   )
 }
 
-function Screenshot({ runId, capture }: { readonly runId: string; readonly capture: ProofTrailCapture }) {
-  const label = `${capture.phase === 'failure' ? 'Failure' : 'Replay'} Canvas screenshot`
+function Screenshot({ capture, onView }: { readonly capture: ProofTrailCapture; readonly onView: ((phase: EvidencePhase) => void) | undefined }) {
+  const { phase } = capture
   if (capture.screenshotEvidenceId !== null) {
     return (
-      <figure className="proof-trail__figure">
-        <img className="proof-trail__screenshot" src={evidenceUrl(runId, capture.screenshotEvidenceId)} alt={label} data-evidence-id={capture.screenshotEvidenceId} />
-        <figcaption className="proof-trail__caption">
-          {label} <code>{capture.screenshotEvidenceId}</code>
-        </figcaption>
-      </figure>
+      <p className="proof-trail__note proof-trail__screenshot-note">
+        The {phase} Canvas screenshot is shown with the before and after evidence.{' '}
+        {onView !== undefined && (
+          <button type="button" className="button button--quiet proof-trail__view" onClick={() => onView(capture.phase)}>
+            View {phase} screenshot
+          </button>
+        )}
+      </p>
     )
   }
   return (
@@ -226,7 +232,7 @@ function EvidenceEntry({ item, artifacts }: { readonly item: ProofTrailEvidence;
   )
 }
 
-function Capture({ trail, capture, artifacts }: { readonly trail: ProofTrailView; readonly capture: ProofTrailCapture; readonly artifacts: RunArtifacts | null }) {
+function Capture({ capture, artifacts, onView }: { readonly capture: ProofTrailCapture; readonly artifacts: RunArtifacts | null; readonly onView: ((phase: EvidencePhase) => void) | undefined }) {
   const title = PHASE_TITLES[capture.phase]
   const reached = capture.evidence.length > 0 || capture.screenshotPath !== null
   return (
@@ -234,7 +240,7 @@ function Capture({ trail, capture, artifacts }: { readonly trail: ProofTrailView
       <h3 className="proof-trail__heading">{title}</h3>
       {reached ? (
         <>
-          <Screenshot runId={trail.runId} capture={capture} />
+          <Screenshot capture={capture} onView={onView} />
           {capture.evidence.length === 0 ? (
             <p className="proof-trail__note">No Evidence ID of this phase was received in this session.</p>
           ) : (
@@ -341,7 +347,7 @@ function Timing({ trail }: { readonly trail: ProofTrailView }) {
   )
 }
 
-export function ProofTrail({ run, client, mode = 'legacy' }: ProofTrailProps) {
+export function ProofTrail({ run, client, mode = 'legacy', onViewEvidence }: ProofTrailProps) {
   const titleId = useId()
   const trail = selectProofTrail(run)
   const artifacts = useRunArtifacts(client, trail)
@@ -360,9 +366,9 @@ export function ProofTrail({ run, client, mode = 'legacy' }: ProofTrailProps) {
         <>
           <FinalStatus trail={trail} />
           <Provenance trail={trail} />
-          <Capture trail={trail} capture={trail.failure} artifacts={artifacts} />
+          <Capture capture={trail.failure} artifacts={artifacts} onView={onViewEvidence} />
           <CandidateDiff trail={trail} artifacts={artifacts} />
-          <Capture trail={trail} capture={trail.replay} artifacts={artifacts} />
+          <Capture capture={trail.replay} artifacts={artifacts} onView={onViewEvidence} />
           <Gates trail={trail} />
           <Timing trail={trail} />
         </>
