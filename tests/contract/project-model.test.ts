@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 
 import { RedactedValueRegistry } from '../../packages/flowproof/src/capture/projectPrivacy.js'
 import {
+  EXECUTION_LIMITS,
   MANDATORY_CHECK_IDS,
   PROJECT_LIMITS,
   ProviderInvocationSchema,
@@ -19,12 +20,22 @@ import {
   PROJECT_CONTEXT_LABEL,
   PROJECT_CORRECTION_INSTRUCTIONS,
   PROJECT_IMAGE_LABEL,
+  PROJECT_REQUEST_ENVELOPE_RESERVE,
+  ProjectAnalysisOutputSchema,
   buildProjectAnalysisPrompt,
   buildProjectCorrectionPrompt,
   validateProjectAnalysisOutput,
   validateProjectCorrectionOutput,
   type ProjectPrompt,
 } from '../../packages/flowproof/src/model/projectPrompt.js'
+import {
+  PROJECT_ANALYSIS_RESPONSE_FORMAT,
+  PROJECT_CLARIFIED_ANALYSIS_RESPONSE_FORMAT,
+  PROJECT_CORRECTION_RESPONSE_FORMAT,
+  PROJECT_META_ENDPOINT,
+  createProjectModelSession,
+  type ProjectModelFake,
+} from '../../packages/flowproof/src/model/projectClient.js'
 
 type Json = Record<string, any>
 
@@ -418,6 +429,8 @@ describe('T023 explicit clarification re-analysis prompt', () => {
     const first = built(analysis(analysisInput()))
     const second = built(clarified(priorInterpretation()))
     expect(second.phase).toBe('clarified-analysis')
+    expect(first.manifest.clarification).toBeNull()
+    expect(second.manifest.clarification).toEqual({ question_id: QUESTION, answer_id: ANSWER })
     expect(second.instructions).toBe(PROJECT_CLARIFIED_ANALYSIS_INSTRUCTIONS)
     expect(second.manifest.included_observation_ids).toEqual(first.manifest.included_observation_ids)
     expect(second.manifest.sources).toEqual(first.manifest.sources)
@@ -516,6 +529,451 @@ describe('T023 correction prompt: frozen definition and safe actual baseline con
     expect(code(validateProjectAnalysisOutput(prompt, readyOutput([BASELINE_IMAGE])))).toBe('PROMPT_OUTPUT_PHASE_MISMATCH')
     const analysisPrompt = built(analysis(analysisInput()))
     expect(code(validateProjectCorrectionOutput(analysisPrompt, output()))).toBe('PROMPT_OUTPUT_PHASE_MISMATCH')
+  })
+
+  it('client: sends one correction only after a validated ready analysis of the same capture, then refuses more', async () => {
+    const analysisPrompt = built(analysis(analysisInput()))
+    const correctionPrompt = built(correction(correctionInput()))
+    const early = answering(output())
+    expect(code(await session(early.fake).correct(correctionPrompt))).toBe('PROVIDER_PHASE_ORDER')
+    expect(early.calls).toHaveLength(0)
+    const provider = answering({ result: readyOutput([imageId(0)]) }, output())
+    const s = session(provider.fake)
+    expect((await s.analyze(analysisPrompt)).ok).toBe(true)
+    const result = await s.correct(correctionPrompt)
+    expect(code(result)).toBe('OK')
+    expect(provider.calls[1]!.body.text).toEqual({ format: PROJECT_CORRECTION_RESPONSE_FORMAT })
+    expect(provider.calls[1]!.body.instructions).toBe(PROJECT_CORRECTION_INSTRUCTIONS)
+    expect(result.ok && result.output).toEqual(output())
+    expect(result.invocation).toMatchObject({ phase: 'correction', status: 'completed', included_image_ids: [BASELINE_IMAGE], input_sha256: correctionPrompt.manifest.input_sha256 })
+    expect(code(await s.correct(correctionPrompt))).toBe('PROVIDER_BUDGET_EXHAUSTED')
+    expect(code(await s.analyze(correctionPrompt))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(provider.calls).toHaveLength(2)
+  })
+
+  it('client: clarify never admits correction, and an invalid correction output fails with its validated identity', async () => {
+    const clarifying = answering({ result: clarifyResult(QUESTION) })
+    const s = session(clarifying.fake)
+    expect((await s.analyze(built(analysis(analysisInput())))).ok).toBe(true)
+    expect(code(await s.correct(built(correction(correctionInput()))))).toBe('PROVIDER_PHASE_ORDER')
+    const bad = answering({ result: readyOutput([imageId(0)]) }, output({ target_paths: ['src/other.ts'] }))
+    const t = session(bad.fake)
+    expect((await t.analyze(built(analysis(analysisInput())))).ok).toBe(true)
+    const rejected = await t.correct(built(correction(correctionInput())))
+    expect(code(rejected)).toBe('PROMPT_OUTPUT_PATH_UNKNOWN')
+    expect(rejected.invocation).toMatchObject({ status: 'failed', error_code: 'PROMPT_OUTPUT_PATH_UNKNOWN', response_id: RESPONSE_ID, observed_model: 'muse-spark-1.3' })
+  })
+})
+
+describe('T023 observation cap: 64 included observations and essential omission', () => {
+  const errorId = (index: number): string => id(0x1000 + index)
+  const manyErrors = (count: number, essentialGroups: number): Scene =>
+    scene(smallImages(2), {
+      mutate: (body) => {
+        for (let index = 0; index < count; index += 1) {
+          body.observations.push(
+            common({ observation_id: errorId(index), type: 'console', availability: 'available', reason: null, sequence_range: null, payload: { level: 'error', message: `TypeError: row ${index}`, fingerprint: sha('8') } }),
+          )
+        }
+        const groups = Math.max(2, essentialGroups)
+        body.interactions = Array.from({ length: groups }, (_, index) => ({
+          sequence: index + 1,
+          capture_id: CAPTURE,
+          document_epoch: 0,
+          frame_id: FRAME,
+          offset_ms: (index + 1) * 100,
+          action: { type: 'click', locators: [{ kind: 'role', role: 'checkbox', name: 'Review sample data' }] },
+          related_observation_ids: index < essentialGroups ? Array.from({ length: 8 }, (_, offset) => errorId(index * 8 + offset)) : [],
+        }))
+        body.timing.finished_offset_ms = (groups + 1) * 100
+      },
+    })
+  const tail = Array.from({ length: 10 }, (_, index) => ({ observation_id: errorId(60 + index), reason: 'REQUEST_OBSERVATION_LIMIT' }))
+
+  it('includes exactly 64 observations in host order and discloses every non-essential omission', () => {
+    const prompt = built(analysis(analysisInput(manyErrors(70, 0))))
+    expect(prompt.manifest.included_observation_ids).toHaveLength(64)
+    expect(prompt.manifest.included_observation_ids.slice(0, 4)).toEqual([imageId(0), imageId(1), CONSOLE, NETWORK])
+    expect(prompt.manifest.omitted).toEqual(tail)
+    expect(contextOf(prompt).errors).toHaveLength(62)
+  })
+
+  it('keeps every interaction-referenced observation and omits only non-essential ones at the cap', () => {
+    const prompt = built(analysis(analysisInput(manyErrors(70, 7))))
+    const included = new Set(prompt.manifest.included_observation_ids)
+    expect(included.size).toBe(64)
+    expect(Array.from({ length: 56 }, (_, index) => errorId(index)).every((essential) => included.has(essential))).toBe(true)
+    expect(prompt.manifest.omitted).toEqual(tail)
+  })
+
+  it('rejects instead of truncating when essential observations exceed 64', () => {
+    const result = analysis(analysisInput(manyErrors(72, 9)))
+    expect(result.ok ? null : result.error).toEqual({ code: 'PROMPT_ESSENTIAL_OMISSION', detail: 'observations' })
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// T023 client cases (T028). Every provider below is an explicitly labelled in-process fake
+// (`test_transport`); no result here can satisfy live acceptance (T031/T053).
+// ---------------------------------------------------------------------------------------
+
+const TEST_KEY = 'fp-test-key-not-a-real-credential'
+const RESPONSE_ID = 'resp_fake_0001'
+
+interface FakeCall {
+  readonly url: string
+  readonly init: RequestInit
+  readonly body: Json
+}
+function labelledFake(respond: (call: FakeCall, index: number) => Response | Promise<Response>): { calls: FakeCall[]; fake: ProjectModelFake } {
+  const calls: FakeCall[] = []
+  const fake: ProjectModelFake = {
+    label: 'test_transport',
+    fetch: async (input, init) => {
+      const call = { url: input instanceof Request ? input.url : String(input), init: init ?? {}, body: JSON.parse(String(init?.body)) as Json }
+      calls.push(call)
+      return respond(call, calls.length - 1)
+    },
+  }
+  return { calls, fake }
+}
+const providerPayload = (document: unknown, extra: Json = {}): Json => ({
+  id: RESPONSE_ID,
+  object: 'response',
+  status: 'completed',
+  model: 'muse-spark-1.3',
+  output: [
+    { type: 'reasoning', id: 'rs_1', summary: [{ type: 'summary_text', text: 'PROVIDER_REASONING_TEXT' }] },
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: typeof document === 'string' ? document : JSON.stringify(document) }] },
+  ],
+  usage: { input_tokens: 1200, output_tokens: 300, total_tokens: 1500 },
+  ...extra,
+})
+const reply = (payload: unknown, status = 200): Response => new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
+const answering = (...documents: unknown[]) => labelledFake((_call, index) => reply(providerPayload(documents[Math.min(index, documents.length - 1)])))
+const session = (fake: ProjectModelFake, extra: Json = {}) => createProjectModelSession({ run_id: RUN, env: { MODEL_API_KEY: TEST_KEY }, fake, ...extra } as never)
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function expectStrictShape(node: unknown): void {
+  if (Array.isArray(node)) return node.forEach(expectStrictShape)
+  if (node === null || typeof node !== 'object') return
+  const schema = node as Json
+  for (const banned of ['oneOf', 'allOf', 'not', '$ref']) expect(schema).not.toHaveProperty(banned)
+  if (schema.type === 'object') {
+    expect(schema.additionalProperties).toBe(false)
+    expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort())
+  }
+  Object.values(schema).forEach(expectStrictShape)
+}
+/** Minimal structural JSON-schema check for the strict subset the formats use. */
+function conforms(schema: Json, value: unknown): boolean {
+  if (schema.anyOf) return schema.anyOf.some((option: Json) => conforms(option, value))
+  if (schema.enum && !schema.enum.includes(value)) return false
+  switch (schema.type) {
+    case 'object': {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+      const record = value as Json
+      return Object.keys(record).every((key) => key in schema.properties) && schema.required.every((key: string) => key in record && conforms(schema.properties[key], record[key]))
+    }
+    case 'array':
+      return Array.isArray(value) && value.every((item) => conforms(schema.items, item))
+    case 'string':
+      return typeof value === 'string'
+    case 'integer':
+      return Number.isInteger(value)
+    case 'boolean':
+      return typeof value === 'boolean'
+    default:
+      return false
+  }
+}
+const everyKind = (): Json => ({
+  ...readyOutput([imageId(0)]),
+  replay: {
+    entry_path: '/',
+    viewport: { width: 1280, height: 800, device_scale_factor: 1 },
+    actions: [
+      { op: 'click', locator: { kind: 'test-id', value: 'task-filter' } },
+      { op: 'fill', locator: { kind: 'role', role: 'textbox', name: 'Search' }, value: 'open' },
+      { op: 'select', locator: { kind: 'css', selector: 'select.filter' }, value: 'open' },
+      { op: 'scroll', target: { kind: 'page' }, x: 0, y: 200 },
+      { op: 'scroll', target: { kind: 'element', locator: { kind: 'test-id', value: 'list' } }, x: 0, y: 10 },
+      { op: 'navigate', path: '/tasks' },
+      { op: 'wait', until: { kind: 'visible', locator: { kind: 'test-id', value: 'list' } }, timeout_ms: 1000 },
+      { op: 'wait', until: { kind: 'text', locator: { kind: 'test-id', value: 'count' }, text: '2 open' }, timeout_ms: 1000 },
+      { op: 'wait', until: { kind: 'path', path: '/tasks' }, timeout_ms: 1000 },
+    ],
+  },
+  expected_conditions: [
+    { kind: 'element-visible', locator: { kind: 'test-id', value: 'list' }, visible: true },
+    { kind: 'element-count', locator: { kind: 'test-id', value: 'completed-task' }, count: 0 },
+    { kind: 'text', locator: { kind: 'test-id', value: 'count' }, match: 'normalized', text: '2 open' },
+    { kind: 'form-value', locator: { kind: 'role', role: 'textbox', name: 'Search' }, value: 'open' },
+    { kind: 'path', path: '/tasks' },
+    { kind: 'no-error', error_type: 'console', fingerprint: sha('8') },
+  ],
+  task_condition_index: 1,
+})
+
+describe('T023 project model client (explicitly labelled in-process fakes only)', () => {
+  it('sends one stateless strict request with the exact actual image blocks to the fixed Meta endpoint', async () => {
+    const images = smallImages(2)
+    const prompt = built(analysis(analysisInput(scene(images))))
+    const { calls, fake } = answering({ result: readyOutput([imageId(0), CONSOLE]) })
+    const s = session(fake)
+    expect(s.transport).toBe('test_transport')
+    expect(s.timeout_ms).toBe(EXECUTION_LIMITS.provider_timeout_ms)
+    const result = await s.analyze(prompt)
+    expect(code(result)).toBe('OK')
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(PROJECT_META_ENDPOINT).toBe('https://api.meta.ai/v1/responses')
+    expect(call.url).toBe(PROJECT_META_ENDPOINT)
+    expect(Object.keys(call.body).sort()).toEqual(['input', 'instructions', 'model', 'store', 'text'])
+    expect(call.body).toMatchObject({ model: 'muse-spark-1.3', store: false, instructions: PROJECT_ANALYSIS_INSTRUCTIONS })
+    expect(call.body.input).toEqual(JSON.parse(JSON.stringify(prompt.input)))
+    expect(call.body.text).toEqual({ format: PROJECT_ANALYSIS_RESPONSE_FORMAT })
+    const sent = (call.body.input[0].content as Json[]).filter((block) => block.type === 'input_image').map((block) => Buffer.from(String(block.image_url).split(',')[1]!, 'base64'))
+    expect(sent.map((bytes) => sha256(bytes))).toEqual(images.map((bytes) => sha256(bytes)))
+    expect(call.init.redirect).toBe('error')
+    expect(call.init.headers).toEqual({ accept: 'application/json', authorization: `Bearer ${TEST_KEY}`, 'content-type': 'application/json' })
+    expect(result.ok && result.output).toEqual(readyOutput([imageId(0), CONSOLE]))
+    const invocation = result.invocation!
+    expect(ProviderInvocationSchema.safeParse(invocation).success).toBe(true)
+    expect(invocation).toMatchObject({
+      invocation_id: INVOCATION,
+      run_id: RUN,
+      phase: 'analysis',
+      transport: 'test_transport',
+      requested_model: 'muse-spark-1.3',
+      observed_model: 'muse-spark-1.3',
+      response_id: RESPONSE_ID,
+      input_sha256: prompt.manifest.input_sha256,
+      status: 'completed',
+      error_code: null,
+      http_status: 200,
+      usage: { input_tokens: 1200, output_tokens: 300, total_tokens: 1500 },
+    })
+    expect(invocation.included_image_ids).toEqual(prompt.manifest.included_image_ids)
+    expect(invocation.included_observation_ids).toEqual(prompt.manifest.included_observation_ids)
+    expect(invocation.included_source_paths).toEqual(prompt.manifest.included_source_paths)
+    expect(invocation.source_bytes).toBe(prompt.manifest.source_bytes)
+    expect(invocation.request_bytes).toBe(Buffer.byteLength(String(call.init.body), 'utf8'))
+    expect(s.invocations()).toEqual([invocation])
+    const retained = JSON.stringify(s.invocations())
+    for (const leaked of [TEST_KEY, 'PROVIDER_REASONING_TEXT', PROJECT_CONTEXT_LABEL, images[0]!.toString('base64').slice(0, 32)]) expect(retained).not.toContain(leaked)
+  })
+
+  it('keeps the actual wire request within 8 MiB for the largest fitted prompt', async () => {
+    const prompt = built(analysis(analysisInput(scene(LARGE, { referenced: [0] }))))
+    const provider = answering({ result: readyOutput([imageId(0)]) })
+    const result = await session(provider.fake).analyze(prompt)
+    const wire = Buffer.byteLength(String(provider.calls[0]!.init.body), 'utf8')
+    expect(wire).toBeLessThanOrEqual(PROJECT_LIMITS.maxRequestBytes)
+    expect(wire - prompt.manifest.request_bytes).toBeLessThanOrEqual(PROJECT_REQUEST_ENVELOPE_RESERVE)
+    expect(result.invocation?.request_bytes).toBe(wire)
+  })
+
+  it('reads only the explicit host MODEL_API_KEY and ignores process OPENAI_* and MODEL_API_KEY values', async () => {
+    const names = ['MODEL_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_CUSTOM_HEADERS'] as const
+    const saved = names.map((name) => [name, process.env[name]] as const)
+    Object.assign(process.env, { MODEL_API_KEY: 'process-key-must-not-be-used', OPENAI_API_KEY: 'process-openai-key', OPENAI_BASE_URL: 'https://attacker.invalid/v1', OPENAI_CUSTOM_HEADERS: 'x-leak: 1' })
+    try {
+      const missing = answering({ result: readyOutput([imageId(0)]) })
+      const refused = await session(missing.fake, { env: { MODEL_API_KEY: '   ' } }).analyze(built(analysis(analysisInput())))
+      expect(missing.calls).toHaveLength(0)
+      expect(code(refused)).toBe('PROVIDER_CREDENTIAL_MISSING')
+      expect(refused.invocation).toMatchObject({ status: 'failed', error_code: 'PROVIDER_CREDENTIAL_MISSING', http_status: null, response_id: null })
+      const provider = answering({ result: readyOutput([imageId(0)]) })
+      expect(code(await session(provider.fake).analyze(built(analysis(analysisInput()))))).toBe('OK')
+      expect(provider.calls[0]!.url).toBe(PROJECT_META_ENDPOINT)
+      expect(JSON.stringify(provider.calls[0]!.init.headers)).not.toMatch(/process-|x-leak/)
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  })
+
+  it('labels every injected HTTP implementation test_transport and rejects other labels or unbounded timeouts', () => {
+    const { fake } = answering({})
+    expect(() => createProjectModelSession({ run_id: RUN, env: {}, fake: { ...fake, label: 'meta' } } as never)).toThrow()
+    expect(() => createProjectModelSession({ run_id: RUN, env: {}, timeoutMs: 90_001 } as never)).toThrow()
+    expect(() => createProjectModelSession({ run_id: 'run-1', env: {} } as never)).toThrow()
+    expect(createProjectModelSession({ run_id: RUN, env: {} }).transport).toBe('meta')
+  })
+
+  it.each([
+    ['a different observed model', { model: 'muse-spark-1.2' }],
+    ['no observed model', { model: undefined }],
+    ['no response ID', { id: undefined }],
+    ['a malformed response ID', { id: 'resp id with spaces' }],
+  ])('rejects a response with %s instead of fabricating provenance', async (_name, extra) => {
+    const provider = labelledFake(() => reply(providerPayload({ result: readyOutput([imageId(0)]) }, extra)))
+    const result = await session(provider.fake).analyze(built(analysis(analysisInput())))
+    expect(code(result)).toBe('PROVIDER_IDENTITY_MISMATCH')
+    expect(result.invocation?.status).toBe('failed')
+    expect(ProviderInvocationSchema.safeParse(result.invocation).success).toBe(true)
+  })
+
+  it.each([
+    ['an uncited observation', { result: readyOutput([imageId(9)]) }, 'PROMPT_OUTPUT_CITATION_UNKNOWN'],
+    ['an unwrapped variant', readyOutput([imageId(0)]), 'PROVIDER_RESPONSE_INVALID'],
+    ['an extra pass field', { result: { ...readyOutput([imageId(0)]), verdict: 'passed' } }, 'PROMPT_OUTPUT_INVALID'],
+    ['an extra wrapper field', { result: readyOutput([imageId(0)]), tools: [] }, 'PROVIDER_RESPONSE_INVALID'],
+    ['non-JSON text', 'Sure, here is the answer.', 'PROVIDER_RESPONSE_INVALID'],
+    ['a foreign question ID', { result: clarifyResult(id(77)) }, 'PROMPT_OUTPUT_QUESTION_MISMATCH'],
+  ])('fails strict output validation for %s', async (_name, document, expected) => {
+    const provider = answering(document)
+    const result = await session(provider.fake).analyze(built(analysis(analysisInput())))
+    expect(code(result)).toBe(expected)
+    expect(result.invocation).toMatchObject({ status: 'failed', error_code: expected })
+  })
+
+  it('rejects incomplete, refused or multi-part responses', async () => {
+    const variants = [
+      providerPayload({ result: readyOutput([imageId(0)]) }, { status: 'incomplete' }),
+      providerPayload(null, { output: [{ type: 'message', role: 'assistant', content: [{ type: 'refusal', refusal: 'no' }] }] }),
+      providerPayload(null, { output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '{}' }, { type: 'output_text', text: '{}' }] }] }),
+    ]
+    for (const payload of variants) {
+      const result = await session(labelledFake(() => reply(payload)).fake).analyze(built(analysis(analysisInput())))
+      expect(code(result)).toBe('PROVIDER_RESPONSE_INVALID')
+    }
+  })
+
+  it.each([
+    [500, 'PROVIDER_SERVER_ERROR'],
+    [429, 'PROVIDER_RATE_LIMITED'],
+    [400, 'PROVIDER_REQUEST_REJECTED'],
+    [401, 'PROVIDER_REQUEST_REJECTED'],
+    [307, 'PROVIDER_REDIRECT_REFUSED'],
+  ])('fails HTTP %i once with fixed redacted text, never retrying or following', async (status, expected) => {
+    const provider = labelledFake(
+      () => new Response(JSON.stringify({ error: { message: `PROVIDER_ERROR_TEXT ${TEST_KEY}` } }), { status, headers: { 'content-type': 'application/json', location: 'https://elsewhere.invalid/v1/responses' } }),
+    )
+    const s = session(provider.fake)
+    const result = await s.analyze(built(analysis(analysisInput())))
+    expect(provider.calls).toHaveLength(1)
+    expect(code(result)).toBe(expected)
+    expect(result.invocation).toMatchObject({ status: 'failed', error_code: expected, http_status: status, response_id: null })
+    const surfaced = JSON.stringify([result, s.invocations()])
+    expect(surfaced).not.toContain('PROVIDER_ERROR_TEXT')
+    expect(surfaced).not.toContain(TEST_KEY)
+  })
+
+  it('admits one analysis, one clarified re-analysis only after its validated clarify, and no hidden retry', async () => {
+    const first = built(analysis(analysisInput()))
+    const failing = labelledFake(() => reply({ error: {} }, 503))
+    const failed = session(failing.fake)
+    expect(code(await failed.analyze(first))).toBe('PROVIDER_SERVER_ERROR')
+    const again = await failed.analyze(first)
+    expect(code(again)).toBe('PROVIDER_BUDGET_EXHAUSTED')
+    expect(again.invocation).toBeNull()
+    expect(failing.calls).toHaveLength(1)
+
+    const clarifiedPrompt = (questionId = QUESTION) =>
+      built(analysis(analysisInput(undefined, { invocation_id: id(13), clarification: { prior: priorInterpretation((body) => (body.result = clarifyResult(questionId))), answer_id: ANSWER, answer: 'Hide completed tasks.' } })))
+    const premature = answering({ result: readyOutput([imageId(0)]) })
+    expect(code(await session(premature.fake).analyze(clarifiedPrompt()))).toBe('PROVIDER_CLARIFICATION_REQUIRED')
+    expect(premature.calls).toHaveLength(0)
+
+    const provider = answering({ result: clarifyResult(QUESTION) }, { result: readyOutput([imageId(0)]) })
+    const s = session(provider.fake)
+    expect(code(await s.analyze(first))).toBe('OK')
+    expect(code(await s.analyze(clarifiedPrompt(id(78))))).toBe('PROVIDER_CLARIFICATION_REQUIRED')
+    const second = await s.analyze(clarifiedPrompt())
+    expect(code(second)).toBe('OK')
+    expect(second.invocation?.phase).toBe('clarified-analysis')
+    expect(code(await s.analyze(clarifiedPrompt()))).toBe('PROVIDER_BUDGET_EXHAUSTED')
+    expect(provider.calls).toHaveLength(2)
+    expect(provider.calls[1]!.body.text).toEqual({ format: PROJECT_CLARIFIED_ANALYSIS_RESPONSE_FORMAT })
+    expect(s.invocations().map((record) => record.phase)).toEqual(['analysis', 'clarified-analysis'])
+  })
+
+  it('times out at the bounded deadline even when the provider never answers or honours abort', async () => {
+    const provider = labelledFake(() => new Promise<Response>(() => undefined))
+    const result = await session(provider.fake, { timeoutMs: 40 }).analyze(built(analysis(analysisInput())))
+    expect(code(result)).toBe('PROVIDER_TIMEOUT')
+    expect(result.invocation).toMatchObject({ status: 'failed', error_code: 'PROVIDER_TIMEOUT', response_id: null, observed_model: null })
+  })
+
+  it('keeps cancellation sticky: a late valid response never becomes success and later calls send nothing', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const provider = labelledFake(async () => {
+      await gate
+      return reply(providerPayload({ result: readyOutput([imageId(0)]) }))
+    })
+    const s = session(provider.fake)
+    const pending = s.analyze(built(analysis(analysisInput())))
+    await delay(20)
+    expect(code(await s.analyze(built(analysis(analysisInput(undefined, { invocation_id: id(14) })))))).toBe('PROVIDER_BUSY')
+    s.cancel()
+    release()
+    const result = await pending
+    expect(code(result)).toBe('PROVIDER_ABORTED')
+    expect(result.invocation).toMatchObject({ status: 'cancelled', response_id: null, observed_model: null })
+    await delay(30)
+    expect(s.cancelled).toBe(true)
+    expect(s.invocations().map((record) => record.status)).toEqual(['cancelled'])
+    const later = await s.analyze(built(analysis(analysisInput(undefined, { invocation_id: id(15) }))))
+    expect(code(later)).toBe('PROVIDER_ABORTED')
+    expect(later.invocation).toBeNull()
+    expect(provider.calls).toHaveLength(1)
+
+    const aborted = new AbortController()
+    aborted.abort()
+    const quiet = answering({ result: readyOutput([imageId(0)]) })
+    expect(code(await session(quiet.fake, { signal: aborted.signal }).analyze(built(analysis(analysisInput()))))).toBe('PROVIDER_ABORTED')
+    expect(quiet.calls).toHaveLength(0)
+  })
+
+  it('refuses a tampered, foreign-run or reused-invocation prompt before sending anything', async () => {
+    const prompt = built(analysis(analysisInput()))
+    const provider = answering({ result: readyOutput([imageId(0)]) })
+    const s = session(provider.fake)
+    const swapped = {
+      ...prompt,
+      input: [{ role: 'user', content: blocks(prompt).map((block) => (block.type === 'input_image' ? { ...block, image_url: `data:image/png;base64,${png(9, 9).toString('base64')}` } : block)) }],
+    }
+    expect(code(await s.analyze(swapped as never))).toBe('PROVIDER_PROMPT_INVALID')
+    const foreignRun = id(97)
+    const foreign = scene(smallImages(2), { mutate: (body) => { body.run_id = foreignRun; for (const observation of body.observations) observation.run_id = foreignRun } })
+    expect(code(await s.analyze(built(analysis(analysisInput(foreign, { run_id: foreignRun })))))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(provider.calls).toHaveLength(0)
+    expect(code(await s.analyze(prompt))).toBe('OK')
+  })
+
+  it('declares closed strict phase response formats whose shapes match the S1 validators', () => {
+    for (const format of [PROJECT_ANALYSIS_RESPONSE_FORMAT, PROJECT_CLARIFIED_ANALYSIS_RESPONSE_FORMAT, PROJECT_CORRECTION_RESPONSE_FORMAT]) {
+      expect(format).toMatchObject({ type: 'json_schema', strict: true })
+      expect((format.schema as Json).type).toBe('object')
+      expectStrictShape(format.schema)
+      expect(JSON.stringify(format).length).toBeLessThan(PROJECT_REQUEST_ENVELOPE_RESERVE / 2)
+    }
+    const analysisResult = (PROJECT_ANALYSIS_RESPONSE_FORMAT.schema as Json).properties.result
+    const clarifiedResult = (PROJECT_CLARIFIED_ANALYSIS_RESPONSE_FORMAT.schema as Json).properties.result
+    const unsupported = { status: 'unsupported', reason: 'CANVAS_ONLY', explanation: 'No DOM condition.', citations: [] }
+    for (const sample of [everyKind(), clarifyResult(QUESTION), unsupported]) {
+      expect(ProjectAnalysisOutputSchema.safeParse(sample).success).toBe(true)
+      expect(conforms(analysisResult, sample)).toBe(true)
+    }
+    expect(conforms(clarifiedResult, clarifyResult(QUESTION))).toBe(false)
+    expect(conforms(clarifiedResult, everyKind())).toBe(true)
+    expect(conforms(analysisResult, { ...everyKind(), passed: true })).toBe(false)
+    const fix = { summary: 'Fix.', citations: [BASELINE_IMAGE], target_paths: ['src/tasks.ts'], patch: '--- a/src/tasks.ts\n' }
+    expect(conforms(PROJECT_CORRECTION_RESPONSE_FORMAT.schema as Json, fix)).toBe(true)
+    expect(conforms(PROJECT_CORRECTION_RESPONSE_FORMAT.schema as Json, { ...fix, commands: [] })).toBe(false)
+  })
+
+  it('has no process environment, tools, history or retry path in the client source', async () => {
+    const source = await readFile(new URL('../../packages/flowproof/src/model/projectClient.ts', import.meta.url), 'utf8')
+    expect(source).not.toMatch(/process\.env|previous_response_id|tool_choice|tools:/)
+    expect(source).toMatch(/maxRetries: 0/)
+    expect(source).toMatch(/redirect: 'error'/)
+    expect(source).toMatch(/store: false/)
   })
 })
 
