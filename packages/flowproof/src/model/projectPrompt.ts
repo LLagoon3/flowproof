@@ -75,6 +75,7 @@ export type ProjectPromptErrorCode =
   | 'PROMPT_OUTPUT_QUESTION_MISMATCH'
   | 'PROMPT_OUTPUT_CLARIFICATION_REPEATED'
   | 'PROMPT_OUTPUT_PATH_UNKNOWN'
+  | 'PROMPT_UNTRUSTED'
 
 /** `detail` is a safe locator (path, observation ID or field), never content. */
 export interface ProjectPromptFailure {
@@ -270,6 +271,68 @@ const sha256Hex = (data: string | Uint8Array): string => createHash('sha256').up
 const isUuid = (value: unknown): value is string => projectUuidSchema.safeParse(value).success
 const issuePath = (error: z.ZodError): string => error.issues[0]?.path.map(String).join('.') || '(root)'
 
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value)) deepFreeze(item)
+    Object.freeze(value)
+  }
+  return value
+}
+
+/**
+ * Builder-owned prompt identity. Only a prompt returned by a builder of this module, deeply frozen
+ * at construction, is admitted by the client or validators; a copy, clone or re-spread object with
+ * the same or altered manifest is not. This is in-process provenance, not a cryptographic claim.
+ */
+const BUILT = new WeakSet<object>()
+export function isBuiltProjectPrompt(prompt: unknown): prompt is ProjectPrompt {
+  return typeof prompt === 'object' && prompt !== null && BUILT.has(prompt)
+}
+
+/** Derives provenance again from the actual request blocks; the manifest must agree exactly. */
+function manifestMatchesRequest(manifest: ProjectPromptManifest, input: readonly [ProjectPromptMessage]): boolean {
+  try {
+    const [first, ...rest] = input[0].content
+    if (first?.type !== 'input_text' || !first.text.startsWith(`${PROJECT_CONTEXT_LABEL}\n`)) return false
+    const context = JSON.parse(first.text.slice(PROJECT_CONTEXT_LABEL.length + 1)) as Record<string, any>
+    const binding = context.binding as Record<string, unknown>
+    const same = (left: readonly unknown[], right: readonly unknown[]): boolean => left.length === right.length && left.every((value, index) => value === right[index])
+    const images = context.images as { observation_id: string; sha256: string }[]
+    const sources = context.sources as { path: string; sha256: string; text: string }[]
+    const labels: string[] = []
+    const digests: string[] = []
+    for (const block of rest) {
+      if (block.type === 'input_text') labels.push(JSON.parse(block.text.slice(PROJECT_IMAGE_LABEL.length + 1)).observation_id)
+      else digests.push(createHash('sha256').update(Buffer.from(block.image_url.slice(IMAGE_DATA_PREFIX.length), 'base64')).digest('hex'))
+    }
+    const observed = new Set([...images.map((image) => image.observation_id), ...(context.errors as { observation_id: string }[]).map((error) => error.observation_id)])
+    const answered = context.clarification ? { question_id: context.clarification.question_id, answer_id: context.clarification.answer_id } : null
+    return (
+      binding.phase === manifest.phase &&
+      binding.run_id === manifest.run_id &&
+      binding.invocation_id === manifest.invocation_id &&
+      binding.capture_id === manifest.capture_id &&
+      binding.report_sha256 === manifest.report_sha256 &&
+      binding.baseline_commit === manifest.baseline_commit &&
+      (binding.question_id ?? null) === manifest.question_id &&
+      (binding.definition_id ?? null) === manifest.definition_id &&
+      (binding.definition_digest ?? null) === manifest.definition_digest &&
+      same(images.map((image) => image.observation_id), manifest.included_image_ids) &&
+      same(labels, manifest.included_image_ids) &&
+      same(digests, manifest.images.map((image) => image.sha256)) &&
+      same(images.map((image) => image.sha256), digests) &&
+      observed.size === manifest.included_observation_ids.length &&
+      manifest.included_observation_ids.every((observation) => observed.has(observation)) &&
+      same(sources.map((source) => source.path), manifest.included_source_paths) &&
+      same(sources.map((source) => sha256Hex(source.text)), manifest.sources.map((source) => source.sha256)) &&
+      JSON.stringify(context.omitted) === JSON.stringify(manifest.omitted) &&
+      JSON.stringify(answered) === JSON.stringify(manifest.clarification)
+    )
+  } catch {
+    return false
+  }
+}
+
 function redactStrings(value: unknown, registry: RedactedValueRegistry): unknown {
   if (typeof value === 'string') return registry.redact(value).text
   if (Array.isArray(value)) return value.map((item) => redactStrings(item, registry))
@@ -288,8 +351,8 @@ interface AdmittedSource extends ProjectPromptSourceDigest {
   readonly text: string
 }
 
+/** `input` is the frozen snapshot from snapshotCommon: every caller value was read exactly once. */
 function admitSources(input: PromptCommonInput): ProjectPromptResult<{ readonly entries: AdmittedSource[]; readonly bytes: number }> {
-  if (!Array.isArray(input.sources) || !(input.admitted_source_paths instanceof Set)) return fail('PROMPT_INPUT_INVALID', 'sources')
   if (input.sources.length > PROJECT_LIMITS.maxRequestSourceFiles) return fail('PROMPT_SOURCE_LIMIT', 'files')
   const seen = new Set<string>()
   for (const source of input.sources) {
@@ -447,14 +510,51 @@ function finish(plan: PromptPlan): ProjectPromptResult<ProjectPrompt> {
     request_bytes: requestBytes,
     input_sha256: sha256Hex(serialized),
   })
-  return ok(Object.freeze({ phase: plan.phase, instructions, input, serialized, manifest }))
+  if (!manifestMatchesRequest(manifest, input)) return fail('PROMPT_INPUT_INVALID', 'manifest')
+  const prompt: ProjectPrompt = deepFreeze({ phase: plan.phase, instructions, input, serialized, manifest })
+  BUILT.add(prompt)
+  return ok(prompt)
 }
 
-function checkCommon(input: PromptCommonInput): Failure | null {
-  if (input === null || typeof input !== 'object' || !isUuid(input.run_id) || !isUuid(input.invocation_id)) return fail('PROMPT_INPUT_INVALID', 'identity')
-  if (!(input.images instanceof Map) || typeof input.registry?.redact !== 'function') return fail('PROMPT_INPUT_INVALID', 'inputs')
-  if (input.registry.overflowed) return fail('PROMPT_PRIVACY_UNVERIFIED')
-  return null
+/**
+ * Reads every caller-supplied common value exactly once into a frozen snapshot, so getters, proxies
+ * or later caller mutation cannot make validation, hashing and the request disagree. Image bytes are
+ * read once per selected image and encoded from the same buffer that is hashed.
+ */
+function snapshotCommon(input: PromptCommonInput): ProjectPromptResult<PromptCommonInput> {
+  if (input === null || typeof input !== 'object') return fail('PROMPT_INPUT_INVALID', 'identity')
+  const { run_id: runId, invocation_id: invocationId, sources, admitted_source_paths: admitted, images, registry } = input
+  if (!isUuid(runId) || !isUuid(invocationId)) return fail('PROMPT_INPUT_INVALID', 'identity')
+  if (!(images instanceof Map) || typeof registry?.redact !== 'function') return fail('PROMPT_INPUT_INVALID', 'inputs')
+  if (registry.overflowed) return fail('PROMPT_PRIVACY_UNVERIFIED')
+  if (!Array.isArray(sources) || !(admitted instanceof Set)) return fail('PROMPT_INPUT_INVALID', 'sources')
+  const copied: PromptSourceFile[] = []
+  for (const source of sources) {
+    if (source === null || typeof source !== 'object') return fail('PROMPT_SOURCE_INVALID')
+    const { path, content } = source
+    copied.push(Object.freeze({ path, content }))
+  }
+  return ok(Object.freeze({ run_id: runId, invocation_id: invocationId, sources: Object.freeze(copied), admitted_source_paths: admitted, images, registry }))
+}
+
+function snapshotAnalysis(raw: ProjectAnalysisPromptInput, common: PromptCommonInput): ProjectAnalysisPromptInput {
+  const { capture, description, question_id: questionId, clarification } = raw
+  let answered = clarification
+  if (clarification !== null && typeof clarification === 'object') {
+    const { prior, answer_id: answerId, answer } = clarification
+    answered = Object.freeze({ prior, answer_id: answerId, answer })
+  }
+  return Object.freeze({ ...common, capture, description, question_id: questionId, ...(answered === undefined ? {} : { clarification: answered }) })
+}
+
+function snapshotCorrection(raw: ProjectCorrectionPromptInput, common: PromptCommonInput): ProjectCorrectionPromptInput {
+  const { definition, baseline } = raw
+  let frozen = baseline
+  if (baseline !== null && typeof baseline === 'object') {
+    const { outcome, task_condition_index: taskConditionIndex, observations } = baseline
+    frozen = Object.freeze({ outcome, task_condition_index: taskConditionIndex, observations: Array.isArray(observations) ? Object.freeze([...observations]) : observations })
+  }
+  return Object.freeze({ ...common, definition, baseline: frozen })
 }
 
 const sourcesContext = (entries: readonly AdmittedSource[]) => entries.map((source) => ({ path: source.path, sha256: source.sha256, text: source.text }))
@@ -464,9 +564,10 @@ const imagesContext = (images: readonly AdmittedImage[]) => images.map(({ data: 
 // Phase A: analysis and the single explicit clarified re-analysis
 // ---------------------------------------------------------------------------------------
 
-export function buildProjectAnalysisPrompt(input: ProjectAnalysisPromptInput): ProjectPromptResult<ProjectPrompt> {
-  const invalid = checkCommon(input)
-  if (invalid !== null) return invalid
+export function buildProjectAnalysisPrompt(rawInput: ProjectAnalysisPromptInput): ProjectPromptResult<ProjectPrompt> {
+  const common = snapshotCommon(rawInput)
+  if (!common.ok) return common
+  const input = snapshotAnalysis(rawInput, common.value)
   const parsed = DemonstrationCaptureSchema.safeParse(input.capture)
   if (!parsed.success) return fail('PROMPT_INPUT_INVALID', `capture.${issuePath(parsed.error)}`)
   const capture = parsed.data
@@ -541,9 +642,10 @@ export function buildProjectAnalysisPrompt(input: ProjectAnalysisPromptInput): P
 // Phase B: the single correction request after the intended baseline failure
 // ---------------------------------------------------------------------------------------
 
-export function buildProjectCorrectionPrompt(input: ProjectCorrectionPromptInput): ProjectPromptResult<ProjectPrompt> {
-  const invalid = checkCommon(input)
-  if (invalid !== null) return invalid
+export function buildProjectCorrectionPrompt(rawInput: ProjectCorrectionPromptInput): ProjectPromptResult<ProjectPrompt> {
+  const common = snapshotCommon(rawInput)
+  if (!common.ok) return common
+  const input = snapshotCorrection(rawInput, common.value)
   const parsed = FrozenVerificationDefinitionSchema.safeParse(input.definition)
   if (!parsed.success) return fail('PROMPT_INPUT_INVALID', `definition.${issuePath(parsed.error)}`)
   const definition = parsed.data
@@ -610,6 +712,7 @@ export function buildProjectCorrectionPrompt(input: ProjectCorrectionPromptInput
 // ---------------------------------------------------------------------------------------
 
 export function validateProjectAnalysisOutput(prompt: ProjectPrompt, output: unknown): ProjectPromptResult<ProjectAnalysisOutput> {
+  if (!isBuiltProjectPrompt(prompt)) return fail('PROMPT_UNTRUSTED')
   if (prompt.phase === 'correction') return fail('PROMPT_OUTPUT_PHASE_MISMATCH')
   const parsed = ProjectAnalysisOutputSchema.safeParse(output)
   if (!parsed.success) return fail('PROMPT_OUTPUT_INVALID', issuePath(parsed.error))
@@ -624,6 +727,7 @@ export function validateProjectAnalysisOutput(prompt: ProjectPrompt, output: unk
 }
 
 export function validateProjectCorrectionOutput(prompt: ProjectPrompt, output: unknown): ProjectPromptResult<ProjectCorrectionOutput> {
+  if (!isBuiltProjectPrompt(prompt)) return fail('PROMPT_UNTRUSTED')
   if (prompt.phase !== 'correction') return fail('PROMPT_OUTPUT_PHASE_MISMATCH')
   const parsed = ProjectCorrectionOutputSchema.safeParse(output)
   if (!parsed.success) return fail('PROMPT_OUTPUT_INVALID', issuePath(parsed.error))
