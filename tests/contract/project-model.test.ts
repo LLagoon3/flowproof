@@ -1049,7 +1049,7 @@ describe('T023 prompt provenance, builder-owned snapshot identity and immutabili
     expect(nodes.every((node) => Object.isFrozen(node))).toBe(true)
     expect(() => (prompt.manifest.included_observation_ids as string[]).push(unknown)).toThrow(TypeError)
     expect(() => {
-      ;(prompt.input[0].content as Json[])[2] = { type: 'input_text', text: 'replaced' }
+      ;(prompt.input[0].content as unknown as Json[])[2] = { type: 'input_text', text: 'replaced' }
     }).toThrow(TypeError)
     expect(isBuiltProjectPrompt(prompt)).toBe(true)
     expect(isBuiltProjectPrompt(structuredClone(prompt))).toBe(false)
@@ -1074,7 +1074,7 @@ describe('T023 prompt provenance, builder-owned snapshot identity and immutabili
     input.sources.push({ path: 'src/secret.ts', content: 'export const leaked = 1\n' })
     input.images.set(artifactId(0), png(9, 9))
     expect(() => (prompt.manifest.included_observation_ids as string[]).push(id(0x905))).toThrow(TypeError)
-    expect(() => (prompt.input[0].content as Json[]).pop()).toThrow(TypeError)
+    expect(() => (prompt.input[0].content as unknown as Json[]).pop()).toThrow(TypeError)
     release()
     const result = await pending
     expect(code(result)).toBe('OK')
