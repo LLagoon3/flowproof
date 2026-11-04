@@ -7,7 +7,9 @@
 **Status**: Slices 1 and 2 (T001-T016) merged in PR #23 and PR #24. The owner authorized
 local slice 3 implementation (T017-T023) through the coding workflow on 2026-11-04.
 The accepted minimalist summary plus initially closed Details/log rows is the visual reference.
-T024+, push, PR creation, review triggers, merge and deployment are outside this request.
+The owner subsequently authorized slice 3 push, PR creation and the repository Codex
+review/correction loop (initial review plus at most three remediation rounds).
+T024+, merge and deployment remain unauthorized.
 Only verified work is checked off; human-only usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
