@@ -108,7 +108,7 @@ specs/006-project-live-verification/
 └── quickstart.md
 ```
 
-`tasks.md` is intentionally absent: Tasks is a separate owner-requested phase.
+[tasks.md](tasks.md) is generated in the separate owner-requested Tasks phase, not by this Plan.
 
 ### Planned Source Surfaces (not implemented)
 
