@@ -852,6 +852,70 @@ test('canvas-plausible-wrong passes its build and check but fails the replay ora
   expectNothingLeft(harness, cleanup)
 })
 
+/** A fixed in-order delay of the Studio's own run-event deliveries; the release itself is not delayed. */
+const STUDIO_EVENT_DELAY_MS = 300
+
+/**
+ * Delays every event the Studio's own run-event stream delivers by a fixed time, in order, while the
+ * test listener's stream (opened from an evaluated script) stays native. The host still emits its
+ * not-live activity before it removes the iframe; only the Studio learns it late, which is exactly
+ * the delivery/release interleaving a slow SSE path produces.
+ */
+async function delayStudioRunEvents(page: Page): Promise<void> {
+  await page.evaluate((delay) => {
+    const Native = window.EventSource
+    function Delayed(url: string | URL, init?: EventSourceInit): EventSource {
+      const source = new Native(url, init)
+      if (String(new Error().stack).includes('__playwright_evaluation_script__')) return source
+      const wrapped = new WeakMap<object, EventListener>()
+      const wrap = (listener: EventListenerOrEventListenerObject): EventListener => {
+        let delayed = wrapped.get(listener)
+        if (delayed === undefined) {
+          delayed = (event: Event) => {
+            setTimeout(() => (typeof listener === 'function' ? listener.call(source, event) : listener.handleEvent(event)), delay)
+          }
+          wrapped.set(listener, delayed)
+        }
+        return delayed
+      }
+      const add = source.addEventListener.bind(source)
+      const remove = source.removeEventListener.bind(source)
+      source.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => add(type, wrap(listener), options)) as EventSource['addEventListener']
+      source.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) =>
+        remove(type, wrapped.get(listener) ?? listener, options)) as EventSource['removeEventListener']
+      for (const name of ['onmessage', 'onerror', 'onopen'] as const) {
+        let current: EventListener | null = null
+        Object.defineProperty(source, name, {
+          get: () => current,
+          set: (handler: EventListener | null) => {
+            if (current !== null) remove(name.slice(2), wrap(current))
+            current = handler
+            if (handler !== null) add(name.slice(2), wrap(handler))
+          },
+        })
+      }
+      return source
+    }
+    Object.assign(Delayed, { CONNECTING: 0, OPEN: 1, CLOSED: 2 })
+    Delayed.prototype = Native.prototype
+    ;(window as unknown as { EventSource: unknown }).EventSource = Delayed
+  }, STUDIO_EVENT_DELAY_MS)
+}
+
+test('a delayed Studio run-event stream never presents the physically released target frame as live', async () => {
+  test.setTimeout(RUN_BUDGET_MS * 2)
+  const live = { live: ['baseline-live', 'candidate-live'], screenshot: 'captured-verification-delayed-events.png' } as const
+  const { cleanup } = await runCase(
+    'canvas-plausible-wrong',
+    live,
+    async ({ result }) => {
+      expect(result).toMatchObject({ status: 'failed', reason_code: 'CANDIDATE_FAILED' })
+    },
+    delayStudioRunEvents,
+  )
+  expect(cleanup).toBeDefined()
+})
+
 test('canvas-build-fail stops before replay and never serves a candidate build to the frame', async () => {
   test.setTimeout(RUN_BUDGET_MS * 2)
   const live = { live: ['baseline-live'], screenshot: 'captured-verification-failed-build.png' } as const
