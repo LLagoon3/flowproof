@@ -14,6 +14,7 @@ import {
   classifyField,
   createPrivacyPolicy,
   locatorCandidates,
+  navigationPathSensitive,
   maskSelector,
   maskStyle,
   readPngSize,
@@ -383,5 +384,28 @@ describe('collection boundary', () => {
         expect(api.test(code), `${file}: ${api}`).toBe(false)
       }
     }
+  })
+})
+
+describe('S3 review privacy regressions', () => {
+  const admitting = createPrivacyPolicy({ admitSafeValues: true })
+  const plain: FieldDescriptor = { tag: 'input', type: 'text', name: 'note', label: 'Note', placeholder: null, autocomplete: null, private: false } as FieldDescriptor
+
+  it('treats an unreadable oversized input value as privacy-unverified without remembering it', () => {
+    const values = new RedactedValueRegistry()
+    expect(admitFillValue(admitting, plain, null, values)).toEqual({ kind: 'redacted', reason: 'VALUE_TOO_LONG' })
+    expect(values.overflowed, 'later reflections of the unknown value cannot be verified').toBe(true)
+    expect(values.size).toBe(0)
+    expect(values.contains('any later reflection')).toBe(true)
+    const selected = new RedactedValueRegistry()
+    expect(admitSelectValue(admitting, plain, null, selected).kind).toBe('redacted')
+    expect(selected.overflowed).toBe(true)
+  })
+
+  it('shares the navigation sensitive-path checks with network-error paths', () => {
+    const values = new RedactedValueRegistry()
+    expect(navigationPathSensitive('/reset;token=synthetic-private-value', values)).toBe(true)
+    expect(navigationPathSensitive('/missing.json', values)).toBe(false)
+    expect(sanitizeNavigation('http://localhost:1/reset;token=synthetic-private-value', 'http://localhost:1', values)).toEqual({ ok: false, reason: 'NAVIGATION_PATH_SENSITIVE' })
   })
 })

@@ -26,6 +26,7 @@ import {
   classifyField,
   locatorCandidates,
   sanitizeErrorText,
+  navigationPathSensitive,
   sanitizeNavigation,
 } from './projectPrivacy.js'
 import type { ElementDescriptor, FieldDescriptor, ProjectPrivacyPolicy, TargetImageOutcome } from './projectPrivacy.js'
@@ -717,7 +718,7 @@ export class ProjectCaptureSession {
     }
     if (url.origin !== this.#binding.target_origin || url.username !== '' || url.password !== '') return omit('NETWORK_CROSS_ORIGIN')
     const path = url.pathname
-    if (!entryPathSchema.safeParse(path).success || this.#registry.contains(path)) return omit('NETWORK_PATH_UNSAFE')
+    if (!entryPathSchema.safeParse(path).success || navigationPathSensitive(path, this.#registry)) return omit('NETWORK_PATH_UNSAFE')
     const method = event.method.toUpperCase()
     if (!(HTTP_METHODS as readonly string[]).includes(method)) return omit('NETWORK_METHOD_UNSUPPORTED')
     const status = event.status !== null && Number.isInteger(event.status) && event.status >= 100 && event.status <= 599 ? event.status : null

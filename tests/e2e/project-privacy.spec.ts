@@ -154,6 +154,38 @@ const LIST_IMAGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style
   #list-private { list-style-image: url('/private.svg'); list-style-position: inside; width: 260px; height: 32px; }
 </style></head><body><ul><li id="list-private">Synthetic list item</li></ul><button id="add">Add</button></body></html>`
 
+// S3 review regressions: synthetic values only.
+const REVIEW_SEEDS = {
+  bodyBefore: 'sk-fpseedbodybefore7781abcd',
+  bodyAfter: 'sk-fpseedbodyafter8892abcd',
+  networkPath: 'synthetic-private-value',
+  oversize: 'fpseedoversize5503',
+} as const
+
+const rootPage = (rootCss: string) => `<!doctype html><html><head><meta charset="utf-8"><style>
+  html, body { margin: 0; }
+  body { padding: 6px; min-height: 120px; font: 18px/1.2 sans-serif; color: rgb(0, 0, 200); }
+  ${rootCss}
+</style></head><body><p>Root surface</p></body></html>`
+
+const ROOT_CASES = [
+  { name: 'an html url background', path: '/root-html-background', css: `html { background: white url('/private.svg') repeat; }`, reason: 'IMAGE_TEXT_UNVERIFIED' },
+  { name: 'a body url background', path: '/root-body-background', css: `body { background: white url('/private.svg') repeat; }`, reason: 'IMAGE_TEXT_UNVERIFIED' },
+  { name: 'body::before generated text', path: '/root-body-before', css: `body::before { content: "${REVIEW_SEEDS.bodyBefore}"; display: block; color: ${GREEN}; }`, reason: 'IMAGE_SENSITIVE_TEXT' },
+  { name: 'body::after generated text', path: '/root-body-after', css: `body::after { content: "${REVIEW_SEEDS.bodyAfter}"; display: block; color: ${GREEN}; }`, reason: 'IMAGE_SENSITIVE_TEXT' },
+] as const
+
+const NETWORK_PATH_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYLE}</head><body>
+  <button id="reset" onclick="fetch('/reset;token=${REVIEW_SEEDS.networkPath}').catch(() => undefined); fetch('/missing.json').catch(() => undefined)">Reset</button>
+</body></html>`
+
+const OVERSIZE_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYLE}</head><body>
+  <input id="long" aria-label="Long note">
+  <div id="echo" class="secret" style="height: 22px"></div>
+  <button id="add">Add</button>
+  <script>document.getElementById('long').addEventListener('input', (event) => { document.getElementById('echo').textContent = event.target.value.slice(0, 24) })</script>
+</body></html>`
+
 const PAGES: Record<string, string> = {
   '/blank': '<!doctype html><title>blank</title>',
   '/decoy': `<!doctype html><body style="margin:0"><button id="decoy" style="width:280px;height:100px">Decoy ${SEEDS.decoy}</button></body>`,
@@ -163,6 +195,9 @@ const PAGES: Record<string, string> = {
   '/reflect': REFLECT_HTML,
   '/background': BACKGROUND_HTML,
   '/list-image': LIST_IMAGE_HTML,
+  '/network-path': NETWORK_PATH_HTML,
+  '/oversize': OVERSIZE_HTML,
+  ...Object.fromEntries(ROOT_CASES.map((rootCase) => [rootCase.path, rootPage(rootCase.css)])),
 }
 
 function serve(host: string, port: number, route: (path: string) => { status: number; body: string; contentType?: string }): Promise<Server> {
@@ -634,4 +669,51 @@ test('discard clears staged images and a re-recording starts a new capture with 
   expect(sealed.capture.state).toBe('ready')
   expect(sealed.capture.interactions.map((interaction) => [interaction.sequence, interaction.action.type])).toEqual([[1, 'click']])
   expect(sealed.capture.document_epoch).toBe(0)
+})
+
+for (const rootCase of ROOT_CASES) {
+  test(`S3 review: ${rootCase.name} on the document roots is assessed before PNG retention`, async () => {
+    const frame = await targetFrame()
+    const recorder = await start(frame, rootCase.path)
+    await recorder.session.imagesSettled()
+    const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+    expect(count(control, isGreen).hits, 'control: the root surface renders in Chromium').toBeGreaterThan(8)
+
+    const sealed = await recorder.finish()
+    expect(sealed.capture.state).toBe('unsupported')
+    expect(sealed.capture.completeness?.reasons).toContain(rootCase.reason)
+    expect(images(sealed).length).toBe(0)
+  })
+}
+
+test('S3 review: network-error paths share the navigation sensitive-path checks before retention or hashing', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/network-path')
+  await pointer(recorder, () => frame.click('#reset'))
+  await expect.poll(() => recorder.session.snapshot().observations.filter((observation) => observation.type === 'network-error').length).toBeGreaterThanOrEqual(2)
+  const sealed = await recorder.finish()
+
+  const network = sealed.capture.observations.filter((observation) => observation.type === 'network-error')
+  expect(network.map((observation) => observation.payload)).toContainEqual(expect.objectContaining({ method: 'GET', path: '/missing.json', status: 404, error_class: 'HTTP_ERROR' }))
+  expect(network.map((observation) => observation.reason)).toContain('NETWORK_PATH_UNSAFE')
+  expect(JSON.stringify(sealed.capture)).not.toContain(REVIEW_SEEDS.networkPath)
+  expect(JSON.stringify(sealed.capture)).not.toContain('/reset;')
+})
+
+test('S3 review: an unreadable oversized input value fails closed before its reflection reaches retained pixels', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/oversize')
+  await recorder.session.imagesSettled()
+  await frame.fill('#long', `${REVIEW_SEEDS.oversize}${'x'.repeat(4_200)}`)
+  const echo = await boxIn(frame, '#echo')
+  const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+  expect(count(control, isGreen, echo).hits, 'control: the page reflects the oversized value').toBeGreaterThan(8)
+  await pointer(recorder, () => frame.click('#add'))
+  await recorder.session.imagesSettled()
+  const sealed = await recorder.finish()
+
+  expect(sealed.capture.state).toBe('unsupported')
+  expect(sealed.capture.completeness?.reasons).toContain('PRIVACY_REGISTRY_LIMIT')
+  for (const image of images(sealed)) expect(count(image.pixels, isGreen, echo).hits, `retained image ${image.id}`).toBe(0)
+  expect(JSON.stringify(sealed.capture)).not.toContain(REVIEW_SEEDS.oversize)
 })

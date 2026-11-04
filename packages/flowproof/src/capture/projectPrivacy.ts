@@ -110,7 +110,10 @@ export class RedactedValueRegistry {
     return this.#size
   }
 
-  /** True once a value could not be remembered because the registry was full. */
+  /**
+   * True once a refused value could not be remembered (registry full, too short or unreadable),
+   * so every later reflection check fails closed.
+   */
   get overflowed(): boolean {
     return this.#overflowed
   }
@@ -133,6 +136,11 @@ export class RedactedValueRegistry {
     else this.#byLength.set(value.length, new Set([fingerprint]))
     this.#size += 1
     return true
+  }
+
+  /** Records a refused value that could not be read at all, so no reflection of it is verifiable. */
+  markUnverified(): void {
+    this.#overflowed = true
   }
 
   contains(text: string): boolean {
@@ -343,7 +351,13 @@ function admitText(
     if (raw !== null) registry.remember(raw)
     return { kind: 'redacted', reason } as const
   }
-  if (raw === null || raw.length > MAX_FILL_TEXT) return redacted('VALUE_TOO_LONG')
+  if (raw === null) {
+    // The recorder could not read the value within its bound, so it cannot be fingerprinted:
+    // fail closed for every later reflection instead of retaining or hashing a partial value.
+    registry.markUnverified()
+    return redacted('VALUE_TOO_LONG')
+  }
+  if (raw.length > MAX_FILL_TEXT) return redacted('VALUE_TOO_LONG')
   if (field.private) return redacted('FIELD_PRIVATE')
   if (sensitiveField(field)) return redacted('FIELD_SENSITIVE')
   const rejection = valueRejection(raw)
@@ -404,6 +418,11 @@ export type NavigationResult = { readonly ok: true; readonly path: string } | { 
 
 const QUERY_OR_FRAGMENT = /^[A-Za-z0-9\-._~!$&'()*+,;=:@/?]*$/
 
+/** The S1 sensitive-path checks shared by navigation and network-error paths. */
+export function navigationPathSensitive(path: string, registry: RedactedValueRegistry): boolean {
+  return registry.contains(path) || containsSensitiveValueShape(path) || containsSensitivePathParameter(path)
+}
+
 /** Reduces a target URL to an admitted relative same-origin path, or names why it cannot. */
 export function sanitizeNavigation(href: string, targetOrigin: string, registry: RedactedValueRegistry): NavigationResult {
   let url: URL
@@ -415,7 +434,7 @@ export function sanitizeNavigation(href: string, targetOrigin: string, registry:
   if (url.origin !== targetOrigin) return { ok: false, reason: 'NAVIGATION_CROSS_ORIGIN' }
   if (url.username !== '' || url.password !== '') return { ok: false, reason: 'NAVIGATION_CREDENTIALS' }
   const path = url.pathname
-  if (registry.contains(path) || containsSensitiveValueShape(path) || containsSensitivePathParameter(path)) return { ok: false, reason: 'NAVIGATION_PATH_SENSITIVE' }
+  if (navigationPathSensitive(path, registry)) return { ok: false, reason: 'NAVIGATION_PATH_SENSITIVE' }
   for (const extra of [url.search.slice(1), url.hash.slice(1)]) {
     if (extra === '') continue
     if (registry.contains(extra) || containsSensitiveValueShape(extra)) return { ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' }
@@ -661,16 +680,25 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
         }
         return true
       }
+      const appendElement = (element: any): boolean => {
+        const style = doc.defaultView.getComputedStyle(element)
+        if ([style.backgroundImage, style.listStyleImage, style.borderImageSource].some((image) => /url\(/i.test(image))) return false
+        for (const pseudo of ['::before', '::after', '::marker']) if (!appendPseudo(element, pseudo)) return false
+        return true
+      }
+      // A TreeWalker never yields its root. The document roots are assessed unconditionally:
+      // their backgrounds propagate to the canvas and their generated content still paints.
+      const roots = new Set([doc.documentElement, doc.body].filter((root) => root !== null && root !== undefined))
       const visit = (root: any): boolean => {
         const walker = doc.createTreeWalker(root, 0x5 /* SHOW_ELEMENT | SHOW_TEXT */)
         for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
           if (node.nodeType === 1) {
             const element = node as any
-            if (element.closest(masked) || (element.checkVisibility && !element.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
-            const style = doc.defaultView.getComputedStyle(element)
-            if ([style.backgroundImage, style.listStyleImage, style.borderImageSource].some((image) => /url\(/i.test(image))) return false
-            for (const pseudo of ['::before', '::after', '::marker']) if (!appendPseudo(element, pseudo)) return false
-            if (node.shadowRoot && !visit(node.shadowRoot)) return false
+            if (!roots.has(element)) {
+              if (element.closest(masked) || (element.checkVisibility && !element.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
+              if (!appendElement(element)) return false
+            }
+            if (element.shadowRoot && !visit(element.shadowRoot)) return false
             continue
           }
           const parent = node.parentElement
@@ -680,8 +708,9 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
         }
         return true
       }
-      if (!doc.body) return ''
-      return visit(doc.body) ? chunks.join('\n') : null
+      if (!doc.documentElement) return ''
+      for (const root of roots) if (!appendElement(root)) return null
+      return visit(doc.documentElement) ? chunks.join('\n') : null
     },
     { selector, max: MAX_RENDERED_TEXT_CHARS },
   )
