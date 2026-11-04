@@ -24,6 +24,7 @@ import {
   ProjectAnalysisOutputSchema,
   buildProjectAnalysisPrompt,
   buildProjectCorrectionPrompt,
+  isBuiltProjectPrompt,
   validateProjectAnalysisOutput,
   validateProjectCorrectionOutput,
   type ProjectPrompt,
@@ -563,6 +564,33 @@ describe('T023 correction prompt: frozen definition and safe actual baseline con
     expect(code(rejected)).toBe('PROMPT_OUTPUT_PATH_UNKNOWN')
     expect(rejected.invocation).toMatchObject({ status: 'failed', error_code: 'PROMPT_OUTPUT_PATH_UNKNOWN', response_id: RESPONSE_ID, observed_model: 'muse-spark-1.3' })
   })
+
+  it('provenance: a copied correction prompt cannot widen target paths or rebind the definition', async () => {
+    const prompt = built(correction(correctionInput()))
+    const widened = { ...prompt, manifest: { ...prompt.manifest, included_source_paths: [...prompt.manifest.included_source_paths, 'src/other.ts'] } } as ProjectPrompt
+    expect(code(validateProjectCorrectionOutput(widened, output({ target_paths: ['src/other.ts'] })))).toBe('PROMPT_UNTRUSTED')
+    const rebound = { ...prompt, manifest: { ...prompt.manifest, definition_digest: sha('0') } } as ProjectPrompt
+    const provider = answering({ result: readyOutput([imageId(0)]) }, output())
+    const s = session(provider.fake)
+    expect(code(await s.analyze(built(analysis(analysisInput()))))).toBe('OK')
+    expect(code(await s.correct(rebound))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(code(await s.correct(widened))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(provider.calls).toHaveLength(1)
+  })
+
+  it('provenance: reads the host baseline boundary once, so the sent context matches what was admitted', () => {
+    let reads = 0
+    const baseline = {
+      get outcome() {
+        reads += 1
+        return reads === 1 ? 'intended-condition-failed' : 'condition-passed'
+      },
+      task_condition_index: 0,
+      observations: baselineObservations(),
+    }
+    const prompt = built(correction(correctionInput({ baseline })))
+    expect(contextOf(prompt).baseline.outcome).toBe('intended-condition-failed')
+  })
 })
 
 describe('T023 observation cap: 64 included observations and essential omission', () => {
@@ -974,6 +1002,106 @@ describe('T023 project model client (explicitly labelled in-process fakes only)'
     expect(source).toMatch(/maxRetries: 0/)
     expect(source).toMatch(/redirect: 'error'/)
     expect(source).toMatch(/store: false/)
+  })
+})
+
+describe('T023 prompt provenance, builder-owned snapshot identity and immutability', () => {
+  const unknown = id(0x900)
+  const altered = (prompt: ProjectPrompt, manifest: Json): ProjectPrompt => ({ ...prompt, manifest: { ...prompt.manifest, ...manifest } }) as ProjectPrompt
+  const unsupportedCiting = (citation: string): Json => ({ status: 'unsupported', reason: 'SYNTHETIC_PROBE', explanation: 'Independent fake response.', citations: [citation] })
+
+  it('refuses a copied prompt whose manifest adds evidence absent from the serialized request', async () => {
+    const prompt = built(analysis(analysisInput()))
+    const changed = altered(prompt, { included_observation_ids: [...prompt.manifest.included_observation_ids, unknown] })
+    expect(prompt.serialized).not.toContain(unknown)
+    const provider = answering({ result: unsupportedCiting(unknown) })
+    const s = session(provider.fake)
+    expect(code(await s.analyze(changed))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(provider.calls).toHaveLength(0)
+    expect(s.invocations()).toEqual([])
+    expect(code(validateProjectAnalysisOutput(changed, unsupportedCiting(unknown)))).toBe('PROMPT_UNTRUSTED')
+  })
+
+  const rebindings: Array<[string, (prompt: ProjectPrompt) => Json]> = [
+    ['included image IDs', (prompt) => ({ included_image_ids: [...prompt.manifest.included_image_ids, unknown] })],
+    ['included source paths', () => ({ included_source_paths: ['src/main.ts', 'src/other.ts', 'src/tasks.ts'] })],
+    ['source digests', (prompt) => ({ sources: prompt.manifest.sources.map((source) => ({ ...source, sha256: sha('0') })) })],
+    ['question binding', () => ({ question_id: id(0x901) })],
+    ['capture binding', () => ({ capture_id: id(0x902) })],
+    ['report binding', () => ({ report_sha256: sha('1') })],
+    ['clarification binding', () => ({ clarification: { question_id: QUESTION, answer_id: ANSWER } })],
+    ['phase', () => ({ phase: 'clarified-analysis' })],
+    ['nothing (a structurally identical copy)', () => ({})],
+  ]
+  it.each(rebindings)('refuses a copied prompt whose manifest rebinds %s', async (_name, rebind) => {
+    const prompt = built(analysis(analysisInput()))
+    const provider = answering({ result: readyOutput([imageId(0)]) })
+    const s = session(provider.fake)
+    expect(code(await s.analyze(altered(prompt, rebind(prompt))))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(code(await s.analyze(structuredClone(altered(prompt, rebind(prompt)))))).toBe('PROVIDER_PROMPT_INVALID')
+    expect(provider.calls).toHaveLength(0)
+    expect(code(await s.analyze(prompt))).toBe('OK')
+  })
+
+  it('returns a deeply frozen builder-owned snapshot that cannot be mutated', () => {
+    const prompt = built(analysis(analysisInput()))
+    const nodes = [prompt, prompt.input, prompt.input[0], prompt.input[0].content, prompt.input[0].content[2], prompt.manifest, prompt.manifest.included_observation_ids, prompt.manifest.sources, prompt.manifest.sources[0], prompt.manifest.images[0], prompt.manifest.omitted]
+    expect(nodes.every((node) => Object.isFrozen(node))).toBe(true)
+    expect(() => (prompt.manifest.included_observation_ids as string[]).push(unknown)).toThrow(TypeError)
+    expect(() => {
+      ;(prompt.input[0].content as Json[])[2] = { type: 'input_text', text: 'replaced' }
+    }).toThrow(TypeError)
+    expect(isBuiltProjectPrompt(prompt)).toBe(true)
+    expect(isBuiltProjectPrompt(structuredClone(prompt))).toBe(false)
+    expect(isBuiltProjectPrompt({ ...prompt })).toBe(false)
+  })
+
+  it('keeps admitted bytes and provenance fixed while the exchange is pending, whatever the caller mutates', async () => {
+    const s0 = scene(smallImages(2))
+    const input = analysisInput(s0, { sources: [...SOURCES] })
+    const prompt = built(analysis(input))
+    const before = { serialized: prompt.serialized, manifest: JSON.stringify(prompt.manifest) }
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const provider = labelledFake(async () => {
+      await gate
+      return reply(providerPayload({ result: readyOutput([imageId(0)]) }))
+    })
+    const s = session(provider.fake)
+    const pending = s.analyze(prompt)
+    await delay(20)
+    input.capture.observations[0].observation_id = id(0x904)
+    input.sources.push({ path: 'src/secret.ts', content: 'export const leaked = 1\n' })
+    input.images.set(artifactId(0), png(9, 9))
+    expect(() => (prompt.manifest.included_observation_ids as string[]).push(id(0x905))).toThrow(TypeError)
+    expect(() => (prompt.input[0].content as Json[]).pop()).toThrow(TypeError)
+    release()
+    const result = await pending
+    expect(code(result)).toBe('OK')
+    expect(prompt.serialized).toBe(before.serialized)
+    expect(JSON.stringify(prompt.manifest)).toBe(before.manifest)
+    const body = provider.calls[0]!.body
+    expect(sha256(JSON.stringify({ instructions: body.instructions, input: body.input }))).toBe(prompt.manifest.input_sha256)
+    expect(result.invocation?.included_observation_ids).toEqual(prompt.manifest.included_observation_ids)
+    expect(result.invocation?.included_source_paths).toEqual(['src/main.ts', 'src/tasks.ts'])
+  })
+
+  it('reads each caller-supplied source once, so a changing getter cannot smuggle an unadmitted path', () => {
+    for (let flip = 1; flip <= 10; flip += 1) {
+      let reads = 0
+      const shifty = {
+        get path() {
+          reads += 1
+          return reads <= flip ? 'src/tasks.ts' : 'src/secret.ts'
+        },
+        content: 'export const x = 1\n',
+      }
+      const result = analysis(analysisInput(undefined, { sources: [shifty], admitted_source_paths: new Set(['src/tasks.ts']) }))
+      expect(code(result)).toBe('OK')
+      if (!result.ok) continue
+      expect(result.value.manifest.included_source_paths).toEqual(['src/tasks.ts'])
+      expect(contextOf(result.value).sources.map((source: Json) => source.path)).toEqual(['src/tasks.ts'])
+    }
   })
 })
 
