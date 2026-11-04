@@ -111,3 +111,36 @@ success is not a claim that the entire concurrent suite was rerun locally or tha
 failure has a proven shared cause. Exact published-HEAD hosted CI and completed review are required
 separate gates before merge. This remains S2 module verification, not live-model/full-feature or
 owner acceptance; no provider call or deployment occurred.
+
+## Review 2 finding 4473842280 — nested directory entry
+
+A confirmed nested entry such as `/app/` is accepted (`projectFileOf` maps it to `app/index.html`),
+but the project target parsed requests with `requestSegments`, which refuses the trailing empty
+segment of `/app/`, so the prepared target answered 404 to its own entry. The parent's built-module
+probe reproduced it (explicit `/app/index.html` 200; `GET`/`HEAD /app/` and `/app/?synthetic=1` 404).
+
+Fix (`studio/targetApp.ts`, project target only): a private `projectRequestSegments` maps a closed
+directory request (path longer than `/` ending in `/`) to that directory's `index.html` and then
+applies the unchanged `requestSegments` checks, so repeated slashes, dot and `%2e%2e` segments,
+encoded slashes, traversal and control bytes stay refused, and only a registered file whose bytes
+match its accepted hash is served, with the unchanged headers and CSP. The legacy prepared-mode
+`requestSegments` and its callers are unchanged.
+
+New `tests/integration/project-target-directory.test.ts` (real HTTP target, owned temp output):
+directory entry `GET /app/`, `/app/?synthetic=1` and `HEAD /app/` return the registered bytes with
+headers identical to `/app/index.html`; root, file, 405, 421 and 503 controls hold; 17 confusion
+forms × GET/HEAD stay 404 (including an unregistered `extra/index.html` on disk); and a headed
+Chromium frame passes `confirmProjectTargetReady` for entry `/app/`, then runs its relative asset.
+Red on the base: the directory test failed (`/app/` 404) and readiness failed `TARGET_LOAD_FAILED`;
+the refusal test passed both before and after. A first green run exposed a fixture-only script
+placement error in the new test (asset in `<head>`), corrected before commit.
+
+Validation (exact heavy lock): new file 3/3, and 9/9 with `project-target-security` under the
+runner-like `::1`-first resolver; `pnpm typecheck` and `pnpm build` exit 0; the parent probe with
+`--green` against the rebuilt module passes (output in this unit's log root; the parent red JSON
+is untouched); focused run of seven files (new, target-security, project-studio, project-runtime,
+legacy target-app unit, run-state-machine unit, probe-install-order) 91/92 with the single failure
+being the since-corrected fixture test; `tests/e2e/project-setup.spec.ts` 2/2. Containers 46 -> 46
+identical; no listeners on 43150–43159; no temporary outputs left. Logs: ignored
+`.flowproof/task-logs/006-project-live-verification/s2-directory/`. Full suites and hosted CI for
+this commit are not run here.

@@ -508,6 +508,18 @@ const projectFileOf = (entryPath: string): string => {
   return relative === '' || relative.endsWith('/') ? `${relative}index.html` : relative
 }
 
+/**
+ * Project request target to segments. A closed directory request (`/app/`) names that directory's
+ * `index.html`, matching how `projectFileOf` reads a confirmed directory entry. The rewritten target
+ * passes the same `requestSegments` checks, so empty, dot, encoded-slash and traversal segments stay
+ * refused, and only a registered file with its accepted hash is ever served.
+ */
+const projectRequestSegments = (rawUrl: string | undefined): readonly string[] | null => {
+  if (typeof rawUrl !== 'string') return null
+  const pathname = rawUrl.split(/[?#]/, 1)[0] ?? ''
+  return requestSegments(pathname.length > 1 && pathname.endsWith('/') ? `${pathname}index.html` : rawUrl)
+}
+
 const sha256Of = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex')
 
 /** Binds the project target's `localhost` port (0 for an ephemeral port) and returns its owner. */
@@ -527,7 +539,7 @@ export async function startProjectTargetApp(options: { readonly port: number }):
     if (req.headers.host?.toLowerCase() !== authority) return sendStatus(res, 421)
     const serving = active
     if (serving === null || policy === null) return sendStatus(res, 503)
-    const segments = requestSegments(req.url)
+    const segments = projectRequestSegments(req.url)
     const relative = segments === null ? null : segments.join('/')
     const expected = relative === null ? undefined : serving.files.get(relative)
     if (segments === null || relative === null || expected === undefined) return sendStatus(res, 404)
