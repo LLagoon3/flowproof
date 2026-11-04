@@ -25,6 +25,12 @@ repository. Internal foundation work is not a substitute for that first acceptan
 prepared modes and their claims remain unchanged. [Research](research.md) records reuse, gaps and
 alternatives; [quickstart](quickstart.md) defines later validation, not checks already performed.
 
+**Execution scheduling**: The subsequent owner-requested Tasks/parallelization pass retains one complete
+delivery slice, I6 / T001–T055. [Parallel dispatch](parallel-execution.md) assigns four active lanes
+(integration/UI, runtime/project, capture/privacy, AI/replay), exact task prerequisites, exclusive shared-file
+handoffs and serialized heavy validation. Independent modules overlap; production story joins retain
+their authority gates. This adds no product scope and does not start implementation.
+
 ## Technical Context
 
 **Language/Version**: Existing TypeScript 7.0.2, Node.js 24+, pnpm 10.34.5; Git; Linux headed Chromium.

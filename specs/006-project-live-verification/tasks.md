@@ -5,8 +5,9 @@
 
 **Branch**: `feat/006-project-live-verification` | **Created**: 2026-11-04
 
-**Authorization**: The owner requested Tasks after the Plan report. This execution produces the task
-list only: no source edits, image provisioning, test execution, model calls, push, PR, merge or deployment.
+**Authorization**: The owner requested Tasks after the Plan report, then requested an explicit slice
+scope and parallel-ready breakdown. This revision changes scheduling documents only: no source edits,
+image provisioning, product test execution, model calls, push, PR, merge or deployment.
 All tasks below are unexecuted. Later implementation must be authorized for the listed delivery slice;
 its actual live acceptance requires available permitted credentials, fixtures and runtime resources.
 
@@ -19,6 +20,10 @@ or cosmetic tests. In-process model fakes are labelled and never substitute for 
 acceptance. Task IDs are sequential; `[P]` marks independent file work that may overlap after its stated
 prerequisites, not permission to run port/resource-heavy tests concurrently. Source paths below are
 planned files, not a claim they exist. Reuse existing modules without weakening old contracts.
+
+**Parallel dispatch**: [parallel-execution.md](parallel-execution.md) assigns every task exactly once
+to four active lanes, records exact predecessor IDs, shared-file handoffs and resource ownership.
+Story phases describe integration order, not a blanket barrier on independent module work.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
@@ -236,47 +241,55 @@ and contain no secret/private data. Human and automated observations remain clea
 
 ```mermaid
 flowchart TD
-  Setup[Phase 1: sample / image / live discovery boundary] --> Foundation[Phase 2: contracts / store / lifecycle]
-  Foundation --> US1[US1: admit and run isolated project]
-  US1 --> US2[US2: human capture and real analysis adapters]
-  US2 --> US3[US3: frozen baseline gate and one correction / replay]
-  US3 --> US4[US4: retained result and exact patch review]
-  US4 --> Final[Phase 7: negatives / actual live run / owner evidence]
+  Foundation[Shared contracts / store / lifecycle] --> Runtime[Runtime / admission / patch lane]
+  Foundation --> Capture[Privacy / recorder lane]
+  Foundation --> Model[Model / replay lane]
+  Image[Sample / immutable image] --> Runtime
+  Capture --> Model
+  Runtime --> SetupUI[Integrate real target and setup]
+  SetupUI --> Analysis[Integrate capture / interpretation]
+  Capture --> Analysis
+  Model --> Analysis
+  Analysis --> Verification[Baseline / correction / same-check verification]
+  Runtime --> Verification
+  Model --> Verification
+  Verification --> Review[Retained result / evidence / diff]
+  Review --> Final[Serial regression / actual live / owner evidence]
 ```
 
 - T001 precedes image binding T002; T003 can be prepared independently of the sample/image.
-- Setup T001–T003 precedes foundations T004–T009; no story bypasses strict contracts/store/lifecycle.
-- US1 T010–T020 provides the real target for US2. Recorder/privacy and model adapter units can be
-  tested independently with strict recorded inputs; their production integration still requires US1.
-- US2 T021–T033 provides interpretation and correction adapters, not permission to bypass baseline.
-  US3 T034–T043 installs the host-only verified-baseline gate and invokes correction once afterward.
-  This is a sequential integration dependency, not a circular requirement to generate a candidate first.
-- US3's fixed-pair independent test does not need another model call. US4 T044–T049 can be verified
-  from retained result fixtures but is integrated after US3 produces authoritative results.
+- T004/T006/T008 and their foundation implementations do not need an actual image. They may overlap
+  T001/T002/T003; no story module bypasses completed T005/T007/T009. Actual execution still requires T002.
+- After foundations, US1 admission/runtime, US2 privacy/recorder/model and US3 replay/patch modules
+  may overlap against frozen contracts. Do not wait for all of US1 before starting US2/US3 modules.
+- Production capture integration T029 still needs actual project setup T019, recorder T025 and model
+  client T028. Replay module T037 may be ready early; baseline integration T038 requires the actual
+  runtime/target and sealed interpretation. Correction still follows the intended baseline failure.
+- US3 fixed-pair evaluator tests do not need another model call. Result-contract T044 may start after
+  foundations; US4 integration still waits for authoritative engine/store results.
 - T050 closes only unproven negative gaps. T051 documents implementation facts. T052 precedes final
   live/owner evidence T053/T054; T055 checks the exact resulting implementation and truthful marks.
 - Any follow-up code change invalidates affected acceptance evidence and requires the relevant rerun;
   no documentation-only result note requires an unrelated full regression repeat.
 
-## Parallel Execution Examples (File-Disjoint Work Only)
+## Parallel Execution (Four Active Lanes)
 
-These are opportunities for an authorized implementation team, not new agent launches or permission
-for parallel writers to the same shared files. Dependency owners serialize `project/contracts.ts`,
-`project/run.ts`, Studio server/API/state and shared UI integration. Run resource-heavy suites serially.
+The dispatch-ready task/owner/predecessor matrix is in [parallel-execution.md](parallel-execution.md).
+There are at most four active agents: one integration owner plus three module workers, not four workers
+in addition to a coordinator. This document does not start product implementation.
 
-- **Setup**: T001 sample/helper and T003 discovery configuration can be prepared together. T002 waits
-  for the locked sample dependency manifest; do not claim these all have no dependencies.
-- **Foundations**: write T004 contract, T006 store and T008 lifecycle tests in parallel after Setup;
-  implement their shared contracts first, then respective file owners after the tests exist.
-- **US1**: T010 admission, T011 runtime, T012 target-policy and T013 CLI/API tests are separate files
-  and can be authored together after foundations, before their corresponding implementation tasks.
-- **US2**: T021 recorder-contract, T022 privacy and T023 model-contract tests can be authored together
-  after US1. Recorder and prompt/client implementation wait for the shared privacy boundary.
-- **US3**: T034 replay, T035 patch and T036 verification tests can be authored together after US2.
-  Do not run T038/T040/T041 concurrently: they all integrate the same orchestrator/evaluator.
-- **US4**: T044 result-contract tests can be authored independently from an already-authorized
-  earlier story's private implementation files using the frozen contract, but T045/T046/T047 wait
-  for their stated engine/store/schema dependencies and serialize shared server/state changes.
+- **I — integration/UI**: shared contracts/store/lifecycle, CLI/Studio/target/UI, orchestration and
+  authoritative final verification. One writer owns shared integration files and task completion marks.
+- **A — runtime/project**: sample/image, admission/snapshot/profile/offline runtime and bounded patch.
+- **B — capture/privacy**: safe observations/masking, target recorder and capture-specific tests.
+- **C — AI/replay**: prompt/client/opt-in smoke authoring and frozen replay compiler/interpreter.
+- **Early overlap**: A prepares T001→T002 while I establishes T004–T009/T003. After foundations, A's
+  admission/runtime, B's T021/T022→T024→T025 and C's T023/T034→T037 overlap. C's prompt waits for T024,
+  not all of US1. A's T035→T039 waits for T015, not all of US2.
+- **Join**: I integrates ready modules in small commits while independent owners continue. C hands
+  `projectReplay.ts` exclusively to I after verified T037 for T038/T040; no simultaneous edits.
+- **Resources**: browser/Docker/image/full-suite/live execution uses one coordinator-issued resource
+  lease. Pure module edits and focused resource-free checks can overlap; heavy suites cannot.
 
 ## Constraint Register (Inherited, Not New Product Scope)
 
@@ -333,8 +346,9 @@ field, extra key, bound and illegal transition, not only the abbreviated labels 
 - Preserve the confirmed scope: a supported local running project that the user directly manipulates,
   actual capture/image/code analysis, system-derived reproduction, one correction, independent checks,
   retained evidence/exact diff and original unchanged. No manual-script input requirement or human timer.
-- Complete shared risk boundaries first, then story phases in order with small coherent Conventional
-  Commits. Internal checkpoint validation is not publication or a new product-approval ceremony.
+- Complete shared risk boundaries first, then execute ready modules across lanes and join story
+  integrations in dependency order with small coherent Conventional Commits. Internal checkpoints
+  are not publication or new product-approval ceremonies; use the parallel dispatch matrix.
 - MVP is the **complete first live vertical slice**, not US1 alone. Work with the permitted sample and
   first fixed dependency/category profile; do not expand to arbitrary projects/services/agents.
 - Run the repository's read-only Analyze after this Tasks stage when requested/recommended, and resolve
