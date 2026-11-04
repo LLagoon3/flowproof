@@ -147,7 +147,7 @@ test('records real target actions, seals an immutable report, discards it, and r
     expect(captureId).toMatch(UUID)
     const recording = await api(page, 'GET', `/api/project/runs/${runId}`)
     expect(recording.status).toBe(200)
-    expect(recording.body).toMatchObject({ run_id: runId, state: 'recording', capture_id: captureId, report: 'none', report_sha256: null, interpretation: null })
+    expect(recording.body).toMatchObject({ run_id: runId, state: 'recording', capture_id: captureId, report: 'recording', report_sha256: null, interpretation: null })
 
     // Real actions on the admitted target frame after the recorder's entry reset: click and native select.
     await expect(target.getByTestId('task-summary')).toHaveText('3 open tasks')
@@ -184,8 +184,7 @@ test('records real target actions, seals an immutable report, discards it, and r
     expect(discarded.status).toBe(200)
     expect(discarded.body).toEqual({ run_id: runId, capture_id: captureId, state: 'discarded' })
     const afterDiscard = await api(page, 'GET', `/api/project/runs/${runId}`)
-    expect(afterDiscard.body).toMatchObject({ run_id: runId, capture_id: null, report: 'none', report_sha256: null, interpretation: null })
-    expect(afterDiscard.body.state).not.toBe('capture-ready')
+    expect(afterDiscard.body).toMatchObject({ run_id: runId, state: 'demonstration-ready', capture_id: null, report: 'none', report_sha256: null, interpretation: null })
 
     const analyzed = await api(page, 'POST', `/api/project/captures/${captureId}/analyze`, { submit: true })
     expect([analyzed.status, codeOf(analyzed)]).toEqual([404, 'CAPTURE_UNKNOWN'])
