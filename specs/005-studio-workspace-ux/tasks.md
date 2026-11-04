@@ -576,3 +576,14 @@ Logs: `.flowproof/task-logs/slice4-qa-followup/`; new browser evidence:
 All owned QA sessions were closed. No new product defect was found in these checks.
 T033 remains partial: the owner's positive UI feedback is recorded in design-system.md, but no
 missing timed comprehension responses were invented. No push, PR, merge or deployment occurred.
+
+
+## Slice 4 publication authorization (2026-11-04)
+
+After the owner confirmed normal operation/UI and the remaining agent-executable QA completed,
+the owner explicitly requested a PR and review. This authorizes publishing this slice to
+`LLagoon3/flowproof`, opening a PR against `main`, and the repository-required GitHub Codex review
+with up to three remediation rounds. Valid in-scope findings may be corrected, verified and pushed
+for fresh exact-head review. Publication does not turn the pending T033 timing/state-comprehension
+observations into passes. Record CI/review receipts in PR metadata without another results-only
+source commit. Merge and deployment remain unauthorized.
