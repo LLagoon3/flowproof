@@ -6,7 +6,9 @@
 implemented and its visual direction was accepted on 2026-11-04. The owner authorized a slice 1
 PR and review/correction loop on 2026-11-04, then explicitly authorized its merge. Slice 1 merged
 in PR #23. Slice 2 implementation (T009-T016), publication and the repository review/correction
-loop were authorized on 2026-11-04. Merge, deployment and later slices remain unauthorized.
+loop were authorized on 2026-11-04. Slice 2 merged in PR #24; local slice 3 (T017-T023)
+was subsequently authorized. The owner then authorized slice 3 PR publication and the repository
+review/correction loop. Merge, deployment and slice 4 remain unauthorized.
 
 **Input**: [Approved product direction and acceptance specification](./spec.md#clarifications).
 Baseline: merged Specs 001-004 at `8c40140`; specification clarification recorded separately.

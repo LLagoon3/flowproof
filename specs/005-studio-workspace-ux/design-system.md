@@ -220,3 +220,38 @@ These results show the proposed values are mechanically usable. They are not own
 This is the owner's actual adoption decision (SC-007), not an inference from automated checks.
 A subsequent pre-PR native-200% check passed 56 checks on the unchanged accepted source; see
 the preview README. Other declared mechanical gaps remain unverified.
+
+
+## Real Studio work-log mechanical record (slice 3, 2026-11-04)
+
+Clean tested revision: `c1b2de78ddf6a1b7b840a7d2dc7259c69d794ccf`. The accepted minimalist
+work treatment is now integrated in both real modes: short observed summary, one initially
+closed Details disclosure, flat chronological rows, nested Events with unchanged raw records.
+Open details, earlier-row focus and reading position survive appended activity, panel changes
+and result arrival. Current status and verdict share one authoritative projection; a disconnected
+stream remains a separate warning and never becomes a failed or successful verdict.
+
+The parent independently passed typecheck/build, 360 UI tests and 20 headed Chromium tests;
+three opt-in operator cases were skipped. The exact commands and compatibility record are in
+[tasks.md](./tasks.md#slice-3-verification-record-2026-11-04). Current rendered measurements:
+text minimum 5.47:1, controls 3.67:1 and focus 7.39:1, with no recorded failures. This is a
+mechanical sample, not a complete accessibility audit. Actual screenshots were opened for all
+six state categories, including raw finalizing details and compact expanded work; the rows
+are flat, not a permanent wall of cards. Existing result/evidence sections await slice 4.
+
+Retained evidence root:
+`.flowproof/review/005-studio-workspace-ux/c1b2de78ddf6a1b7b840a7d2dc7259c69d794ccf/`.
+Its `slice3/six-state/2026-11-04T02-45-55-300Z/manifest.json` indexes ten unaltered real-UI
+captures: ready, active, finalizing and successful-final in both modes, plus legacy disconnected
+without result and unsuccessful-final. Case/run/event/result bindings and test conditions are
+recorded; no unobserved all-twelve-combinations coverage is claimed. Finalizing is supported by
+actual producer markers, not copied fixture strings alone; its captured copy says scan **or**
+cleanup activity was observed and does not claim either completed.
+
+**Owner feedback remains pending**: the adjacent `owner-responses.pending.json` has null
+answers/next actions/times for all six states. Expected answers are the contributor's, not the
+owner's observations. SC-001/SC-003 walkthrough timings and new SC-007 hierarchy/density/balance
+feedback remain unresolved; the earlier preview-direction acceptance is unchanged. Native
+200% zoom was not rerun on this changed code/CSS; the previous slice's zoom evidence is not a
+current pass. No screen-reader or non-Chromium review was performed. No new animation,
+external font, dependency, runtime behavior or publication was introduced.

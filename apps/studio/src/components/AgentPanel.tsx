@@ -2,24 +2,30 @@ import { useId } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 
 import { MAX_REQUEST_TEXT_LENGTH, isValidRequestText, studioError } from '../api.js'
-import type { GateId, GateStatus, GateSummary, RunState, StudioError, StudioEventType } from '../api.js'
+import type { GateId, GateStatus, GateSummary, StudioError, StudioEvent, StudioEventType } from '../api.js'
+import type { RunPresentation } from '../presentation.js'
 import { canStartRun, selectGateRows, selectStudioMode } from '../state.js'
-import type { CandidateAvailability, RunView, StreamStatus, StudioState } from '../state.js'
+import type { CandidateAvailability, RunView, StudioState } from '../state.js'
 import { CapturedVerification } from './CapturedVerification.js'
+import { WorkTimeline } from './WorkTimeline.js'
+import type { ActivityWarning } from './WorkTimeline.js'
 
-// The agent work of the Studio's work panel: ordered Agent Activity, announced Evidence IDs,
-// candidate status, the nine verification gates, and the final status, plus the bounded request
-// composer that the work panel shows as its entry. They only render the state they are given and
-// report request intent through callbacks; the workspace owns the client and the run. Every value
-// is rendered as text, errors show only the client-authored message for their stable code, and the
-// final status comes only from the authoritative run result. A host-fixed captured verification
-// Studio shows its candidate-verification work instead: no chat, legacy gates, diagnosis, provider
-// or candidate-diff section. A final status carries `data-workspace-result`, so the collapsed
-// workspace can return focus to it.
+// The agent work of the Studio's work panel: the observed work (a short summary and the Details
+// of every accepted event, in `WorkTimeline`), announced Evidence IDs, candidate status, the nine
+// verification gates, and the final status, plus the bounded request composer that the work panel
+// shows as its entry. They only render the state they are given and report request intent through
+// callbacks; the workspace owns the client and the run. Every value is rendered as text, errors
+// show only the client-authored message for their stable code, and the final status comes only
+// from the authoritative run result. A host-fixed captured verification Studio shows its
+// candidate-verification work instead: no chat, legacy gates, diagnosis, provider or candidate-diff
+// section. A final status carries `data-workspace-result`, so the collapsed workspace can return
+// focus to it.
 
 export interface AgentPanelProps {
   /** The Studio state from `studioReducer`; the panel never changes it. */
   readonly state: StudioState
+  /** The run presentation of that state, the same one the collapsed workspace status shows. */
+  readonly presentation: RunPresentation
 }
 
 export interface RequestComposerProps {
@@ -30,17 +36,6 @@ export interface RequestComposerProps {
   readonly onRequestTextChange: (requestText: string) => void
   /** Called only with a valid request while a new run may start. */
   readonly onStartRun: (requestText: string) => void
-}
-
-const PHASE_LABELS: Readonly<Record<RunState, string>> = {
-  initialized: 'Initialized',
-  reproducing: 'Reproducing',
-  failure_captured: 'Failure captured',
-  diagnosing: 'Diagnosing',
-  candidate_validated: 'Candidate validated',
-  applying: 'Applying',
-  replaying: 'Replaying',
-  finalized: 'Finalized',
 }
 
 const EVENT_LABELS: Readonly<Record<StudioEventType, string>> = {
@@ -72,14 +67,6 @@ export const GATE_STATUS_LABELS: Readonly<Record<GateStatus | 'pending', string>
   pass: 'Pass',
   fail: 'Fail',
   unevaluable: 'Unevaluable',
-}
-
-const STREAM_LABELS: Readonly<Record<StreamStatus, string>> = {
-  connecting: 'Connecting to live activity',
-  open: 'Live activity connected',
-  ended: 'Live activity ended',
-  disconnected: 'Live activity disconnected',
-  rejected: 'Live activity stopped',
 }
 
 const CANDIDATE_LABELS: Readonly<Record<CandidateAvailability, string>> = {
@@ -222,68 +209,43 @@ function FinalStatus({ run }: { readonly run: RunView | null }) {
 }
 
 function RunStatus({ state }: { readonly state: StudioState }) {
-  const { run } = state
   return (
     <section className="agent-panel__section agent-status" aria-label="Run status">
       <h3 className="agent-panel__heading">Status</h3>
-      <FinalStatus run={run} />
-      {run !== null && (
-        <dl className="agent-status__details">
-          <div className="agent-status__row">
-            <dt>Phase</dt>
-            <dd data-phase={run.phase ?? 'none'}>{run.phase === null ? 'Not reported yet' : PHASE_LABELS[run.phase]}</dd>
-          </div>
-          <div className="agent-status__row">
-            <dt>Live activity</dt>
-            <dd data-stream={run.stream.status}>{STREAM_LABELS[run.stream.status]}</dd>
-          </div>
-        </dl>
-      )}
-      {run !== null && run.stream.error !== null && <ErrorNotice error={run.stream.error} />}
+      <FinalStatus run={state.run} />
     </section>
   )
 }
 
-function ActivityLog({ run }: { readonly run: RunView | null }) {
-  const activity = run?.activity ?? []
+const eventLabel = (event: StudioEvent): string => EVENT_LABELS[event.type]
+
+/** A raw legacy event's provisional gate summary and announced Evidence IDs, as text. */
+function eventDetail(event: StudioEvent) {
   return (
-    <section className="agent-panel__section agent-activity" aria-label="Agent Activity">
-      <h3 className="agent-panel__heading">Agent Activity</h3>
-      {activity.length === 0 ? (
-        <p className="agent-panel__empty">{run === null ? 'No activity yet.' : 'Waiting for live activity.'}</p>
-      ) : (
-        // Rendered in the accepted order; missed events are neither inferred nor reordered.
-        <div className="agent-activity__log" role="log" aria-label="Ordered run activity">
-          <ol className="agent-activity__list">
-            {activity.map((event) => (
-              <li key={event.event_id} className="agent-activity__item" data-type={event.type} data-phase={event.phase ?? 'none'}>
-                <p className="agent-activity__meta">
-                  <span className="agent-activity__sequence">#{event.sequence}</span>{' '}
-                  <span className="agent-activity__type">{EVENT_LABELS[event.type]}</span>
-                  {event.phase !== null && <span className="agent-activity__phase"> · {PHASE_LABELS[event.phase]}</span>}
-                </p>
-                <p className="agent-activity__message">{event.message}</p>
-                {event.gate !== null && (
-                  <p className="agent-activity__detail">
-                    <GateSummaryText gate={event.gate} />
-                  </p>
-                )}
-                {event.evidence_ids.length > 0 && (
-                  <ul className="agent-activity__evidence" aria-label="Evidence IDs">
-                    {event.evidence_ids.map((evidenceId) => (
-                      <li key={evidenceId}>
-                        <code>{evidenceId}</code>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ol>
-        </div>
+    <>
+      {event.gate !== null && (
+        <p className="agent-activity__detail">
+          <GateSummaryText gate={event.gate} />
+        </p>
       )}
-    </section>
+      {event.evidence_ids.length > 0 && (
+        <ul className="agent-activity__evidence" aria-label="Evidence IDs">
+          {event.evidence_ids.map((evidenceId) => (
+            <li key={evidenceId}>
+              <code>{evidenceId}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   )
+}
+
+/** The client-authored message of a pending run's live-activity problem; text carried by the error is never shown. */
+function activityWarning(run: RunView | null): ActivityWarning | null {
+  if (run === null || run.stream.error === null) return null
+  const safe = safeError(run.stream.error)
+  return { code: safe.code, message: safe.message }
 }
 
 function EvidenceList({ run }: { readonly run: RunView | null }) {
@@ -353,13 +315,13 @@ function GateTable({ run }: { readonly run: RunView | null }) {
   )
 }
 
-export function AgentPanel({ state }: AgentPanelProps) {
+export function AgentPanel({ state, presentation }: AgentPanelProps) {
   const titleId = useId()
   if (selectStudioMode(state) === 'captured') {
     // The work panel's context names the candidate verification; there is no chat to edit its goal.
     return (
       <div className="agent-panel agent-panel--captured">
-        <CapturedVerification state={state} />
+        <CapturedVerification state={state} presentation={presentation} />
       </div>
     )
   }
@@ -369,7 +331,7 @@ export function AgentPanel({ state }: AgentPanelProps) {
         FlowProof agent
       </h2>
       <RunStatus state={state} />
-      <ActivityLog run={state.run} />
+      <WorkTimeline presentation={presentation} eventLabel={eventLabel} eventDetail={eventDetail} activityWarning={activityWarning(state.run)} />
       <EvidenceList run={state.run} />
       <CandidateStatus run={state.run} />
       <GateTable run={state.run} />

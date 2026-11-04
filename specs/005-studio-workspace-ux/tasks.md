@@ -4,10 +4,12 @@
 [data-model.md](./data-model.md), [UI contract](./contracts/workspace-ui.md), and
 [validation guide](./quickstart.md).
 
-**Status**: Slice 1 (T001-T008) merged in PR #23 at `3c7acb3`. Slice 2 (T009-T016) was locally
-implemented and verified on 2026-11-04 using the coding workflow; see the exact-revision record below.
-The owner subsequently authorized slice 2 publication and the repository review loop on 2026-11-04.
-T017+, merge and deployment remain unauthorized.
+**Status**: Slices 1 and 2 (T001-T016) merged in PR #23 and PR #24. The owner authorized
+local slice 3 implementation (T017-T023) through the coding workflow on 2026-11-04.
+The accepted minimalist summary plus initially closed Details/log rows is the visual reference.
+The owner subsequently authorized slice 3 push, PR creation and the repository Codex
+review/correction loop (initial review plus at most three remediation rounds).
+T024+, merge and deployment remain unauthorized.
 Only verified work is checked off; human-only usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
@@ -87,13 +89,13 @@ presentation still functioning. Stop; do not incorporate the activity or evidenc
 **Independent test**: Feed both modes' accepted event/result sequences to pure selectors and inspect
 the panel in a browser, including disconnected activity, unavailable results and focused earlier work.
 
-- [ ] T017 [US2] Add failing grouping/precedence cases in `tests/ui/workspace-presentation.test.ts`: ordered contiguous groups, exact observed finalizing markers and drift fallback; add a failing real-producer finalizing-card case in `tests/e2e/workspace-ux.spec.ts` before integration (passed in T021, not proved by copied strings alone), no pass from stream end, result-unavailable vs failed verification, final-result precedence and late events; include collapsed-status cases with no verdict before a valid bound result, including stream end/disconnection (FR-002, FR-004-FR-006).
-- [ ] T018 [US2] Extend `apps/studio/src/presentation.ts` with mode-aware `WorkCardView`/`RunPresentation`; `phase` is "existing phase when present; an unknown phase is not invented" and final `verdict` is "absent until a valid bound final result, then the unchanged family-specific verdict"; switch the T011 compact status to this same `RunPresentation` projection and retain raw phase in details when the card label is `Finalizing`, without engine exports (FR-004, FR-005, FR-013).
-- [ ] T019 [US2] Build `apps/studio/src/components/WorkTimeline.tsx` with stable run/first-sequence card IDs and retained disclosures; `expandedWorkIds` is a "set of stable work-card identities; disclosures survive new activity and collapse" and `followingLatest` is "whether the reader is at the latest work; new events do not force this to true" (FR-004, FR-006).
-- [ ] T020 [US2] Integrate the timeline/state guidance in `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/CapturedVerification.tsx`, remove last-40-events-only rendering, preserve all accepted details, and show only supported start/close/relaunch guidance rather than new cancel/retry/resume actions (FR-004-FR-006, FR-013).
-- [ ] T021 [US2] Add and pass browser regressions in `tests/e2e/workspace-ux.spec.ts` for earlier-card focus/scroll preservation, latest-work affordance, mounted reads through collapse and result arrival without closing details; also assert finalizing cards from actual captured scan/cleanup producer events using bounded test-local barriers, released in `finally`, with raw phase retained; assert collapsed status shares the same result/stream precedence and cannot show a verdict before binding; prepare opt-in bounded `owner-review` cases without Inspector and real six-state captures per quickstart; no forced scrolling or focus theft (FR-002, FR-005, FR-006).
-- [ ] T022 [US2] Apply clear activity-connection warnings, concise live announcements and accessible work-card states in `apps/studio/src/components/WorkTimeline.tsx` and `apps/studio/src/styles.css`; pending or disconnected activity must not imply a verdict or unsupported live target (FR-004, FR-005, FR-009-FR-012).
-- [ ] T023 [US2] Run UI tests, workspace browser cases and existing headed compatibility suites per `specs/005-studio-workspace-ux/quickstart.md`; produce the real-UI six-state screenshot manifest with case/run/event/result references using the quickstart sources; record results and separately identify pending six-state owner comprehension checks in `specs/005-studio-workspace-ux/tasks.md` (SC-002, SC-004-SC-006).
+- [X] T017 [US2] Add failing grouping/precedence cases in `tests/ui/workspace-presentation.test.ts`: ordered contiguous groups, exact observed finalizing markers and drift fallback; add a failing real-producer finalizing-card case in `tests/e2e/workspace-ux.spec.ts` before integration (passed in T021, not proved by copied strings alone), no pass from stream end, result-unavailable vs failed verification, final-result precedence and late events; include collapsed-status cases with no verdict before a valid bound result, including stream end/disconnection (FR-002, FR-004-FR-006).
+- [X] T018 [US2] Extend `apps/studio/src/presentation.ts` with mode-aware `WorkCardView`/`RunPresentation`; `phase` is "existing phase when present; an unknown phase is not invented" and final `verdict` is "absent until a valid bound final result, then the unchanged family-specific verdict"; switch the T011 compact status to this same `RunPresentation` projection and retain raw phase in details when the card label is `Finalizing`, without engine exports (FR-004, FR-005, FR-013).
+- [X] T019 [US2] Build `apps/studio/src/components/WorkTimeline.tsx` with stable run/first-sequence card IDs and retained disclosures; `expandedWorkIds` is a "set of stable work-card identities; disclosures survive new activity and collapse" and `followingLatest` is "whether the reader is at the latest work; new events do not force this to true" (FR-004, FR-006).
+- [X] T020 [US2] Integrate the timeline/state guidance in `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/CapturedVerification.tsx`, remove last-40-events-only rendering, preserve all accepted details, and show only supported start/close/relaunch guidance rather than new cancel/retry/resume actions (FR-004-FR-006, FR-013).
+- [X] T021 [US2] Add and pass browser regressions in `tests/e2e/workspace-ux.spec.ts` for earlier-card focus/scroll preservation, latest-work affordance, mounted reads through collapse and result arrival without closing details; also assert finalizing cards from actual captured scan/cleanup producer events using bounded test-local barriers, released in `finally`, with raw phase retained; assert collapsed status shares the same result/stream precedence and cannot show a verdict before binding; prepare opt-in bounded `owner-review` cases without Inspector and real six-state captures per quickstart; no forced scrolling or focus theft (FR-002, FR-005, FR-006).
+- [X] T022 [US2] Apply clear activity-connection warnings, concise live announcements and accessible work-card states in `apps/studio/src/components/WorkTimeline.tsx` and `apps/studio/src/styles.css`; pending or disconnected activity must not imply a verdict or unsupported live target (FR-004, FR-005, FR-009-FR-012).
+- [X] T023 [US2] Run UI tests, workspace browser cases and existing headed compatibility suites per `specs/005-studio-workspace-ux/quickstart.md`; produce the real-UI six-state screenshot manifest with case/run/event/result references using the quickstart sources; record results and separately identify pending six-state owner comprehension checks in `specs/005-studio-workspace-ux/tasks.md` (SC-002, SC-004-SC-006).
 
 **Checkpoint / slice 3**: Work presentation is independently reviewable with unchanged result/evidence
 consumption. Stop before the final comparison rewrite; UI grouping is not a new execution engine.
@@ -334,3 +336,100 @@ Exact-head CI, Codex review and any correction rounds are tracked in PR metadata
 creating a new source commit solely to record their outcome.
 The implementation and verification record above is unchanged. T017+, merge and deployment
 remain unauthorized. CI is verification-only; this repository has no automatic PR deployment.
+
+
+## Slice 3 implementation authorization (2026-11-04)
+
+The owner requested the coding workflow for T017-T023 after clarifying that work presentation
+means the collapsible logs in the left panel, similar to observable tool-use entries, not a new
+wall of cards. Work starts from PR #24's merged `main` at
+`f9aa8e4ccbbdfd74324852b985b1320687f5ae65` on `feat/005-studio-workspace-ux-work`.
+
+Follow the accepted minimalist revision in `design-system.md` and the actual preview: a brief
+current-work summary, one initially closed Details disclosure, flat chronological work rows,
+and nested Events details. Internal card/group identities are not permission to introduce
+persistent bordered card surfaces, repeated badges or dense always-visible logs. Preserve
+work, raw accepted records, focus, reading position, and disclosure state through updates and
+panel changes; never invent tool calls, progress or hidden reasoning. Existing result/evidence
+consumption remains unchanged until slice 4. No new animation, dependency, engine contract,
+CSP exception or fault-injection product option is authorized.
+
+Implement locally, verify on clean committed source, then record the tested SHA and observed
+results separately. Human six-state comprehension remains pending actual owner feedback.
+No push, PR, review trigger, merge, deployment, preview republication or T024+ is authorized.
+
+
+## Slice 3 verification record (2026-11-04)
+
+T017-T023 are implemented locally and mechanically verified; owner comprehension is not claimed.
+Isolated Claude Opus 5.5 (`anthropic/claude-opus-5-5`, xhigh) implementation and focused correction
+were reviewed by the source parent, including each commit and the aggregate eight-file code/test
+change. Commits: `0319834` (pure observed-work projection), `ce8939e` (collapsible work log),
+`c1b2de7` (conservative one-marker finalization copy and capture bindings). The original worker
+ended with a CLI output-size error; its committed work was recovered and independently checked.
+The former candidate `e3e0838` was renamed to `ce8939e` with its code tree unchanged; results at
+that former revision are historical, not substituted for the rerun below.
+
+This results-only record follows clean tested revision
+`c1b2de78ddf6a1b7b840a7d2dc7259c69d794ccf` on `feat/005-studio-workspace-ux-work`.
+The documentation commit itself is not represented as runtime-tested.
+
+| Independent parent command | Observed result |
+| --- | --- |
+| `pnpm typecheck` | exit 0 |
+| `pnpm build` | exit 0 |
+| `pnpm exec vitest run --project ui` | 4 files, 360 tests passed |
+| `xvfb-run -a pnpm exec playwright test` | 20 passed, 3 opt-in skipped, exit 0 (2.4 minutes) |
+| `git diff --check ac0fade..c1b2de7` | exit 0 |
+
+Logs and the independent manifest/cleanup audit:
+`.flowproof/task-logs/slice3-final-parent/` (`typecheck.log`, `build.log`, `ui.log`, `e2e.log`,
+`audit.json`, `summary.json`). The correction worker separately passed typecheck and 57 selector
+UI tests, but did not run the browser suite; the results above are the parent's own rerun.
+
+The accepted design is retained: a short summary, initially closed Details, flat chronological
+rows, and nested Events containing every accepted record with its raw phase/identity. No card
+wall, synthetic tool use, invented progress, diagnosis or check outcome was added. Exact observed
+producer markers can show Finalizing, but neither scan nor cleanup completion is inferred; one
+marker does not imply both were observed. Stream end/disconnection never grants a verdict, and
+a valid bound final result keeps precedence over late activity. Compact status uses the same
+projection. Result, evidence, state reducer, runtime, dependencies and CSP remain unchanged.
+
+Retained RED evidence in `.flowproof/task-logs/slice3-work/`: `02-red-ui.log` records
+28 failed / 27 passed before the projection existed. `06-red-e2e.log` records two failures on
+projection-only `0319834`: the actual producer's finalizing summary/row was absent, and the old
+40-event cap rendered only 40 of 45 records. `RED-SUMMARY.txt` explains the assertions.
+The final GREEN run covers the real producer scan and cleanup separately with test-local held
+reads/delivery released in `finally`, more-than-40-event retention (explicit synthetic test
+transport), earlier-row focus/scroll/disclosures, latest-work access, collapse, pending reads,
+result arrival, disconnected activity, final precedence, rendered contrast and keyboard focus.
+Existing browser-close, interruption, invalid-citation, Hero, captured outcome/target-load,
+measurement-protection and secret-safety cases also pass. No live model was called.
+
+Evidence root:
+`.flowproof/review/005-studio-workspace-ux/c1b2de78ddf6a1b7b840a7d2dc7259c69d794ccf/`.
+All current case manifests use stamp `2026-11-04T02-45-55-300Z`. Under `slice3/`, the cases are
+`captured-finalizing-producer`, `captured-long-history-synthetic`, `legacy-work-log`, and
+`legacy-activity-lost-unsuccessful`. The six-state index is
+`slice3/six-state/2026-11-04T02-45-55-300Z/manifest.json`: six states, ten retained real-UI
+captures across both modes, with case/event/result references and explicit test conditions.
+Ready has no run; all later captures name their accepted run, including disconnected activity,
+and match the on-page work run ID. Event IDs belong to that run; exposed final results bind to
+it. These are six states across both modes, not a claim of all twelve state/mode combinations.
+
+All eight current slice 2/3 case manifests report passed, clean source, no owned process or
+temporary leftovers and no listening demo port after cleanup. The parent opened actual current
+screenshots for ready, active, finalizing/raw-event details, disconnected, unsuccessful and
+successful results, and compact expanded work. Flat rows and the old result/evidence content
+remain distinguishable. Measured current contrast minima: text 5.47:1, controls 3.67:1, focus
+7.39:1; no recorded failures. This is not a complete accessibility audit or owner acceptance.
+
+Pending: actual SC-002 owner answers/next actions/times (`owner-responses.pending.json` contains
+null responses), SC-001/SC-003 owner walkthrough/timing, and new owner hierarchy feedback.
+The three skipped cases are native 200% zoom and the two bounded per-mode owner reviews.
+Native zoom was not rerun for this changed timeline/CSS; slice 2's zoom record is historical,
+not current verification. Screen-reader and non-Chromium review were not performed. Non-UI
+Vitest was not rerun for this presentation-only slice; no full-Vitest count is claimed.
+Optional Git auto-commit hooks remained disabled; no mandatory implement hook is registered.
+T024-T033 remain unchecked. No push, PR, bot-review request, merge, deployment or preview
+republication was performed. Stop at the slice 3 boundary.

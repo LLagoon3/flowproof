@@ -5,7 +5,7 @@ import path from 'node:path'
 import { expect, test } from '@playwright/test'
 import type { Frame, Locator, Page, Request, Route } from '@playwright/test'
 
-import { GATE_IDS, parseEvidenceBundle } from '../../packages/flowproof/src/contracts/index.js'
+import { CONTRACT_SCHEMA_VERSION, GATE_IDS, parseEvidenceBundle, parseStudioEvent } from '../../packages/flowproof/src/contracts/index.js'
 import type { EvidenceBundle } from '../../packages/flowproof/src/contracts/index.js'
 import { loadScenario } from '../../packages/flowproof/src/scenario/loadScenario.js'
 import { CAPTURED_CHECK_IDS } from '../../packages/flowproof/src/verify/capturedContracts.js'
@@ -53,7 +53,7 @@ const CANVAS = scenario.scenario.app.canvas
 
 const TESTED_SHA = git(REPO_ROOT, 'rev-parse', 'HEAD').trim()
 const WORKTREE_DIRTY = git(REPO_ROOT, 'status', '--porcelain', '--untracked-files=no').trim() !== ''
-const REVIEW_ROOT = path.join(REPO_ROOT, '.flowproof', 'review', '005-studio-workspace-ux', TESTED_SHA, 'slice2')
+const REVIEW_BASE = path.join(REPO_ROOT, '.flowproof', 'review', '005-studio-workspace-ux', TESTED_SHA)
 const RUN_STAMP = new Date().toISOString().replace(/[:.]/g, '-')
 
 /** Bounds every read of an element that may be missing; the launcher's contexts set no action timeout. */
@@ -78,8 +78,8 @@ interface ReviewCase {
   finish(error?: unknown): Promise<void>
 }
 
-async function reviewCase(name: string): Promise<ReviewCase> {
-  const dir = path.join(REVIEW_ROOT, name, RUN_STAMP)
+async function reviewCase(name: string, slice = 'slice2'): Promise<ReviewCase> {
+  const dir = path.join(REVIEW_BASE, slice, name, RUN_STAMP)
   await mkdir(dir, { recursive: true })
   const screenshots: string[] = []
   const records: Record<string, unknown> = {}
@@ -96,6 +96,7 @@ async function reviewCase(name: string): Promise<ReviewCase> {
     async finish(error) {
       const manifest = {
         case: name,
+        slice,
         testedSha: TESTED_SHA,
         worktreeDirty: WORKTREE_DIRTY,
         startedAt,
@@ -717,7 +718,9 @@ test('the legacy workspace keeps the draft, the target frame, one run and pendin
     const layoutSamples = await recordedSamples(page)
     review.record('layoutSamples', layoutSamples)
     expectHeldDuringMeasurement(layoutSamples, 2)
-    await expect(workspace.status).toHaveText('Run in progress')
+    // The page observed the integrity gate and the final event, but holds no result: finalizing,
+    // with no verdict (the same run presentation as the panel, slice 3).
+    await expect(workspace.status).toHaveText('Finalizing · verdict pending')
     await expect(workspace.viewResult).toHaveCount(0)
     expect(await workspace.status.innerText()).not.toMatch(/Verified Fix|Unverified/)
     await review.shot(page, 'result-pending-collapsed.png')
@@ -1132,7 +1135,8 @@ async function runCapturedCase({ name, resize, loseActivity = false }: CapturedC
       // Before the page reads the bound result, the collapsed status still shows no verdict.
       if ((await workspace.root.getAttribute('data-collapsed', { timeout: ELEMENT_TIMEOUT_MS })) !== 'true') await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
       await expect(workspace.panel).toBeHidden()
-      await expect(workspace.status).toHaveText('Verification in progress')
+      // Finalization activity was observed, but no result reached the page: no verdict yet.
+      await expect(workspace.status).toHaveText('Finalizing · verdict pending')
       await expect(workspace.viewResult).toHaveCount(0)
       await review.shot(page, 'result-pending-collapsed.png')
       results.release()
@@ -1350,3 +1354,1295 @@ test('native-zoom-review: the real Studio reflows at actual native 200% browser 
   }
   expectNothingLeft(cleanup, harness?.baseline)
 })
+
+// ---------------------------------------------------------------------------------------
+// Slice 3: observed work in the work panel (T017, T021-T023)
+// ---------------------------------------------------------------------------------------
+//
+// The work panel shows a short summary of the current observed work and one initially closed
+// Details disclosure of flat chronological rows, each a contiguous group of accepted events with a
+// nested Events disclosure of the raw records. These cases drive the real Studio through the
+// existing harnesses. Test-local barriers stand only between the real server and the page: result
+// reads are held by a route, and an in-page wrapper around the browser's event source holds already
+// produced live events in order and delivers them later (`installEventBarrier`). Nothing changes
+// the engine, its timing or budgets, the server or any product option, and every barrier is
+// released in `finally`. The captured case asserts the Finalizing presentation from the actual
+// producer scan and cleanup events before the bound result reaches the page. A test-controlled
+// transport, labelled synthetic, supplies more than forty contract-valid events, which no real run
+// produces. Unaltered screenshots of the six SC-002 states in both modes, with their run, event and
+// result references and the expected answers, form the review manifest under
+// `.flowproof/review/005-studio-workspace-ux/<tested-sha>/slice3/six-state/<stamp>/`; owner answers
+// are recorded separately and are never produced here.
+
+const FAILURE = 'canvas-filter-failure-invalid-citation'
+const FINALIZING_LABEL = 'Finalizing · verdict pending'
+/** The captured finalizing detail: one observed marker suffices, so it claims neither completion nor both. */
+const CAPTURED_FINALIZING_DETAIL = 'Secret-scan or cleanup activity was observed; the run is finishing. Checks are reported only in the final result.'
+/** Every family verdict label; none may appear before a bound final result. */
+const VERDICT_TEXT = /Verified Fix|Unverified|Candidate verification (passed|failed|error|interrupted)/
+
+interface WorkLog {
+  readonly section: Locator
+  readonly summary: Locator
+  readonly heading: Locator
+  readonly detail: Locator
+  readonly warning: Locator
+  /** The one Details disclosure toggle. */
+  readonly details: Locator
+  readonly rows: Locator
+  /** The raw accepted event records inside the rows. */
+  readonly items: Locator
+  readonly jump: Locator
+}
+
+const workLogOf = (page: Page): WorkLog => {
+  const section = page.locator('section.work-timeline')
+  return {
+    section,
+    summary: section.locator('.work-summary'),
+    heading: section.locator('.work-summary__heading'),
+    detail: section.locator('.work-summary__detail'),
+    warning: section.locator('.work-summary__warning'),
+    details: section.locator('button[data-disclosure="details"]'),
+    rows: section.locator('li.work-row'),
+    items: section.locator('li.agent-activity__item'),
+    jump: section.locator('button.work-timeline__latest'),
+  }
+}
+
+const eventsToggleOf = (row: Locator): Locator => row.locator('button[data-disclosure="events"]')
+
+/** Where a control sits in the scrolled work panel body, and whether it holds focus. */
+async function readingPosition(target: Locator): Promise<{ readonly scrollTop: number; readonly top: number; readonly focused: boolean }> {
+  return target.evaluate((node) => {
+    const body = node.closest('.work-panel__body') as HTMLElement
+    return { scrollTop: body.scrollTop, top: node.getBoundingClientRect().top - body.getBoundingClientRect().top, focused: document.activeElement === node }
+  })
+}
+
+/** Scrolls the work panel body so `target` sits near its top, as a reader of earlier work would. */
+async function scrollToTop(target: Locator): Promise<void> {
+  await target.evaluate((node) => {
+    const body = node.closest('.work-panel__body') as HTMLElement
+    body.scrollTop += node.getBoundingClientRect().top - body.getBoundingClientRect().top - 8
+  })
+}
+
+/** Whether `target` is inside the visible part of the work panel body. */
+const visibleInPanel = (target: Locator): Promise<boolean> =>
+  target.evaluate((node) => {
+    const body = (node.closest('.work-panel__body') as HTMLElement).getBoundingClientRect()
+    const box = node.getBoundingClientRect()
+    return box.bottom > body.top && box.top < body.bottom
+  })
+
+/** Page-level overflow beyond the viewport, in CSS pixels; the side-by-side workspace scrolls only inside its panes. */
+const pageOverflow = (page: Page): Promise<{ readonly x: number; readonly y: number }> =>
+  page.evaluate(() => {
+    const root = document.documentElement
+    return { x: root.scrollWidth - root.clientWidth, y: root.scrollHeight - root.clientHeight }
+  })
+
+function watchPage(page: Page): { readonly errors: string[]; readonly csp: string[] } {
+  const errors: string[] = []
+  const csp: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error' && /Content Security Policy/i.test(message.text())) csp.push(message.text())
+  })
+  return { errors, csp }
+}
+
+// ---------------------------------------------------------------------------------------
+// Test-local delivery barrier for actual producer events
+// ---------------------------------------------------------------------------------------
+
+/** One live event as the real server sent it, read from its SSE payload. */
+interface ObservedEvent {
+  readonly sequence: number
+  readonly eventId: string
+  readonly runId: string
+  readonly type: string
+  readonly phase: string | null
+  readonly message: string
+  readonly gate: string | null
+}
+
+/**
+ * Where delivery stops: after the `nth` (default first) delivered event of `type`, with `phase` or
+ * `gate` when given, counted from the release and, with `after`, only once an event of that type
+ * and phase was delivered. Rules name structure only, never producer copy.
+ */
+interface HoldRule {
+  readonly type: string
+  readonly phase?: string
+  readonly gate?: string
+  readonly after?: { readonly type: string; readonly phase?: string }
+  readonly nth?: number
+}
+
+interface EventBarrier {
+  /** Waits until delivery stopped at the current rule and returns the event it stopped after. */
+  held(timeoutMs?: number): Promise<ObservedEvent>
+  /** Delivers held events in order; holds again after `rule`, or never again with null. */
+  release(rule: HoldRule | null): Promise<void>
+  delivered(): Promise<ObservedEvent[]>
+}
+
+interface BarrierState {
+  readonly holding: boolean
+  readonly heldAt: ObservedEvent | null
+  readonly queued: number
+  readonly delivered: ObservedEvent[]
+}
+
+type BarrierScope = { __flowproofEventBarrier: { state(): BarrierState; release(rule: HoldRule | null): void } }
+
+/**
+ * Wraps the page's event source before the start: the real server stream is opened unchanged and
+ * its events are passed to the Studio client in arrival order, except that from the event the rule
+ * names on, delivery waits for `release`. A connection end that arrives while events are held stops
+ * the reconnect and is passed on after them. The engine and the server never wait for the page.
+ */
+async function installEventBarrier(page: Page, rule: HoldRule): Promise<EventBarrier> {
+  await page.evaluate((initial) => {
+    const scope = window as unknown as Record<string, unknown>
+    if (scope.__flowproofEventBarrier !== undefined) throw new Error('The event barrier is already installed.')
+    const RealEventSource = window.EventSource
+    type Rule = { type: string; phase?: string; gate?: string; after?: { type: string; phase?: string }; nth?: number }
+    type Observed = { sequence: number; eventId: string; runId: string; type: string; phase: string | null; message: string; gate: string | null }
+    type Listener = (event: Event) => void
+    type Item = { source: { closed: boolean; listeners: Map<string, Listener[]> }; type: string; event: Event; observed: Observed | null }
+    const control = { rule: initial as Rule | null, afterSeen: false, count: 0, holding: false, heldAt: null as Observed | null, queue: [] as Item[], delivered: [] as Observed[] }
+    const observe = (event: Event): Observed | null => {
+      try {
+        const data = JSON.parse(String((event as MessageEvent).data)) as Record<string, unknown>
+        const gate = data.gate as Record<string, unknown> | null | undefined
+        return {
+          sequence: Number(data.sequence),
+          eventId: String(data.event_id),
+          runId: String(data.run_id),
+          type: String(data.type),
+          phase: typeof data.phase === 'string' ? data.phase : null,
+          message: String(data.message),
+          gate: gate === null || gate === undefined ? null : String(gate.gate_id),
+        }
+      } catch {
+        return null
+      }
+    }
+    const stopsAt = (observed: Observed): boolean => {
+      const current = control.rule
+      if (current === null) return false
+      if (current.after !== undefined && !control.afterSeen) {
+        if (observed.type === current.after.type && (current.after.phase === undefined || observed.phase === current.after.phase)) control.afterSeen = true
+        return false
+      }
+      if (observed.type !== current.type) return false
+      if (current.phase !== undefined && observed.phase !== current.phase) return false
+      if (current.gate !== undefined && observed.gate !== current.gate) return false
+      control.count += 1
+      return control.count >= (current.nth ?? 1)
+    }
+    const deliver = (item: Item): void => {
+      if (item.source.closed) return
+      for (const listener of item.source.listeners.get(item.type) ?? []) listener(item.event)
+      if (item.observed === null) return
+      control.delivered.push(item.observed)
+      if (stopsAt(item.observed)) {
+        control.holding = true
+        control.heldAt = item.observed
+        control.rule = null
+      }
+    }
+    const pump = (): void => {
+      while (!control.holding && control.queue.length > 0) deliver(control.queue.shift() as Item)
+    }
+    // A plain constructor function: `new` returns the wrapper object, and no class helper is needed.
+    function HeldEventSource(url: string | URL): object {
+      const real = new RealEventSource(url)
+      const source = { closed: false, listeners: new Map<string, Listener[]>() }
+      const arrive = (type: string, event: Event): void => {
+        if (source.closed) return
+        const busy = control.holding || control.queue.length > 0
+        if (type === 'open' || (type === 'error' && !busy)) {
+          deliver({ source, type, event, observed: null })
+          return
+        }
+        if (type === 'error') {
+          // Held events are still to come: no reconnect, and the end follows them.
+          real.close()
+          control.queue.push({ source, type, event, observed: null })
+          return
+        }
+        const item: Item = { source, type, event, observed: observe(event) }
+        if (busy) control.queue.push(item)
+        else deliver(item)
+      }
+      return Object.assign(source, {
+        addEventListener(type: string, listener: Listener): void {
+          let list = source.listeners.get(type)
+          if (list === undefined) {
+            list = []
+            source.listeners.set(type, list)
+            real.addEventListener(type, (event) => arrive(type, event))
+          }
+          list.push(listener)
+        },
+        close(): void {
+          source.closed = true
+          real.close()
+        },
+      })
+    }
+    window.EventSource = HeldEventSource as unknown as typeof EventSource
+    scope.__flowproofEventBarrier = {
+      state: () => ({ holding: control.holding, heldAt: control.heldAt, queued: control.queue.length, delivered: [...control.delivered] }),
+      release: (next: Rule | null) => {
+        control.rule = next
+        control.afterSeen = false
+        control.count = 0
+        control.holding = false
+        control.heldAt = null
+        pump()
+      },
+    }
+  }, rule)
+  const state = (): Promise<BarrierState> => page.evaluate(() => (window as unknown as BarrierScope).__flowproofEventBarrier.state())
+  return {
+    async held(timeoutMs = RUN_BUDGET_MS) {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        const current = await state()
+        if (current.holding && current.heldAt !== null) return current.heldAt
+        await sleep(100)
+      }
+      throw new Error('EVENT_BARRIER_NOT_REACHED: the expected producer event was not delivered in time.')
+    },
+    async release(next) {
+      await page.evaluate((value) => (window as unknown as BarrierScope).__flowproofEventBarrier.release(value), next)
+    },
+    async delivered() {
+      return (await state()).delivered
+    },
+  }
+}
+
+/** Releases a barrier that may already be gone with its page; used in `finally`. */
+async function releaseAll(barrier: EventBarrier | undefined): Promise<void> {
+  await barrier?.release(null).catch(() => undefined)
+}
+
+// ---------------------------------------------------------------------------------------
+// Six-state real-UI review manifest (SC-002)
+// ---------------------------------------------------------------------------------------
+
+const SIX_STATES = ['ready', 'active', 'finalizing', 'disconnected-without-result', 'unsuccessful-final', 'successful-final'] as const
+type SixState = (typeof SIX_STATES)[number]
+type StudioModeName = 'legacy' | 'captured'
+
+/** The contributor's expected answers; the owner's answers are recorded separately. */
+const EXPECTED_ANSWERS: Readonly<Record<SixState, Readonly<Record<StudioModeName, { readonly happening: string; readonly nextAction: string }>>>> = {
+  ready: {
+    legacy: { happening: 'The prepared case is loaded and nothing is running yet.', nextAction: 'Review or edit the request, then start the run.' },
+    captured: { happening: 'The fixed captured candidate is loaded and nothing is running yet.', nextAction: 'Start the candidate verification.' },
+  },
+  active: {
+    legacy: { happening: 'A run is in progress; the panel names the observed phase and no verdict exists yet.', nextAction: 'Wait for the result; closing Studio interrupts the run.' },
+    captured: { happening: 'The candidate verification is in progress; the panel names the observed stage and no verdict exists yet.', nextAction: 'Wait for the result; closing Studio interrupts the verification.' },
+  },
+  finalizing: {
+    legacy: { happening: 'The run is finalizing (the original-worktree check was observed); the verdict is still pending.', nextAction: 'Wait for the authoritative result.' },
+    captured: { happening: 'The verification is finalizing (secret-scan or cleanup activity was observed); the verdict is still pending.', nextAction: 'Wait for the authoritative result.' },
+  },
+  'disconnected-without-result': {
+    legacy: { happening: 'Live activity disconnected and no final result has arrived; this is not a run failure.', nextAction: 'Wait for the result; if none arrives, close Studio and launch it again.' },
+    captured: { happening: 'Live activity disconnected and no final result has arrived; this is not a verification failure.', nextAction: 'Wait for the result; if none arrives, close Studio and launch it again.' },
+  },
+  'unsuccessful-final': {
+    legacy: { happening: 'The run finished Unverified; the failed or unevaluable gates are named.', nextAction: 'Review the failed gates and evidence; start another run or close Studio.' },
+    captured: { happening: 'The candidate verification did not pass; the unsuccessful checks are named.', nextAction: 'Review the checks and evidence, then close Studio.' },
+  },
+  'successful-final': {
+    legacy: { happening: 'The run finished as Verified Fix from its bound result.', nextAction: 'Review the gates and evidence; start another run or close Studio.' },
+    captured: { happening: 'The candidate verification passed from its bound strict result.', nextAction: 'Review the checks and evidence, then close Studio.' },
+  },
+}
+
+interface StateCapture {
+  readonly state: SixState
+  readonly mode: StudioModeName
+  readonly case: string
+  /** Test conditions that produced the state, such as held result reads; never product options. */
+  readonly conditions: readonly string[]
+  readonly screenshot: string
+  readonly caseManifest: string
+  readonly runId: string | null
+  readonly observedEvents: number
+  readonly lastEvent: Readonly<Record<string, string | null>> | null
+  readonly eventIds: readonly string[]
+  readonly result: { readonly exposedToPage: boolean; readonly runId: string | null; readonly status: string | null }
+  readonly shown: Readonly<Record<string, string | null>>
+  readonly expected: { readonly happening: string; readonly nextAction: string }
+}
+
+const STATE_CAPTURES: StateCapture[] = []
+
+interface CaptureInput {
+  readonly state: SixState
+  readonly mode: StudioModeName
+  readonly conditions: readonly string[]
+  readonly runId: string | null
+  readonly result: StateCapture['result']
+}
+
+/** Saves an unaltered full-page screenshot of the real Studio with its run, event and result references. */
+async function captureState(review: ReviewCase, page: Page, caseName: string, input: CaptureInput): Promise<void> {
+  const file = `state-${input.state}.png`
+  await review.shot(page, file)
+  const events = await page.locator('section.work-timeline li.agent-activity__item').evaluateAll((nodes) =>
+    nodes.map((node) => ({
+      sequence: node.getAttribute('data-sequence'),
+      eventId: node.getAttribute('data-event-id'),
+      type: node.getAttribute('data-type'),
+      phase: node.getAttribute('data-phase'),
+    })),
+  )
+  const shown = await page.evaluate(() => ({
+    summary: document.querySelector('.work-summary__heading')?.textContent ?? null,
+    execution: document.querySelector('.work-summary')?.getAttribute('data-execution') ?? null,
+    stream: document.querySelector('[data-stream]')?.getAttribute('data-stream') ?? null,
+    finalStatus: document.querySelector('[data-workspace-result]')?.textContent ?? null,
+    workRunId: document.querySelector('section.work-timeline')?.getAttribute('data-run-id') ?? null,
+  }))
+  // Every state after Ready belongs to an accepted run, so its capture names that run.
+  if (input.state !== 'ready') expect(input.runId, `${input.state} capture run id`).toMatch(/^\S+$/)
+  const capture: StateCapture = {
+    state: input.state,
+    mode: input.mode,
+    case: caseName,
+    conditions: input.conditions,
+    screenshot: path.relative(REPO_ROOT, path.join(review.dir, file)),
+    caseManifest: path.relative(REPO_ROOT, path.join(review.dir, 'manifest.json')),
+    runId: input.runId,
+    observedEvents: events.length,
+    lastEvent: events.at(-1) ?? null,
+    eventIds: events.map((event) => event.eventId ?? ''),
+    result: input.result,
+    shown,
+    expected: EXPECTED_ANSWERS[input.state][input.mode],
+  }
+  STATE_CAPTURES.push(capture)
+  review.record(`state:${input.state}`, capture)
+}
+
+test.afterAll(async () => {
+  if (STATE_CAPTURES.length === 0) return
+  const dir = path.join(REVIEW_BASE, 'slice3', 'six-state', RUN_STAMP)
+  await mkdir(dir, { recursive: true })
+  const states = SIX_STATES.map((state) => ({ state, captures: STATE_CAPTURES.filter((capture) => capture.state === state) }))
+  const modes = [...new Set(STATE_CAPTURES.map((capture) => capture.mode))].sort()
+  const missing = states.filter((entry) => entry.captures.length === 0).map((entry) => entry.state)
+  const manifest = {
+    kind: 'flowproof-sc002-six-state-real-ui',
+    testedSha: TESTED_SHA,
+    worktreeDirty: WORKTREE_DIRTY,
+    generatedAt: new Date().toISOString(),
+    source: 'tests/e2e/workspace-ux.spec.ts',
+    complete: missing.length === 0 && modes.length === 2,
+    missing,
+    modes,
+    note: 'Unaltered full-page screenshots of the real Studio from reproducible test runs. Test conditions such as held result reads, held live-event delivery or an aborted event stream are named per capture. Expected answers are the contributor\'s; owner answers and timings are recorded separately and are pending.',
+    states,
+  }
+  await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  const pending = { status: 'pending', note: 'Owner answers, next actions and elapsed seconds per state; not collected by any automated test.', answers: SIX_STATES.map((state) => ({ state, answer: null, nextAction: null, elapsedSeconds: null })) }
+  await writeFile(path.join(dir, 'owner-responses.pending.json'), `${JSON.stringify(pending, null, 2)}\n`)
+})
+
+// ---------------------------------------------------------------------------------------
+// Captured: finalization from the actual producer scan and cleanup events
+// ---------------------------------------------------------------------------------------
+
+const produceCanvasFix = async ({ repoRoot, tmpRoot }: { readonly repoRoot: string; readonly tmpRoot: string }): Promise<unknown> => {
+  const canvas = await produceCanvasCandidate({ caseName: 'canvas-fix', repositoryRoot: repoRoot, tmpRoot })
+  expect(canvas.result.capture.status).toBe('captured')
+  return canvas.result
+}
+
+test('captured finalization: the actual producer scan and cleanup events show as Finalizing before the bound result, in the panel and the collapsed status', async () => {
+  test.setTimeout(RUN_BUDGET_MS + 240_000)
+  const caseName = 'captured-finalizing-producer'
+  const review = await reviewCase(caseName, 'slice3')
+  let harness: CapturedStudioHarness | undefined
+  let cleanup: CleanupReport | undefined
+  let failure: unknown
+  let barrier: EventBarrier | undefined
+  let results: Barrier | undefined
+  try {
+    harness = await openCapturedVerificationHarness({ capture: produceCanvasFix })
+    const { page } = harness
+    const workspace = workspaceOf(page)
+    const work = workLogOf(page)
+    const requests = logRequests(page)
+    const watched = watchPage(page)
+    const tracker = await trackFrame(page)
+
+    const action = page.getByRole('button', { name: 'Start candidate verification' })
+    await expect(action).toBeEnabled()
+    await expect.soft(work.heading).toHaveText('Ready')
+    await expect(work.details).toHaveCount(0)
+    await captureState(review, page, caseName, { state: 'ready', mode: 'captured', conditions: [], runId: null, result: { exposedToPage: false, runId: null, status: null } })
+
+    results = await holdRequests(page, isResultRead)
+    barrier = await installEventBarrier(page, { type: 'agent_message', phase: 'applying' })
+    const accepted = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/runs' && response.request().method() === 'POST')
+    await action.click()
+    const startResponse = await accepted
+    expect(startResponse.status()).toBe(202)
+    const runId = String(((await startResponse.json()) as Record<string, unknown>).run_id)
+
+    // Active: delivery waits while the candidate is prepared; the engine keeps running.
+    const applying = await barrier.held()
+    expect(applying).toMatchObject({ type: 'agent_message', phase: 'applying', runId })
+    await expect.soft(work.heading).toHaveText('Verification in progress')
+    await expect.soft(work.summary).toHaveAttribute('data-phase', 'applying')
+    await expect.soft(work.detail).toContainText('Preparing the candidate')
+    await expect.soft(work.details).toHaveAttribute('aria-expanded', 'false')
+    await captureState(review, page, caseName, {
+      state: 'active',
+      mode: 'captured',
+      conditions: ['live-event delivery held after the first candidate-preparation activity', 'result reads held'],
+      runId,
+      result: { exposedToPage: false, runId: null, status: null },
+    })
+
+    // Deliver through the first activity after the replay evidence: the producer's actual scan event.
+    await barrier.release({ type: 'agent_message', after: { type: 'evidence_added', phase: 'replaying' } })
+    const scan = await barrier.held()
+    expect(scan).toMatchObject({ type: 'agent_message', phase: 'replaying', runId })
+    review.record('producer:scan', scan)
+    // The collapsed status is the same projection (soft, so a RED run also reports the panel).
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeHidden({ timeout: RUN_BUDGET_MS })
+    await expect.soft(workspace.status.locator('.workspace__status-label')).toHaveText(FINALIZING_LABEL)
+    await expect(workspace.viewResult).toHaveCount(0)
+    expect(await workspace.status.innerText()).not.toMatch(VERDICT_TEXT)
+    await review.shot(page, 'finalizing-collapsed.png')
+    await workspace.restore.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeVisible()
+
+    // The panel: a Finalizing summary with no verdict, before any result reached the page.
+    await expect(work.heading).toHaveText(FINALIZING_LABEL)
+    // Only the producer's scan event has arrived: the detail claims neither cleanup nor completion.
+    await expect(work.detail).toHaveText(CAPTURED_FINALIZING_DETAIL)
+    await expect(work.summary).toHaveAttribute('data-execution', 'finalizing')
+    await expect(page.locator('.captured-status__final')).toHaveAttribute('data-captured-status', 'pending')
+    expect(await work.summary.innerText()).not.toMatch(VERDICT_TEXT)
+    await captureState(review, page, caseName, {
+      state: 'finalizing',
+      mode: 'captured',
+      conditions: ['live-event delivery held after the actual producer scan event', 'result reads held'],
+      runId,
+      result: { exposedToPage: false, runId: null, status: null },
+    })
+
+    // Inside Details: one Finalizing row holding the producer's own event, with its raw phase kept.
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    const finalizing = work.rows.and(page.locator('[data-kind="finalizing"]'))
+    await expect(finalizing).toHaveCount(1)
+    await expect(finalizing).toHaveAttribute('data-work-id', `${runId}:${scan.sequence}`)
+    await expect(finalizing.locator('.work-row__title')).toContainText('Finalizing')
+    await expect(finalizing.locator('.work-row__note code')).toHaveText(scan.phase ?? '')
+    const records = finalizing.locator('li.agent-activity__item')
+    await expect(records).toHaveCount(1)
+    await expect(records.first()).toHaveAttribute('data-phase', 'replaying')
+    await expect(records.first()).toHaveAttribute('data-event-id', scan.eventId)
+    await expect(records.first().locator('.agent-activity__message')).toHaveText(scan.message)
+    const finalizingEvents = eventsToggleOf(finalizing)
+    await finalizingEvents.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(finalizingEvents).toHaveAttribute('aria-expanded', 'true')
+    expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 })
+    await review.shot(page, 'finalizing-details.png')
+
+    // The next activity is the producer's cleanup event; the same Finalizing row grows in place.
+    await barrier.release({ type: 'agent_message' })
+    const release = await barrier.held()
+    expect(release).toMatchObject({ type: 'agent_message', phase: 'replaying', runId, sequence: scan.sequence + 1 })
+    review.record('producer:cleanup', release)
+    await expect(records).toHaveCount(2)
+    await expect(records.nth(1).locator('.agent-activity__message')).toHaveText(release.message)
+    await expect(finalizing).toHaveAttribute('data-work-id', `${runId}:${scan.sequence}`)
+    await expect(work.heading).toHaveText(FINALIZING_LABEL)
+    await expect(finalizingEvents).toHaveAttribute('aria-expanded', 'true')
+
+    // The engine finishes and releases the target; its result is persisted but not exposed.
+    const finished = await harness.waitForCapturedResult(RUN_BUDGET_MS)
+    expect(finished.runId).toBe(runId)
+    expect(finished.result).toMatchObject({ status: 'passed', reason_code: null })
+    expect(tracker.detached()).toBe(true)
+    await barrier.release(null)
+    await expect(work.summary).toHaveAttribute('data-stream', 'ended')
+    await expect(records).toHaveCount(3)
+    await expect(records.nth(2)).toHaveAttribute('data-type', 'run_finalized')
+    // A stream that ended is not a verdict.
+    await expect(work.heading).toHaveText(FINALIZING_LABEL)
+    await expect(page.locator('.captured-status__final')).toHaveAttribute('data-captured-status', 'pending')
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeHidden()
+    await expect(workspace.status.locator('.workspace__status-label')).toHaveText(FINALIZING_LABEL)
+    await expect(workspace.viewResult).toHaveCount(0)
+    await workspace.restore.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeVisible()
+
+    // The bound result arrives while the reader's focus is on the Finalizing row's events.
+    await finalizingEvents.focus()
+    const before = await readingPosition(finalizingEvents)
+    results.release()
+    await expect(page.locator('.captured-status__final')).toHaveText('Candidate verification passed')
+    const after = await readingPosition(finalizingEvents)
+    expect(after.focused).toBe(true)
+    expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(2)
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    await expect(finalizingEvents).toHaveAttribute('aria-expanded', 'true')
+    await expect(work.summary).toHaveCount(0)
+    await expect(records).toHaveCount(3)
+    await expect(page.locator('tr.captured-check')).toHaveCount(CAPTURED_CHECK_IDS.length)
+    expect(await page.locator('body').innerText()).not.toMatch(/Verified Fix/)
+    // The default view of the final state: Details closed again by the reader.
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(work.details).toHaveAttribute('aria-expanded', 'false')
+    await page.locator('.work-panel__body').evaluate((node) => (node.scrollTop = 0))
+    await captureState(review, page, caseName, {
+      state: 'successful-final',
+      mode: 'captured',
+      conditions: ['result reads were held until after finalization was observed'],
+      runId,
+      result: { exposedToPage: true, runId: finished.runId, status: finished.result.status },
+    })
+    // The disclosure inside keeps its own choice while Details is closed and reopened.
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(finalizingEvents).toHaveAttribute('aria-expanded', 'true')
+    // The target was released: rendered contrast and visible focus with the work log open, measured
+    // at rest (a transient hover fill under the pointer is not how a control is identified).
+    await page.mouse.move(1, 1)
+    await expectAccessible(page, review, 'captured-final-work-log-open')
+
+    // Every delivered producer event is in the log, in order, exactly once.
+    const delivered = await barrier.delivered()
+    review.record('deliveredEvents', delivered)
+    expect(await work.items.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('data-sequence'))))).toEqual(delivered.map((event) => event.sequence))
+    expect(requests.starts()).toBe(1)
+    expect(watched.errors).toEqual([])
+    expect(watched.csp).toEqual([])
+  } catch (error) {
+    failure = error
+    throw error
+  } finally {
+    await releaseAll(barrier)
+    results?.release()
+    cleanup = await harness?.close()
+    review.record('cleanup', cleanup ?? null)
+    await review.finish(failure)
+  }
+  expectNothingLeft(cleanup, harness?.baseline)
+  expect(harness?.blockedRequests).toEqual([])
+})
+
+// ---------------------------------------------------------------------------------------
+// Captured: more than forty events through a test-controlled transport (synthetic)
+// ---------------------------------------------------------------------------------------
+
+type TransportScope = { __flowproofTestTransport: (records: readonly Record<string, unknown>[]) => boolean }
+
+/**
+ * Replaces the page's event source with a test-controlled transport that opens no connection and
+ * dispatches contract-valid records pushed by the test. Used only where no real run produces the
+ * needed amount of activity; such records are synthetic test conditions, never producer evidence.
+ */
+async function installTestTransport(page: Page): Promise<(records: readonly Record<string, unknown>[]) => Promise<void>> {
+  await page.evaluate(() => {
+    type Listener = (event: Event) => void
+    type Source = { closed: boolean; listeners: Map<string, Listener[]> }
+    const sources: Source[] = []
+    const emit = (source: Source, type: string, event: Event): void => {
+      if (source.closed) return
+      for (const listener of source.listeners.get(type) ?? []) listener(event)
+    }
+    // A plain constructor function: `new` returns the transport object, and no class helper is needed.
+    function TestTransportSource(): object {
+      const source: Source = { closed: false, listeners: new Map<string, Listener[]>() }
+      sources.push(source)
+      setTimeout(() => emit(source, 'open', new Event('open')), 0)
+      return Object.assign(source, {
+        addEventListener(type: string, listener: Listener): void {
+          const list = source.listeners.get(type) ?? []
+          list.push(listener)
+          source.listeners.set(type, list)
+        },
+        close(): void {
+          source.closed = true
+        },
+      })
+    }
+    window.EventSource = TestTransportSource as unknown as typeof EventSource
+    ;(window as unknown as Record<string, unknown>).__flowproofTestTransport = (records: readonly Record<string, unknown>[]): boolean => {
+      const source = sources.at(-1)
+      if (source === undefined) return false
+      for (const record of records) emit(source, String(record.type), new MessageEvent(String(record.type), { data: JSON.stringify(record), lastEventId: String(record.event_id) }))
+      return true
+    }
+  })
+  return async (records) => {
+    // The subscription exists once the accepted start reached the page; wait for it, bounded.
+    await expect.poll(() => page.evaluate((list) => (window as unknown as TransportScope).__flowproofTestTransport(list), records), { timeout: ELEMENT_TIMEOUT_MS }).toBe(true)
+  }
+}
+
+const SYNTHETIC_PHASES = ['initialized', 'applying', 'failure_captured'] as const
+
+/**
+ * Contract-valid synthetic activity, clearly labelled: four events per phase group, or every event
+ * of the one given phase, which keeps them in one contiguous row.
+ */
+function syntheticEvents(runId: string, from: number, to: number, phase?: (typeof SYNTHETIC_PHASES)[number]): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = []
+  for (let sequence = from; sequence <= to; sequence += 1) {
+    const record = {
+      schema_version: CONTRACT_SCHEMA_VERSION,
+      event_id: `${runId}:${sequence}`,
+      run_id: runId,
+      sequence,
+      occurred_at: new Date(Date.UTC(2026, 10, 4, 9, 0, sequence)).toISOString(),
+      type: 'agent_message',
+      phase: phase ?? SYNTHETIC_PHASES[Math.floor((sequence - 1) / 4) % SYNTHETIC_PHASES.length],
+      message: `Synthetic test-transport activity ${sequence}; not produced by the engine.`,
+      evidence_ids: [],
+      gate: null,
+      artifact_refs: [],
+    }
+    expect(parseStudioEvent(record).ok).toBe(true)
+    records.push(record)
+  }
+  return records
+}
+
+test('captured work log keeps an earlier focused row, its open events and the reading position through more than forty events (synthetic test transport)', async () => {
+  test.setTimeout(RUN_BUDGET_MS)
+  const review = await reviewCase('captured-long-history-synthetic', 'slice3')
+  let harness: CapturedStudioHarness | undefined
+  let cleanup: CleanupReport | undefined
+  let failure: unknown
+  let results: Barrier | undefined
+  try {
+    harness = await openCapturedVerificationHarness({ capture: produceCanvasFix })
+    const { page } = harness
+    const workspace = workspaceOf(page)
+    const work = workLogOf(page)
+    const watched = watchPage(page)
+    const push = await installTestTransport(page)
+    const runId = randomUUID()
+    const requestId = randomUUID()
+    // The start never reaches the server: no run, engine or target change; the activity is synthetic.
+    let starts = 0
+    await page.route(
+      (url) => url.pathname === '/api/runs',
+      async (route: Route) => {
+        if (route.request().method() !== 'POST') return route.continue()
+        starts += 1
+        await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ request_id: requestId, run_id: runId, events_url: `/api/runs/${runId}/events` }) })
+      },
+    )
+    results = await holdRequests(page, isResultRead)
+    review.record('conditions', ['synthetic start response', 'synthetic contract-valid events through a test-controlled transport', 'result reads held'])
+    await page.getByRole('button', { name: 'Start candidate verification' }).click()
+    await expect.poll(() => starts).toBe(1)
+
+    // Forty-five accepted events: every one stays listed, including the first (the old panel kept forty).
+    await push(syntheticEvents(runId, 1, 45))
+    await expect.soft(page.locator('li.agent-activity__item')).toHaveCount(45)
+    await expect.soft(page.locator('li.agent-activity__item').first()).toContainText('Synthetic test-transport activity 1;')
+
+    // An earlier row: its events opened with the keyboard, focused and scrolled to the top of the panel.
+    await expect(work.heading).toHaveText('Verification in progress')
+    await expect(work.details).toHaveAttribute('aria-expanded', 'false')
+    await work.details.focus()
+    await page.keyboard.press('Enter')
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    await expect(work.rows).toHaveCount(12)
+    const earlier = work.rows.nth(1)
+    await expect(earlier).toHaveAttribute('data-work-id', `${runId}:5`)
+    const earlierEvents = eventsToggleOf(earlier)
+    await earlierEvents.focus()
+    await page.keyboard.press('Space')
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    await expect(earlierEvents).toBeFocused()
+    await scrollToTop(earlierEvents)
+    const before = await readingPosition(earlierEvents)
+    expect(before.focused).toBe(true)
+    expect(await visibleInPanel(work.rows.last())).toBe(false)
+    await review.shot(page, 'earlier-row-focused.png')
+
+    // More work arrives in batches: nothing removed, no scroll or focus moved, latest work offered.
+    for (const [from, to] of [
+      [46, 50],
+      [51, 55],
+      [56, 60],
+    ] as const) {
+      await push(syntheticEvents(runId, from, to))
+      await expect(work.items).toHaveCount(to)
+      const now = await readingPosition(earlierEvents)
+      expect(now.focused).toBe(true)
+      expect(Math.abs(now.scrollTop - before.scrollTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs(now.top - before.top)).toBeLessThanOrEqual(1)
+      await expect(earlier).toHaveAttribute('data-work-id', `${runId}:5`)
+      await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    }
+    await expect(work.rows).toHaveCount(15)
+    await expect(work.jump).toBeVisible()
+    await expect(work.jump).toContainText('Jump to latest work')
+    await expect(work.jump).toContainText('new')
+    // Long open Details scroll inside the panel; the page itself never gains a scrollbar.
+    expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 })
+    await review.shot(page, 'appended-reading-kept.png')
+
+    // Returning to the latest work is explicit (here with the keyboard) and moves focus there.
+    await work.jump.focus()
+    await page.keyboard.press('Enter')
+    const latest = work.rows.last()
+    await expect.poll(() => visibleInPanel(latest)).toBe(true)
+    await expect(latest.locator('.work-row__title')).toBeFocused()
+    await expect(work.jump).toBeHidden()
+
+    // Collapse and restore keep every disclosure choice.
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeHidden()
+    await expect(workspace.status.locator('.workspace__status-label')).toHaveText('Verification in progress')
+    await workspace.restore.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    await expect(work.items).toHaveCount(60)
+    expect(await work.items.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('data-sequence'))))).toEqual(Array.from({ length: 60 }, (_, index) => index + 1))
+    // Rendered contrast and the visible focus of the open work log's controls (guarded frame, no run).
+    await page.locator('.work-panel__body').evaluate((node) => (node.scrollTop = 0))
+    await expectAccessible(page, review, 'captured-work-log-open')
+    // Reflow at a compact and a large viewport: the open log wraps, with no page-wide horizontal scroll.
+    for (const size of [
+      { width: 390, height: 844 },
+      { width: 1920, height: 1080 },
+    ]) {
+      await page.setViewportSize(size)
+      expect((await pageOverflow(page)).x, `${size.width}x${size.height}`).toBe(0)
+      await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+      await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+      await review.shot(page, `work-log-open-${size.width}x${size.height}.png`)
+    }
+    expect(watched.errors).toEqual([])
+    expect(watched.csp).toEqual([])
+  } catch (error) {
+    failure = error
+    throw error
+  } finally {
+    results?.release()
+    cleanup = await harness?.close()
+    review.record('cleanup', cleanup ?? null)
+    await review.finish(failure)
+  }
+  expectNothingLeft(cleanup, harness?.baseline)
+})
+
+// ---------------------------------------------------------------------------------------
+// Both modes: the newest event of an open latest row taller than the panel (synthetic)
+// ---------------------------------------------------------------------------------------
+
+/** Where `target` sits relative to the visible work panel body: overlapping it, and wholly inside it. */
+const placeInPanel = (target: Locator): Promise<{ readonly overlaps: boolean; readonly inside: boolean }> =>
+  target.evaluate((node) => {
+    const view = (node.closest('.work-panel__body') as HTMLElement).getBoundingClientRect()
+    const box = node.getBoundingClientRect()
+    return { overlaps: box.bottom > view.top && box.top < view.bottom, inside: box.top >= view.top - 1 && box.bottom <= view.bottom + 1 }
+  })
+
+/** Whether the focused element is inside the work panel and overlaps its visible part. */
+const focusVisibleInPanel = (page: Page): Promise<boolean> =>
+  page.evaluate(() => {
+    const node = document.activeElement
+    const body = node?.closest('.work-panel__body')
+    if (!(node instanceof HTMLElement) || !(body instanceof HTMLElement)) return false
+    const view = body.getBoundingClientRect()
+    const box = node.getBoundingClientRect()
+    return box.bottom > view.top && box.top < view.bottom
+  })
+
+for (const mode of ['legacy', 'captured'] as const) {
+  test(`${mode} work log: Jump to latest work reaches and focuses the newest event of an open latest row taller than the panel, and new work moves neither (synthetic test transport)`, async () => {
+    test.setTimeout(RUN_BUDGET_MS)
+    const review = await reviewCase(`${mode}-tall-latest-row-synthetic`, 'slice3')
+    let harness: StudioHarness | CapturedStudioHarness | undefined
+    let cleanup: CleanupReport | undefined
+    let failure: unknown
+    let results: Barrier | undefined
+    try {
+      harness = mode === 'legacy' ? await openStudioHarness({ scenarioId: HERO }) : await openCapturedVerificationHarness({ capture: produceCanvasFix })
+      const { page } = harness
+      const work = workLogOf(page)
+      const watched = watchPage(page)
+      await page.setViewportSize({ width: 1280, height: 720 })
+      const push = await installTestTransport(page)
+      const runId = randomUUID()
+      // The start never reaches the server: no run, engine or target change; the activity is synthetic.
+      let starts = 0
+      await page.route(
+        (url) => url.pathname === '/api/runs',
+        async (route: Route) => {
+          if (route.request().method() !== 'POST') return route.continue()
+          starts += 1
+          await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ request_id: randomUUID(), run_id: runId, events_url: `/api/runs/${runId}/events` }) })
+        },
+      )
+      results = await holdRequests(page, isResultRead)
+      review.record('conditions', ['synthetic start response', 'synthetic contract-valid events through a test-controlled transport', 'result reads held'])
+      const start = mode === 'legacy' ? page.getByRole('button', { name: /^(start|send|run)\b/i }) : page.getByRole('button', { name: 'Start candidate verification' })
+      await start.click({ timeout: ELEMENT_TIMEOUT_MS })
+      await expect.poll(() => starts).toBe(1)
+
+      // A short earlier row, then one contiguous latest row of thirty accepted events of one phase.
+      await push([...syntheticEvents(runId, 1, 2, 'initialized'), ...syntheticEvents(runId, 3, 32, 'applying')])
+      await expect(work.items).toHaveCount(32)
+      await work.details.focus()
+      await page.keyboard.press('Enter')
+      await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+      await expect(work.rows).toHaveCount(2)
+      const latest = work.rows.last()
+      await expect(latest).toHaveAttribute('data-work-id', `${runId}:3`)
+      const latestEvents = eventsToggleOf(latest)
+      await latestEvents.focus()
+      await page.keyboard.press('Space')
+      await expect(latestEvents).toHaveAttribute('aria-expanded', 'true')
+      const eventOf = (sequence: number): Locator => latest.locator(`li.agent-activity__item[data-sequence="${sequence}"]`)
+
+      // The reader scrolls midway through the open row: it spans both panel edges, its newest event below.
+      await latest.evaluate((row) => {
+        const body = row.closest('.work-panel__body') as HTMLElement
+        const box = row.getBoundingClientRect()
+        body.scrollTop += box.top - body.getBoundingClientRect().top + (box.height - body.clientHeight) / 2
+      })
+      const spansPanel = (): Promise<boolean> =>
+        latest.evaluate((row) => {
+          const view = (row.closest('.work-panel__body') as HTMLElement).getBoundingClientRect()
+          const box = row.getBoundingClientRect()
+          return box.top < view.top && box.bottom > view.bottom
+        })
+      expect(await spansPanel()).toBe(true)
+      const middle = eventOf(17)
+      expect((await placeInPanel(middle)).overlaps).toBe(true)
+      expect((await placeInPanel(eventOf(32))).overlaps).toBe(false)
+      await expect(work.jump).toBeVisible()
+      const reading = await readingPosition(latestEvents)
+      const middleAt = await readingPosition(middle)
+      expect(reading.focused).toBe(true)
+
+      // New work extends the same row: no focus, scroll or reading position moves; latest work is offered.
+      await push(syntheticEvents(runId, 33, 37, 'applying'))
+      await expect(work.items).toHaveCount(37)
+      await expect(work.rows).toHaveCount(2)
+      const appended = await readingPosition(latestEvents)
+      expect(appended.focused).toBe(true)
+      expect(Math.abs(appended.scrollTop - reading.scrollTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs((await readingPosition(middle)).top - middleAt.top)).toBeLessThanOrEqual(1)
+      expect(await spansPanel()).toBe(true)
+      await expect(work.jump).toContainText('Jump to latest work · 5 new')
+      await review.shot(page, 'tall-row-midway.png')
+
+      // The explicit control, with the keyboard, reaches the newest event and focuses it in view.
+      await work.jump.focus()
+      await page.keyboard.press('Enter')
+      // The panel scrolls instantly (no smooth scrolling), so the jump's effect is in place here.
+      const newest = eventOf(37)
+      const jumped = await readingPosition(newest)
+      const newestPlace = await placeInPanel(newest)
+      const focusVisible = await focusVisibleInPanel(page)
+      const focusedKind = await page.evaluate(() => document.activeElement?.closest('.work-row__title, .agent-activity__item')?.className ?? null)
+      review.record('jump', { before: appended, after: jumped, newestPlace, focusVisible, focusedKind })
+      expect.soft(jumped.scrollTop, 'the panel scrolled toward the newest event').toBeGreaterThan(appended.scrollTop)
+      expect.soft(newestPlace.inside, 'the newest event is wholly visible').toBe(true)
+      expect.soft(focusVisible, 'the focused element is visible in the panel').toBe(true)
+      expect.soft(jumped.focused, 'the newest event holds focus').toBe(true)
+      await expect(newest).toBeFocused()
+      await expect(work.jump).toBeHidden()
+      await review.shot(page, 'tall-row-latest-reached.png')
+
+      // Later work again neither steals focus from that event nor scrolls; the control returns.
+      await push(syntheticEvents(runId, 38, 39, 'applying'))
+      await expect(work.items).toHaveCount(39)
+      const later = await readingPosition(newest)
+      expect(later.focused).toBe(true)
+      expect(Math.abs(later.scrollTop - jumped.scrollTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs(later.top - jumped.top)).toBeLessThanOrEqual(1)
+      await expect(work.jump).toContainText('Jump to latest work · 2 new')
+      expect(await work.items.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('data-sequence'))))).toEqual(Array.from({ length: 39 }, (_, index) => index + 1))
+      expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 })
+      expect(watched.errors).toEqual([])
+      expect(watched.csp).toEqual([])
+    } catch (error) {
+      failure = error
+      throw error
+    } finally {
+      results?.release()
+      cleanup = await harness?.close()
+      review.record('cleanup', cleanup ?? null)
+      await review.finish(failure)
+    }
+    expectNothingLeft(cleanup, harness?.baseline)
+  })
+}
+
+// ---------------------------------------------------------------------------------------
+// Legacy: real appended work, finalization, pending reads and the result
+// ---------------------------------------------------------------------------------------
+
+test('legacy work log: an earlier focused row, its open events, reading position and Details survive real appended work, finalization, the result, collapse and pending reads', async () => {
+  test.setTimeout(RUN_BUDGET_MS + 240_000)
+  const caseName = 'legacy-work-log'
+  const review = await reviewCase(caseName, 'slice3')
+  let harness: StudioHarness | undefined
+  let cleanup: CleanupReport | undefined
+  let failure: unknown
+  let barrier: EventBarrier | undefined
+  let results: Barrier | undefined
+  let consoleRead: Barrier | undefined
+  try {
+    harness = await openStudioHarness({ scenarioId: HERO })
+    const { page } = harness
+    const workspace = workspaceOf(page)
+    const work = workLogOf(page)
+    const requests = logRequests(page)
+    const watched = watchPage(page)
+    await page.setViewportSize({ width: 1280, height: 720 })
+    const start = page.getByRole('button', { name: /^(start|send|run)\b/i })
+    await expect(start).toBeEnabled()
+    await expect(work.heading).toHaveText('Ready')
+    const tracker = await trackFrame(page)
+    await captureState(review, page, caseName, { state: 'ready', mode: 'legacy', conditions: [], runId: null, result: { exposedToPage: false, runId: null, status: null } })
+
+    results = await holdRequests(page, isResultRead)
+    consoleRead = await holdRequests(page, (url) => /\/evidence\/ev_failure_console_[0-9]{3}$/.test(url.pathname))
+    barrier = await installEventBarrier(page, { type: 'phase_started', phase: 'applying' })
+    await start.click()
+    await expect.poll(() => requests.starts()).toBe(1)
+    const applying = await barrier.held()
+    const runId = applying.runId
+    await expect(work.heading).toHaveText('Run in progress')
+    await expect(work.summary).toHaveAttribute('data-phase', 'applying')
+    await expect(work.details).toHaveAttribute('aria-expanded', 'false')
+    expect(await work.summary.innerText()).not.toMatch(VERDICT_TEXT)
+    await captureState(review, page, caseName, {
+      state: 'active',
+      mode: 'legacy',
+      conditions: ['live-event delivery held after the applying phase started', 'result reads held', 'recorded model transport'],
+      runId,
+      result: { exposedToPage: false, runId: null, status: null },
+    })
+
+    // Only content inside the panel changes from here until the engine finalizes, never its layout.
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    // The first received group: live events emitted before the subscription are never replayed.
+    const earlier = work.rows.first()
+    const earlierEvents = eventsToggleOf(earlier)
+    await earlierEvents.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    await earlierEvents.focus()
+    await scrollToTop(earlierEvents)
+    const before = await readingPosition(earlierEvents)
+    expect(before.focused).toBe(true)
+
+    // Real work is appended through the original-worktree gate: legacy finalization was observed.
+    await barrier.release({ type: 'gate_updated', gate: 'original_worktree_unchanged' })
+    const integrity = await barrier.held()
+    review.record('producer:integrityGate', integrity)
+    await expect(work.heading).toHaveText(FINALIZING_LABEL)
+    const appended = await readingPosition(earlierEvents)
+    expect(appended.focused).toBe(true)
+    expect(Math.abs(appended.scrollTop - before.scrollTop)).toBeLessThanOrEqual(1)
+    expect(Math.abs(appended.top - before.top)).toBeLessThanOrEqual(1)
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    const finalizing = work.rows.and(page.locator('[data-kind="finalizing"]'))
+    await expect(finalizing).toHaveAttribute('data-work-id', `${runId}:${integrity.sequence}`)
+    await expect(finalizing.locator('.work-row__note code')).toHaveText(integrity.phase ?? '')
+    if (!(await visibleInPanel(finalizing))) await expect(work.jump).toBeVisible()
+    expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 })
+    await review.shot(page, 'appended-reading-kept.png')
+
+    // The engine's measurements are over: the default finalizing view, then explicit return to latest.
+    await scrollToTop(work.heading)
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await captureState(review, page, caseName, {
+      state: 'finalizing',
+      mode: 'legacy',
+      conditions: ['live-event delivery held after the original-worktree gate update', 'result reads held', 'recorded model transport'],
+      runId,
+      result: { exposedToPage: false, runId: null, status: null },
+    })
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    await earlierEvents.focus()
+    await scrollToTop(earlierEvents)
+    if (await visibleInPanel(finalizing)) {
+      review.record('jumpToLatest', 'latest row already visible at this viewport; affordance not offered')
+    } else {
+      await work.jump.click({ timeout: ELEMENT_TIMEOUT_MS })
+      await expect.poll(() => visibleInPanel(finalizing)).toBe(true)
+      await expect(finalizing.locator('.work-row__title')).toBeFocused()
+      await expect(work.jump).toBeHidden()
+    }
+
+    // The final event and then the bound result arrive while the reader is on the earlier row.
+    const finished = await harness.waitForResult(RUN_BUDGET_MS)
+    expect(finished.runId).toBe(runId)
+    expect(finished.result.status).toBe('Verified Fix')
+    await earlierEvents.focus()
+    await scrollToTop(earlierEvents)
+    const reading = await readingPosition(earlierEvents)
+    await barrier.release(null)
+    await expect(work.summary).toHaveAttribute('data-stream', 'ended')
+    await expect(work.heading).toHaveText(FINALIZING_LABEL)
+    await expect(page.locator('.agent-status__final')).toHaveAttribute('data-status', 'pending')
+    results.release()
+    await expect(page.getByRole('region', { name: 'Run status' }).getByText('Verified Fix', { exact: true })).toBeVisible()
+    const decided = await readingPosition(earlierEvents)
+    expect(decided.focused).toBe(true)
+    expect(Math.abs(decided.top - reading.top)).toBeLessThanOrEqual(2)
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    await review.shot(page, 'result-reading-kept.png')
+
+    // The mounted Proof Trail's held read survives a collapse; disclosures survive it too.
+    await expect.poll(() => consoleRead?.held() ?? 0).toBe(1)
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeHidden()
+    await expect(workspace.status).toHaveText('Verified Fix')
+    consoleRead.release()
+    await sleep(500)
+    await workspace.restore.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeVisible()
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    await expect(earlierEvents).toHaveAttribute('aria-expanded', 'true')
+    const consoleItem = page.getByRole('region', { name: 'Failure evidence', exact: true }).locator('li[data-type="console"]')
+    await expect(consoleItem).not.toContainText('Loading the evidence.')
+    const reads = requests.evidenceReads()
+    expect(new Set(reads).size).toBe(reads.length)
+
+    // The default final view: Details closed by the reader, scrolled to the top.
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await page.locator('.work-panel__body').evaluate((node) => (node.scrollTop = 0))
+    await captureState(review, page, caseName, {
+      state: 'successful-final',
+      mode: 'legacy',
+      conditions: ['recorded model transport', 'result reads were held until after finalization was observed'],
+      runId,
+      result: { exposedToPage: true, runId: finished.runId, status: finished.result.status },
+    })
+
+    // Every delivered event is in the log, in order, exactly once.
+    const delivered = await barrier.delivered()
+    review.record('deliveredEvents', delivered)
+    expect(await work.items.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('data-sequence'))))).toEqual(delivered.map((event) => event.sequence))
+    // After the result: rendered contrast and visible focus with the work log open.
+    await work.details.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+    await page.mouse.move(1, 1)
+    await expectAccessible(page, review, 'legacy-final-work-log-open')
+    await tracker.expectSameFrame()
+    expect(requests.starts()).toBe(1)
+    await expect(page.locator('tr.agent-gate')).toHaveCount(GATE_IDS.length)
+    expect(watched.errors).toEqual([])
+    expect(watched.csp).toEqual([])
+  } catch (error) {
+    failure = error
+    throw error
+  } finally {
+    await releaseAll(barrier)
+    results?.release()
+    consoleRead?.release()
+    cleanup = await harness?.close()
+    review.record('cleanup', cleanup ?? null)
+    await review.finish(failure)
+  }
+  expectNothingLeft(cleanup, harness?.baseline)
+})
+
+// ---------------------------------------------------------------------------------------
+// Legacy: live activity lost before the result, then an unsuccessful bound result
+// ---------------------------------------------------------------------------------------
+
+test('legacy activity lost before the result shows a separate warning and no verdict, then the bound unsuccessful result', async () => {
+  test.setTimeout(RUN_BUDGET_MS + 120_000)
+  const caseName = 'legacy-activity-lost-unsuccessful'
+  const review = await reviewCase(caseName, 'slice3')
+  let harness: StudioHarness | undefined
+  let cleanup: CleanupReport | undefined
+  let failure: unknown
+  let results: Barrier | undefined
+  try {
+    harness = await openStudioHarness({ scenarioId: FAILURE, recordedTransport: false })
+    const { page } = harness
+    const workspace = workspaceOf(page)
+    const work = workLogOf(page)
+    const requests = logRequests(page)
+    const watched = watchPage(page)
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await expect(page.getByLabel('Prepared case')).toHaveValue(FAILURE)
+    results = await holdRequests(page, isResultRead)
+    // The existing route pattern of browser-close.spec.ts: the page's live activity is refused.
+    let aborted = 0
+    await page.route(
+      (url) => isEventStream(url),
+      async (route: Route) => {
+        aborted += 1
+        await route.abort('connectionreset')
+      },
+    )
+    await page.getByRole('button', { name: /^(start|send|run)\b/i }).click()
+    await expect.poll(() => requests.starts()).toBe(1)
+
+    // A separate activity warning; the execution stays as last observed and nothing is a verdict.
+    await expect(work.summary).toHaveAttribute('data-stream', 'disconnected')
+    await expect(work.warning).toBeVisible()
+    await expect(work.warning).toContainText('Live activity disconnected')
+    await expect(work.heading).toHaveText('Run in progress')
+    await expect(page.locator('.agent-status__final')).toHaveAttribute('data-status', 'pending')
+    expect(await work.summary.innerText()).not.toMatch(VERDICT_TEXT)
+    // Rendered contrast of the warning (no focus traversal while the engine may measure the target).
+    const contrast = await auditContrast(page)
+    review.record('contrast:legacy-disconnected', contrast)
+    expect(contrast.failures).toEqual([])
+    // The run was accepted although its live activity was refused: the capture names that run.
+    await expect(work.section).toHaveAttribute('data-run-id', /^(?!none$)\S+$/)
+    const acceptedRunId = await work.section.getAttribute('data-run-id')
+    expect(acceptedRunId).toMatch(/^\S+$/)
+    await captureState(review, page, caseName, {
+      state: 'disconnected-without-result',
+      mode: 'legacy',
+      conditions: ['live-event request aborted by a test route', 'result reads held', 'committed fixture provider'],
+      runId: acceptedRunId,
+      result: { exposedToPage: false, runId: null, status: null },
+    })
+
+    // The engine finished unseen; until the page reads the result, still no verdict.
+    const finished = await harness.waitForResult(RUN_BUDGET_MS)
+    expect(finished.runId).toBe(acceptedRunId)
+    expect(finished.result.status).toBe('Unverified')
+    await expect(work.heading).toHaveText('Run in progress')
+    await expect(page.locator('.agent-status__final')).toHaveAttribute('data-status', 'pending')
+    await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.status.locator('.workspace__status-notice')).toHaveText('Live activity disconnected')
+    await expect(workspace.status.locator('.workspace__status-label')).toHaveText('Run in progress')
+    await review.shot(page, 'disconnected-collapsed-request.png')
+    results.release()
+    // The bound result decides; the held layout request is applied only now.
+    await expect(workspace.status.locator('.workspace__status-label')).toHaveText('Unverified')
+    await expect(workspace.panel).toBeHidden()
+    await workspace.viewResult.click({ timeout: ELEMENT_TIMEOUT_MS })
+    await expect(workspace.panel).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Run status' }).getByText('Unverified', { exact: true })).toBeVisible()
+    await expect(page.locator('.agent-status__failed')).toContainText('Citations valid')
+    await expect(work.summary).toHaveCount(0)
+    await page.locator('.work-panel__body').evaluate((node) => (node.scrollTop = 0))
+    await captureState(review, page, caseName, {
+      state: 'unsuccessful-final',
+      mode: 'legacy',
+      conditions: ['live-event request aborted by a test route', 'result reads were held until the engine finished', 'committed fixture provider'],
+      runId: finished.runId,
+      result: { exposedToPage: true, runId: finished.runId, status: finished.result.status },
+    })
+    review.record('abortedStreams', aborted)
+    expect(aborted).toBeGreaterThan(0)
+    await expect(page.locator('tr.agent-gate')).toHaveCount(GATE_IDS.length)
+    expect(watched.errors).toEqual([])
+    expect(watched.csp).toEqual([])
+  } catch (error) {
+    failure = error
+    throw error
+  } finally {
+    results?.release()
+    cleanup = await harness?.close()
+    review.record('cleanup', cleanup ?? null)
+    await review.finish(failure)
+  }
+  expectNothingLeft(cleanup, harness?.baseline)
+})
+
+// ---------------------------------------------------------------------------------------
+// Opt-in owner review on the real Studio (quickstart.md, real-UI owner acceptance material)
+// ---------------------------------------------------------------------------------------
+
+const OWNER_START_TIMEOUT_MS = 120_000
+const OWNER_ACK_TIMEOUT_MS = 180_000
+
+/** Waits for a fresh marker file; a missing one leaves the review pending, never passed. */
+async function waitForMarker(marker: string, promptedAt: number, timeoutMs: number, code: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (existsSync(marker) && (await stat(marker)).mtimeMs >= promptedAt) return
+    await sleep(250)
+  }
+  throw new Error(`${code}: no acknowledgement within ${timeoutMs / 1000}s; the owner review is pending, not passed.`)
+}
+
+/** Prints and records one bounded instruction for the owner, outside any product control. */
+async function instruct(review: ReviewCase, text: string): Promise<number> {
+  await writeFile(path.join(review.dir, 'INSTRUCTIONS.txt'), `${text}\n`)
+  console.log(`\n[owner-review] ${text}\n`)
+  return Date.now()
+}
+
+for (const mode of ['legacy', 'captured'] as const) {
+  test(`owner-review: ${mode} start, observed work and final shell on the real Studio (opt-in, bounded)`, async () => {
+    test.skip(process.env.FLOWPROOF_OWNER_REVIEW !== '1', 'Opt-in owner review: set FLOWPROOF_OWNER_REVIEW=1 on a visible desktop and follow quickstart.md.')
+    test.setTimeout(900_000)
+    const review = await reviewCase(`owner-review-${mode}`, 'slice3')
+    const finalMarker = path.join(review.dir, 'final-reviewed.ack')
+    let legacy: StudioHarness | undefined
+    let captured: CapturedStudioHarness | undefined
+    let cleanup: CleanupReport | undefined
+    let failure: unknown
+    try {
+      if (mode === 'legacy') legacy = await openStudioHarness({ scenarioId: HERO })
+      else captured = await openCapturedVerificationHarness({ capture: produceCanvasFix })
+      const page = (legacy ?? captured)?.page
+      if (page === undefined) throw new Error('The Studio did not open.')
+      const requests = logRequests(page)
+      const work = workLogOf(page)
+      await page.bringToFront()
+      await expect(work.heading).toHaveText('Ready')
+      await rm(finalMarker, { force: true })
+
+      // SC-001: the owner's own start, timed from the prompt to the observed admission request.
+      const prompted = await instruct(review, 'Without coaching: identify the prepared case or fixed candidate in the visible Studio window and start it.')
+      const startDeadline = Date.now() + OWNER_START_TIMEOUT_MS
+      while (requests.starts() === 0 && Date.now() < startDeadline) await sleep(100)
+      if (requests.starts() === 0) throw new Error(`OWNER_START_MISSING: no start within ${OWNER_START_TIMEOUT_MS / 1000}s; SC-001 is pending, not passed.`)
+      review.record('sc001:startSeconds', (Date.now() - prompted) / 1000)
+
+      // The ordinary bounded run; captured target disposal completes before the final shell review.
+      const finished = legacy !== undefined ? await legacy.waitForResult(RUN_BUDGET_MS) : await (captured as CapturedStudioHarness).waitForCapturedResult(RUN_BUDGET_MS)
+      review.record('result', { runId: finished.runId, status: finished.result.status })
+      await expect(page.locator('[data-workspace-result]')).toBeVisible({ timeout: RUN_BUDGET_MS })
+
+      // The final shell stays open for the owner's own walkthrough, then a terminal acknowledgement.
+      const reviewPrompt = await instruct(review, `Review the observed work and the result in the Studio window, then run:\n  touch '${finalMarker}'`)
+      await waitForMarker(finalMarker, reviewPrompt, OWNER_ACK_TIMEOUT_MS, 'OWNER_REVIEW_ACK_MISSING')
+      review.record('finalReviewSeconds', (Date.now() - reviewPrompt) / 1000)
+      review.record('ownerAnswers', 'recorded separately by the owner; not collected by this test')
+    } catch (error) {
+      failure = error
+      throw error
+    } finally {
+      cleanup = await (legacy ?? captured)?.close()
+      review.record('cleanup', cleanup ?? null)
+      await review.finish(failure)
+    }
+    expectNothingLeft(cleanup, (legacy ?? captured)?.baseline)
+  })
+}
