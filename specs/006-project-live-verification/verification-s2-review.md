@@ -144,3 +144,27 @@ being the since-corrected fixture test; `tests/e2e/project-setup.spec.ts` 2/2. C
 identical; no listeners on 43150–43159; no temporary outputs left. Logs: ignored
 `.flowproof/task-logs/006-project-live-verification/s2-directory/`. Full suites and hosted CI for
 this commit are not run here.
+
+### Independent parent validation of the nested-directory correction
+
+At implementation `dc095d66cc9a47c35fb9654986b37174e962985f`, the source parent reviewed
+all three changed files and independently ran the exact shared heavy lock:
+
+- `pnpm typecheck` and `pnpm build`: exit 0.
+- The original independent real-HTTP reproduction `/tmp/flowproof-pr30-directory-probe.mjs --green`:
+  explicit file, directory GET/HEAD and query entry return 200; five path-confusion controls remain
+  404. The original red receipt is preserved separately.
+- Six focused files (directory, target-security, project-studio, project-runtime, legacy target-app,
+  and run-state-machine): 91/91 passed, zero skipped. The first parent command misspelled the path
+  of probe-install-order; that real integration file was therefore run separately, not counted here.
+- Actual headed `tests/e2e/project-setup.spec.ts`: 2/2 passed.
+- All 46 host container IDs are identical before and after; `git diff --check` passes.
+
+Logs are ignored under `.flowproof/task-logs/006-project-live-verification/pr30-parent-r4/`.
+This localized correction does not claim a new full serial run. Prior implementation `602280f`
+hosted CI `41920238774` completed successfully with 2028 deterministic tests and 58 E2E tests
+(five existing opt-in skips in each suite); those counts are historical, not proof for this revision.
+The new published HEAD still requires completed exact-head Codex review and full hosted CI.
+
+The correctly targeted `tests/integration/probe-install-order.test.ts` independently passed 1/1;
+combined focused coverage is seven files and 92 passed, with the six-file and one-file runs distinct.
