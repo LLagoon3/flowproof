@@ -1,10 +1,14 @@
-import { selectCapturedOutcome, selectStudioMode } from './state.js'
+import { selectCapturedOutcome, selectCapturedTarget, selectStudioMode } from './state.js'
 import type { CapturedOutcomeView, StreamStatus, StudioState } from './state.js'
 
 // The local presentation of the Studio workspace (Spec 005). It holds only layout choices of this
 // page: the work panel's width and whether it is collapsed. They never reach the run reducer, the
 // client, a stored preference or the network, so choosing a width or collapsing the panel cannot
 // start, cancel, reload or refetch anything.
+//
+// While the target is being measured, a layout change would move the frame between the engine's
+// reading of the Canvas box and its clipped page screenshot. `selectMeasuringTarget` names those
+// phases from the observed run, and the shell keeps layout requests until the phase ends.
 //
 // The compact status shown outside a collapsed work panel is derived from the existing
 // authoritative state and selectors only. Live activity is advisory: a stream that ended,
@@ -145,4 +149,36 @@ export function selectCompactStatus(state: StudioState): CompactStatusView {
   if (run.status === 'running') return view('Run in progress', 'progress', false, ACTIVITY_NOTICES[run.stream.status] ?? null)
   if (run.status === 'failed') return view(NO_FINAL_STATUS, 'warning', false, ACTIVITY_NOTICES[run.stream.status] ?? null)
   return view(run.result.status, run.result.status === 'Verified Fix' ? 'success' : 'danger', true)
+}
+
+// ---------------------------------------------------------------------------------------
+// Measurement hold
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The legacy phases in which the engine drives and captures the target frame. Reproduction follows
+ * admission at once, so no observed phase yet, and the initial request phase, count as measured too.
+ */
+const LEGACY_MEASURED_PHASES: ReadonlySet<string> = new Set(['initialized', 'reproducing', 'replaying'])
+
+const isLiveStream = (status: StreamStatus): boolean => status === 'connecting' || status === 'open'
+
+/**
+ * Whether the target frame may be being measured now, so the workspace keeps layout requests until
+ * the measurement ends. A captured run is measured while its target is presented as live, which the
+ * existing selector derives from the observed measured phase; its first measurement follows the
+ * baseline build, long after its activity is attached. A legacy run reproduces the defect as soon
+ * as it is admitted, often before its live activity is attached, so it holds from the start request
+ * until a later phase is observed, and again during replay. Without live activity, or once a result
+ * decided the run, nothing holds.
+ */
+export function selectMeasuringTarget(state: StudioState): boolean {
+  if (selectStudioMode(state) === 'captured') {
+    const target = selectCapturedTarget(state.capturedRun)
+    return target === 'baseline-live' || target === 'candidate-live'
+  }
+  if (state.pendingStart !== null) return true
+  const { run } = state
+  if (run === null || run.status !== 'running' || !isLiveStream(run.stream.status)) return false
+  return run.phase === null || LEGACY_MEASURED_PHASES.has(run.phase)
 }

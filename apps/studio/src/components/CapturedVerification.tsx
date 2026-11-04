@@ -6,16 +6,22 @@ import { canStartRun, selectCapturedCheckSummary, selectCapturedChecks, selectCa
 import type { CapturedRunView, StreamStatus, StudioState } from '../state.js'
 
 // The candidate-verification surface of a host-fixed captured verification Studio. It takes the
-// place of the Meta chat and the nine legacy gates in the right-hand pane: one action starts this
-// launch's one verification run with the case's committed goal, the current stage and the bounded
-// activity come from accepted live events, and the ten check rows, the final status, the short
-// candidate digest and baseline, the coverage note, and the cleanup and original-integrity facts
-// come only from the strict result bound to this run. Every value is rendered as text, errors show
-// only the client-authored message for their stable code, and the surface never claims more than
-// candidate verification. Its captured before/after screenshots replace the released target pane.
+// place of the Meta chat and the nine legacy gates in the work panel: one action, the panel's entry,
+// starts this launch's one verification run with the case's committed goal, the current stage and
+// the bounded activity come from accepted live events, and the ten check rows, the final status,
+// the short candidate digest and baseline, the coverage note, and the cleanup and original-integrity
+// facts come only from the strict result bound to this run. Every value is rendered as text, errors
+// show only the client-authored message for their stable code, and the surface never claims more
+// than candidate verification. Its captured before/after screenshots replace the released target
+// pane. The final status carries `data-workspace-result` for the collapsed workspace's result entry.
 
 export interface CapturedVerificationProps {
   /** The Studio state from `studioReducer`; the surface never changes it. */
+  readonly state: StudioState
+}
+
+export interface CapturedStartProps {
+  /** The Studio state from `studioReducer`; the action never changes it. */
   readonly state: StudioState
   /** The committed goal of the prepared case, sent with the start. */
   readonly requestText: string
@@ -110,7 +116,8 @@ function startHint(state: StudioState): string {
   return 'Verifies the captured candidate at its recorded baseline with the trusted build, functional check, and replay.'
 }
 
-function StartAction({ state, requestText, onStart }: CapturedVerificationProps) {
+/** The fixed candidate's one verification action; no request field, chat or model choice. */
+export function CapturedStart({ state, requestText, onStart }: CapturedStartProps) {
   const hintId = useId()
   const canStart = canStartRun(state) && isValidRequestText(requestText)
   const start = (): void => {
@@ -123,7 +130,7 @@ function StartAction({ state, requestText, onStart }: CapturedVerificationProps)
         {startHint(state)}
       </p>
       {state.error !== null && <ErrorNotice error={state.error} />}
-      <button className="captured-start__button" type="button" disabled={!canStart} aria-describedby={hintId} onClick={start}>
+      <button className="captured-start__button button button--primary" type="button" disabled={!canStart} aria-describedby={hintId} onClick={start}>
         {state.pendingStart === null ? 'Start candidate verification' : 'Starting'}
       </button>
     </section>
@@ -156,7 +163,7 @@ function FinalStatus({ run }: { readonly run: CapturedRunView | undefined }) {
   const outcome = selectCapturedOutcome(run)
   if (outcome === null) return null
   return (
-    <div className="captured-status__final" role="status" data-captured-status={outcome.status}>
+    <div className="captured-status__final" role="status" data-captured-status={outcome.status} data-workspace-result="" tabIndex={-1}>
       <p className="captured-status__verdict">{outcome.label}</p>
       {outcome.reasonCode !== null && (
         <p className="captured-status__reason">
@@ -315,12 +322,11 @@ function CleanupFacts({ run }: { readonly run: CapturedRunView | undefined }) {
   )
 }
 
-/** The candidate-verification start action, stage, activity, checks, cleanup facts, and final status. */
-export function CapturedVerification(props: CapturedVerificationProps) {
-  const run = props.state.capturedRun
+/** The candidate-verification stage, activity, checks, cleanup facts, and final status. */
+export function CapturedVerification({ state }: CapturedVerificationProps) {
+  const run = state.capturedRun
   return (
     <div className="captured" data-run-id={run?.runId ?? 'none'}>
-      <StartAction {...props} />
       <RunStatus run={run} />
       <ActivityLog run={run} />
       <CheckTable run={run} />

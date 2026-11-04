@@ -7,16 +7,23 @@ import { canStartRun, selectGateRows, selectStudioMode } from '../state.js'
 import type { CandidateAvailability, RunView, StreamStatus, StudioState } from '../state.js'
 import { CapturedVerification } from './CapturedVerification.js'
 
-// The agent pane of the Studio workspace: bounded chat, ordered Agent Activity, announced Evidence
-// IDs, candidate status, the nine verification gates, and the final status. It only renders the
-// state it is given and reports chat intent through callbacks; the workspace owns the client and
-// the run. Every value is rendered as text, errors show only the client-authored message for their
-// stable code, and the final status comes only from the authoritative run result. A host-fixed
-// captured verification Studio shows its candidate-verification surface instead: no chat, legacy
-// gates, diagnosis, provider or candidate-diff section.
+// The agent work of the Studio's work panel: ordered Agent Activity, announced Evidence IDs,
+// candidate status, the nine verification gates, and the final status, plus the bounded request
+// composer that the work panel shows as its entry. They only render the state they are given and
+// report request intent through callbacks; the workspace owns the client and the run. Every value
+// is rendered as text, errors show only the client-authored message for their stable code, and the
+// final status comes only from the authoritative run result. A host-fixed captured verification
+// Studio shows its candidate-verification work instead: no chat, legacy gates, diagnosis, provider
+// or candidate-diff section. A final status carries `data-workspace-result`, so the collapsed
+// workspace can return focus to it.
 
 export interface AgentPanelProps {
   /** The Studio state from `studioReducer`; the panel never changes it. */
+  readonly state: StudioState
+}
+
+export interface RequestComposerProps {
+  /** The Studio state from `studioReducer`; the composer never changes it. */
   readonly state: StudioState
   /** The controlled chat draft. */
   readonly requestText: string
@@ -117,7 +124,8 @@ function draftProblem(requestText: string): string | null {
   return null
 }
 
-function ChatForm({ state, requestText, onRequestTextChange, onStartRun }: AgentPanelProps) {
+/** The bounded legacy request and its one start action; there is no multi-turn conversation. */
+export function RequestComposer({ state, requestText, onRequestTextChange, onStartRun }: RequestComposerProps) {
   const inputId = useId()
   const hintId = useId()
   const counterId = useId()
@@ -134,13 +142,13 @@ function ChatForm({ state, requestText, onRequestTextChange, onStartRun }: Agent
   }
 
   return (
-    <form className="agent-chat" aria-label="Chat" onSubmit={handleSubmit}>
-      <label className="agent-chat__label" htmlFor={inputId}>
+    <form className="agent-chat composer" aria-label="Chat" onSubmit={handleSubmit}>
+      <label className="visually-hidden" htmlFor={inputId}>
         Request
       </label>
       <textarea
         id={inputId}
-        className="agent-chat__input"
+        className="agent-chat__input composer__field"
         value={requestText}
         maxLength={MAX_REQUEST_TEXT_LENGTH}
         rows={3}
@@ -149,11 +157,8 @@ function ChatForm({ state, requestText, onRequestTextChange, onStartRun }: Agent
         aria-describedby={problem === null ? `${hintId} ${counterId}` : `${problemId} ${hintId} ${counterId}`}
         onChange={handleChange}
       />
-      <p id={hintId} className="agent-chat__hint">
+      <p id={hintId} className="visually-hidden">
         Describe the goal in up to {MAX_REQUEST_TEXT_LENGTH} characters. The prepared case fixes the scenario, source scope, and gates.
-      </p>
-      <p id={counterId} className="agent-chat__counter" data-over-limit={requestText.length > MAX_REQUEST_TEXT_LENGTH}>
-        {requestText.length} of {MAX_REQUEST_TEXT_LENGTH} characters
       </p>
       {problem !== null && (
         <p id={problemId} className="agent-chat__problem">
@@ -166,9 +171,16 @@ function ChatForm({ state, requestText, onRequestTextChange, onStartRun }: Agent
         </p>
       )}
       {state.error !== null && <ErrorNotice error={state.error} />}
-      <button className="agent-chat__submit" type="submit" disabled={!canSubmit}>
-        {state.pendingStart === null ? 'Start run' : 'Starting'}
-      </button>
+      <div className="composer__foot">
+        <p id={counterId} className="agent-chat__counter" data-over-limit={requestText.length > MAX_REQUEST_TEXT_LENGTH}>
+          {requestText.length} of {MAX_REQUEST_TEXT_LENGTH} characters
+        </p>
+        <button className="agent-chat__submit composer__send" type="submit" disabled={!canSubmit} aria-label={state.pendingStart === null ? 'Start run' : 'Starting'}>
+          <svg className="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M8 13V3.5M3.75 7.5 8 3.25l4.25 4.25" />
+          </svg>
+        </button>
+      </div>
     </form>
   )
 }
@@ -198,7 +210,7 @@ function FinalStatus({ run }: { readonly run: RunView | null }) {
   }
   const { result } = run
   return (
-    <div className="agent-status__final" role="status" data-status={result.status === 'Verified Fix' ? 'verified' : 'unverified'}>
+    <div className="agent-status__final" role="status" data-status={result.status === 'Verified Fix' ? 'verified' : 'unverified'} data-workspace-result="" tabIndex={-1}>
       <p className="agent-status__verdict">{result.status}</p>
       {result.failed_gate_ids.length > 0 && (
         <p className="agent-status__failed">
@@ -341,26 +353,21 @@ function GateTable({ run }: { readonly run: RunView | null }) {
   )
 }
 
-export function AgentPanel(props: AgentPanelProps) {
+export function AgentPanel({ state }: AgentPanelProps) {
   const titleId = useId()
-  const { state } = props
   if (selectStudioMode(state) === 'captured') {
-    // The case's committed goal starts the one verification; there is no chat to edit it.
+    // The work panel's context names the candidate verification; there is no chat to edit its goal.
     return (
-      <section className="agent-panel agent-panel--captured" aria-labelledby={titleId}>
-        <h2 id={titleId} className="agent-panel__title">
-          Candidate verification
-        </h2>
-        <CapturedVerification state={state} requestText={props.requestText} onStart={props.onStartRun} />
-      </section>
+      <div className="agent-panel agent-panel--captured">
+        <CapturedVerification state={state} />
+      </div>
     )
   }
   return (
     <section className="agent-panel" aria-labelledby={titleId}>
-      <h2 id={titleId} className="agent-panel__title">
+      <h2 id={titleId} className="agent-panel__title visually-hidden">
         FlowProof agent
       </h2>
-      <ChatForm {...props} />
       <RunStatus state={state} />
       <ActivityLog run={state.run} />
       <EvidenceList run={state.run} />

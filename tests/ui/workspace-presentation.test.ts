@@ -12,10 +12,11 @@ import {
   panelWidthStepAt,
   panelWidthStepForKey,
   selectCompactStatus,
+  selectMeasuringTarget,
   workspaceReducer,
 } from '../../apps/studio/src/presentation.js'
 import type { CompactStatusView, WorkspaceAction, WorkspacePresentation } from '../../apps/studio/src/presentation.js'
-import { CAPTURED_STATUS_LABELS, initialStudioState, selectCapturedOutcome, studioReducer } from '../../apps/studio/src/state.js'
+import { CAPTURED_STATUS_LABELS, initialStudioState, selectCapturedOutcome, selectCapturedTarget, studioReducer } from '../../apps/studio/src/state.js'
 import type { StudioAction, StudioState } from '../../apps/studio/src/state.js'
 
 // T009 for T011: the local workspace presentation of Spec 005 slice 2. The panel width and
@@ -107,6 +108,9 @@ const LEGACY_FLOW: readonly EventInput[] = [
   { type: 'phase_started', phase: 'reproducing' },
   { type: 'evidence_added', phase: 'reproducing', evidence_ids: FAILURE_IDS, artifact_refs: ['evidence/failure/manifest.json'] },
   { type: 'gate_updated', phase: 'reproducing', gate: gate('failure_reproduced', 'pass', 'FAILURE_REPRODUCED') },
+  { type: 'phase_started', phase: 'failure_captured' },
+  { type: 'phase_started', phase: 'diagnosing' },
+  { type: 'phase_started', phase: 'applying' },
   { type: 'phase_started', phase: 'replaying' },
   { type: 'evidence_added', phase: 'replaying', evidence_ids: REPLAY_IDS, artifact_refs: ['evidence/replay/manifest.json'] },
   { type: 'gate_updated', phase: 'replaying', gate: gate('original_worktree_unchanged', 'pass', 'WORKTREE_UNCHANGED') },
@@ -358,5 +362,74 @@ describe('Workspace presentation: compact status from authoritative state only',
     for (const state of captured) expect(selectCompactStatus(state).label).not.toMatch(/Verified Fix|Unverified/)
     const legacy = [reduce(LEGACY_RUNNING), ...[VERIFIED, UNVERIFIED, PASSED].map((result) => reduce([...LEGACY_RUNNING, legacyResult(result)]))]
     for (const state of legacy) expect(selectCompactStatus(state).label).not.toMatch(/Candidate verification/)
+  })
+})
+
+describe('Workspace presentation: layout holds still while the target is measured', () => {
+  // The engine reads the Canvas box and then clips the page screenshot to it, so a layout change in
+  // between would move the frame under the clip. While a measured phase is observed, layout requests
+  // are kept and applied once it ends; preparation, diagnosis and finalization never hold them.
+
+  it('holds a legacy run from its start through reproduction and again through replay while live activity is connected', () => {
+    // Reproduction begins as soon as the run is admitted, often before the page's live stream is
+    // attached, so the hold starts with the start request and lasts until a later phase is observed.
+    const pending = reduce(LEGACY_RUNNING.slice(0, 2))
+    expect(selectMeasuringTarget(pending)).toBe(true)
+    let state = reduce(LEGACY_RUNNING)
+    const holds: Array<[string, boolean]> = [['connected', selectMeasuringTarget(state)]]
+    for (const action of eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID)) {
+      state = reduce([action], state)
+      holds.push([`${action.type === 'stream/event' ? action.event.type : action.type}:${state.run?.phase ?? 'none'}`, selectMeasuringTarget(state)])
+    }
+    expect(holds).toEqual([
+      ['connected', true],
+      ['chat_received:initialized', true],
+      ['phase_started:reproducing', true],
+      ['evidence_added:reproducing', true],
+      ['gate_updated:reproducing', true],
+      ['phase_started:failure_captured', false],
+      ['phase_started:diagnosing', false],
+      ['phase_started:applying', false],
+      ['phase_started:replaying', true],
+      ['evidence_added:replaying', true],
+      ['gate_updated:replaying', true],
+      ['run_finalized:finalized', false],
+    ])
+    expect(selectMeasuringTarget(reduce([legacyResult(VERIFIED)], state))).toBe(false)
+  })
+
+  it('releases a legacy run whose first observed activity is already past reproduction', () => {
+    const late = events(LEGACY_FLOW, LEGACY_RUN_ID).slice(4)
+    expect(late[0]?.phase).toBe('failure_captured')
+    expect(selectMeasuringTarget(reduce([...LEGACY_RUNNING, ...eventActions(late.slice(0, 1), LEGACY_RUN_ID)]))).toBe(false)
+  })
+
+  it('never holds the legacy layout without a live stream, a running run or once a result decided it', () => {
+    const measuring = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 2), LEGACY_RUN_ID), LEGACY_RUN_ID)])
+    expect(selectMeasuringTarget(measuring)).toBe(true)
+    expect(selectMeasuringTarget(reduce([{ type: 'stream/disconnected', runId: LEGACY_RUN_ID }], measuring))).toBe(false)
+    expect(selectMeasuringTarget(reduce([{ type: 'stream/failed', runId: LEGACY_RUN_ID, error: { code: 'EVENT_INVALID', message: 'x' } }], reduce(LEGACY_RUNNING)))).toBe(false)
+    expect(selectMeasuringTarget(reduce([{ type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }], measuring))).toBe(false)
+    expect(selectMeasuringTarget(reduce([legacyResult(UNVERIFIED)], measuring))).toBe(false)
+    for (const state of [initialStudioState, reduce([{ type: 'catalog/loaded', scenarios: LEGACY_SCENARIOS }]), reduce([...LEGACY_RUNNING.slice(0, 2), { type: 'run/rejected', error: { code: 'RUN_ALREADY_ACTIVE', message: 'x' } }])]) {
+      expect(selectMeasuringTarget(state)).toBe(false)
+    }
+  })
+
+  it('holds the captured layout exactly while the target is presented as live, never during preparation, scan or release', () => {
+    // The captured target is first measured only after its baseline build, long after the stream attached.
+    expect(selectMeasuringTarget(reduce(CAPTURED_RUNNING.slice(0, 2)))).toBe(false)
+    let state = reduce(CAPTURED_RUNNING)
+    const holds: Array<[string | null, boolean]> = [[selectCapturedTarget(state.capturedRun), selectMeasuringTarget(state)]]
+    for (const action of eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID)) {
+      state = reduce([action], state)
+      holds.push([selectCapturedTarget(state.capturedRun), selectMeasuringTarget(state)])
+    }
+    for (const [label, held] of holds) expect(held, String(label)).toBe(label === 'baseline-live' || label === 'candidate-live')
+    expect(holds.filter(([, held]) => held).length).toBe(4)
+    expect(selectMeasuringTarget(reduce([capturedResult(PASSED)], state))).toBe(false)
+    const lost = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 2), CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    expect(selectMeasuringTarget(lost)).toBe(true)
+    expect(selectMeasuringTarget(reduce([{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }], lost))).toBe(false)
   })
 })
