@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open, realpath, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -36,6 +37,7 @@ export type TargetAppErrorCode =
   | 'TARGET_ROOT_CHANGED'
   | 'TARGET_TIMEOUT_INVALID'
   | 'TARGET_CLOSED'
+  | 'TARGET_IDENTITY_MISMATCH'
 
 /** A lifecycle failure with a stable code; messages never echo paths, URLs, or page content. */
 export class TargetAppError extends Error {
@@ -415,4 +417,240 @@ export async function startTargetApp(options: { readonly scenario: LoadedScenari
       return closing
     },
   })
+}
+
+// ---------------------------------------------------------------------------------------
+// Project-live target (specs/006-project-live-verification, T018)
+// ---------------------------------------------------------------------------------------
+//
+// The project target serves only the accepted immutable build output of an admitted project at
+// its own run-owned `http://localhost:<port>` origin, never the original checkout and never a
+// repository dev server. Only files listed in the accepted output manifest are served, each read
+// through a no-follow handle and checked against its recorded SHA-256, so a file planted into the
+// output root is never served. Every response carries the target policy: a restrictive CSP that
+// allows only same-origin scripts/connections, no workers, frames, objects or base changes, and
+// `frame-ancestors` naming exactly the Studio origin, plus `no-store`, `nosniff` and a closed
+// Permissions-Policy. Readiness is confirmed from the Studio's one target frame by loading the entry
+// document and matching its exact bytes to the accepted output; the old chart probe is not used.
+
+/** The target iframe sandbox: scripts and forms in its own origin; no popups, downloads or top navigation. */
+export const PROJECT_TARGET_SANDBOX = 'allow-scripts allow-same-origin allow-forms'
+
+const PERMISSIONS_POLICY = [
+  'camera=()',
+  'microphone=()',
+  'geolocation=()',
+  'usb=()',
+  'serial=()',
+  'hid=()',
+  'bluetooth=()',
+  'payment=()',
+  'display-capture=()',
+  'clipboard-read=()',
+].join(', ')
+
+const STUDIO_ORIGIN_PATTERN = /^http:\/\/127\.0\.0\.1:([0-9]{1,5})$/
+
+/** The target's Content Security Policy; only the exact Studio origin may frame it. */
+export function buildProjectTargetPolicy(studioOrigin: string): string {
+  const port = Number(STUDIO_ORIGIN_PATTERN.exec(studioOrigin)?.[1] ?? 0)
+  if (!(port >= 1 && port <= 65_535)) throw new TargetAppError('TARGET_URL_INVALID', 'The framing Studio must be an http://127.0.0.1:<port> origin.')
+  return [
+    "default-src 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "media-src 'self' blob:",
+    "connect-src 'self'",
+    "worker-src 'none'",
+    "manifest-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    `frame-ancestors ${studioOrigin}`,
+  ].join('; ')
+}
+
+/** The accepted immutable output a project target may serve. */
+export interface ServedProjectOutput {
+  readonly root: string
+  readonly sha256: string
+  readonly files: readonly { readonly path: string; readonly size: number; readonly sha256: string }[]
+}
+
+export interface ProjectTargetServing {
+  readonly outputSha256: string
+  readonly entryPath: string
+  readonly entrySha256: string
+  /** Increases with every serve, so a swap during readiness is detected. */
+  readonly generation: number
+}
+
+export interface ProjectTargetApp {
+  /** `http://localhost:<port>` */
+  readonly origin: string
+  readonly port: number
+  /** The served output identity, or null while nothing is served. */
+  readonly serving: ProjectTargetServing | null
+  /** Names the one Studio origin allowed to frame the target; required before serving. */
+  setFrameAncestor(studioOrigin: string): void
+  serve(output: ServedProjectOutput, options: { readonly entryPath: string }): Promise<void>
+  /** Stops serving at once; later requests receive 503. */
+  unserve(): void
+  close(): Promise<void>
+}
+
+const projectFileOf = (entryPath: string): string => {
+  const relative = entryPath.replace(/^\//, '')
+  return relative === '' || relative.endsWith('/') ? `${relative}index.html` : relative
+}
+
+const sha256Of = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex')
+
+/** Binds the project target's `localhost` port (0 for an ephemeral port) and returns its owner. */
+export async function startProjectTargetApp(options: { readonly port: number }): Promise<ProjectTargetApp> {
+  const requested = options?.port
+  if (!Number.isInteger(requested) || (requested !== 0 && (requested < 1_024 || requested > 65_535))) {
+    throw new TargetAppError('TARGET_URL_INVALID', 'The project target port is 0 or 1024-65535.')
+  }
+  let active: { readonly output: ServedProjectOutput; readonly root: string; readonly files: ReadonlyMap<string, string>; readonly serving: ProjectTargetServing } | null = null
+  let policy: string | null = null
+  let generation = 0
+  let closed = false
+  let authority = ''
+
+  const respond = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405, { Allow: 'GET, HEAD' })
+    if (req.headers.host?.toLowerCase() !== authority) return sendStatus(res, 421)
+    const serving = active
+    if (serving === null || policy === null) return sendStatus(res, 503)
+    const segments = requestSegments(req.url)
+    const relative = segments === null ? null : segments.join('/')
+    const expected = relative === null ? undefined : serving.files.get(relative)
+    if (segments === null || relative === null || expected === undefined) return sendStatus(res, 404)
+    const body = await readServedFile(serving.root, segments)
+    if (body === null || sha256Of(body) !== expected) return sendStatus(res, 404)
+    if (active !== serving) return sendStatus(res, 503)
+    const extension = path.extname(segments[segments.length - 1] ?? '').toLowerCase()
+    res.writeHead(200, {
+      'Cache-Control': 'no-store',
+      'Content-Type': CONTENT_TYPES[extension] ?? 'application/octet-stream',
+      'Content-Length': String(body.length),
+      'Content-Security-Policy': policy,
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Permissions-Policy': PERMISSIONS_POLICY,
+    })
+    res.end(req.method === 'HEAD' ? undefined : body)
+  }
+
+  const server = createServer((req, res) => {
+    respond(req, res).catch(() => sendStatus(res, 500))
+  })
+  if (requested !== 0 && boundPorts.has(requested)) throw new TargetAppError('TARGET_PORT_UNAVAILABLE', 'The project target port is already bound.')
+  let port: number
+  try {
+    port = await new Promise<number>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(requested, 'localhost', () => {
+        server.off('error', reject)
+        const address = server.address()
+        resolve(typeof address === 'object' && address !== null ? address.port : 0)
+      })
+    })
+  } catch {
+    throw new TargetAppError('TARGET_PORT_UNAVAILABLE', 'The project target port could not be bound on localhost.')
+  }
+  boundPorts.add(port)
+  authority = `localhost:${port}`
+  const origin = `http://${authority}`
+
+  let closing: Promise<void> | null = null
+  return Object.freeze({
+    origin,
+    port,
+    get serving(): ProjectTargetServing | null {
+      return active?.serving ?? null
+    },
+    setFrameAncestor(studioOrigin: string): void {
+      policy = buildProjectTargetPolicy(studioOrigin)
+    },
+    async serve(output: ServedProjectOutput, serveOptions: { readonly entryPath: string }): Promise<void> {
+      if (closed) throw new TargetAppError('TARGET_CLOSED', 'The target app was closed.')
+      if (policy === null) throw new TargetAppError('TARGET_NOT_SERVING', 'The framing Studio origin is not set.')
+      let root: string
+      try {
+        root = await realpath(output.root)
+        const tmpRoot = await realpath(tmpdir())
+        if (!isInside(tmpRoot, root) || !(await stat(root)).isDirectory()) throw new Error('outside')
+      } catch {
+        throw new TargetAppError('TARGET_DOCUMENT_ROOT_INVALID', 'A project target serves accepted output in temporary storage.')
+      }
+      const files = new Map(output.files.map((file) => [file.path, file.sha256]))
+      const entrySha256 = files.get(projectFileOf(serveOptions.entryPath))
+      if (entrySha256 === undefined) throw new TargetAppError('TARGET_DOCUMENT_ROOT_INVALID', 'The accepted output has no entry document.')
+      if (closed) throw new TargetAppError('TARGET_CLOSED', 'The target app was closed.')
+      generation += 1
+      active = Object.freeze({
+        output,
+        root,
+        files,
+        serving: Object.freeze({ outputSha256: output.sha256, entryPath: serveOptions.entryPath, entrySha256, generation }),
+      })
+    },
+    unserve(): void {
+      active = null
+    },
+    close(): Promise<void> {
+      closing ??= new Promise<void>((resolve) => {
+        closed = true
+        active = null
+        server.close(() => {
+          boundPorts.delete(port)
+          resolve()
+        })
+        server.closeAllConnections()
+      })
+      return closing
+    },
+  })
+}
+
+/**
+ * Confirms the Studio's target frame shows the served project build: the entry document loads in
+ * that frame from the exact target origin with exactly the accepted entry bytes, and the served
+ * output did not change meanwhile. Throws `TargetAppError` otherwise; there is no fallback.
+ */
+export async function confirmProjectTargetReady(
+  frame: Frame,
+  target: ProjectTargetApp,
+  options: { readonly entryPath: string; readonly entrySha256: string; readonly timeoutMs: number },
+): Promise<void> {
+  const serving = target.serving
+  if (serving === null || serving.entryPath !== options.entryPath) throw new TargetAppError('TARGET_NOT_SERVING', 'No project build is being served.')
+  if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) throw new TargetAppError('TARGET_TIMEOUT_INVALID', 'Readiness timeouts are positive integer milliseconds.')
+  if (frame.isDetached() || frame.parentFrame() === null) throw new TargetAppError('TARGET_FRAME_INVALID', 'Only the attached Studio target iframe is confirmed.')
+  let response
+  try {
+    response = await frame.goto(`${target.origin}${options.entryPath}`, { waitUntil: 'load', timeout: options.timeoutMs })
+  } catch {
+    response = null
+  }
+  if (response === null || response.status() !== 200) throw new TargetAppError('TARGET_LOAD_FAILED', 'The target frame did not load the served build.')
+  const body = await response.body().catch(() => null)
+  if (body === null || sha256Of(body) !== serving.entrySha256 || sha256Of(body) !== options.entrySha256) {
+    throw new TargetAppError('TARGET_IDENTITY_MISMATCH', 'The target frame shows a document other than the accepted build entry.')
+  }
+  let frameOrigin = ''
+  try {
+    frameOrigin = new URL(frame.url()).origin
+  } catch {
+    frameOrigin = ''
+  }
+  if (frameOrigin !== target.origin) throw new TargetAppError('TARGET_FRAME_INVALID', 'The target frame left the target origin.')
+  if (target.serving?.generation !== serving.generation) throw new TargetAppError('TARGET_ROOT_CHANGED', 'The served build changed during readiness.')
 }

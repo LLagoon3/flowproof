@@ -18,6 +18,11 @@ import { SCENARIO_REGISTRY, findRegisteredScenario } from '../scenario/registry.
 import { parseCapturedVerificationResult } from '../verify/capturedContracts.js'
 import type { CapturedVerificationResult } from '../verify/capturedContracts.js'
 import { PREPARED_FUNCTIONAL_CHECKS } from '../verify/capturedRun.js'
+import { REASON_CODE_PATTERN } from '../contracts/index.js'
+import { parseExecutionConfiguration, parseProjectContext, projectSha256Schema } from '../project/contracts.js'
+import type { ExecutionConfiguration, ProjectContext } from '../project/contracts.js'
+import { ProjectSettingsSchema } from '../project/profile.js'
+import type { ConfigurationResult, ProjectSettings } from '../project/profile.js'
 import { STUDIO_BIND_HOST, StudioSecurityError, assertLoopbackAddress, buildContentSecurityPolicy, createLaunchSession, withStudioGuards } from './auth.js'
 import type { LaunchSession } from './auth.js'
 import { StudioRequestError, sendJson } from './errors.js'
@@ -97,7 +102,46 @@ export interface CapturedStudioServerOptions extends StudioServerBaseOptions {
   readonly scenarioId?: undefined
 }
 
-export type StudioServerOptions = LegacyStudioServerOptions | CapturedStudioServerOptions
+export interface ProjectPreparation {
+  readonly target_url: string
+  readonly output_sha256: string
+  readonly checks: readonly { readonly id: string; readonly status: 'passed' | 'failed' | 'not_evaluated' }[]
+}
+
+export class ProjectPreparationError extends Error {
+  readonly code: string
+  readonly reasons: readonly string[]
+
+  constructor(code: string, reasons: readonly string[] = []) {
+    super('The project could not be prepared.')
+    this.name = 'ProjectPreparationError'
+    this.code = /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'PROJECT_PREPARE_FAILED'
+    this.reasons = Object.freeze(reasons.filter((reason) => REASON_CODE_PATTERN.test(reason)).slice(0, 16))
+  }
+}
+
+/** Explicit project-only ports; no legacy run/model capability is accepted here. */
+export interface ProjectStudioMode {
+  readonly context: ProjectContext
+  readonly modelConfigured: boolean
+  readonly suggestion: ProjectSettings
+  readonly initialSettings: ProjectSettings | null
+  readonly configure: (settings: ProjectSettings, confirmedAt: string) => ConfigurationResult
+  readonly prepare: (configuration: ExecutionConfiguration, signal: AbortSignal) => Promise<ProjectPreparation>
+  readonly release: () => Promise<void>
+}
+
+export interface ProjectStudioServerOptions extends Pick<StudioServerBaseOptions, 'targetOrigin' | 'studioRoot'> {
+  readonly project: ProjectStudioMode
+  readonly repoRoot?: never
+  readonly env?: never
+  readonly startRun?: never
+  readonly captured?: never
+  readonly testTransport?: never
+  readonly scenarioId?: never
+}
+
+export type StudioServerOptions = LegacyStudioServerOptions | CapturedStudioServerOptions | ProjectStudioServerOptions
 
 export interface LegacyStudioServerOptions {
   readonly captured?: undefined
@@ -205,7 +249,7 @@ async function loadCommittedScenario(scenarioId: string, repoRoot: string): Prom
  * The captured mode is exactly a prepared committed case plus a host starter, with no legacy option
  * beside it. Returns the validated snapshot, so later changes to the caller's object have no effect.
  */
-function assertCapturedMode(options: StudioServerOptions): CapturedStudioMode {
+function assertCapturedMode(options: LegacyStudioServerOptions | CapturedStudioServerOptions): CapturedStudioMode {
   const captured: unknown = options.captured
   if (typeof captured !== 'object' || captured === null || Object.keys(captured).some((key) => !CAPTURED_MODE_FIELDS.has(key))) {
     throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'The captured verification mode needs exactly a prepared case and a host starter.')
@@ -224,7 +268,7 @@ function assertCapturedMode(options: StudioServerOptions): CapturedStudioMode {
 }
 
 /** Validates the options; returns the captured mode snapshot, or null for the legacy mode. */
-function assertOptions(options: StudioServerOptions): CapturedStudioMode | null {
+function assertOptions(options: LegacyStudioServerOptions | CapturedStudioServerOptions): CapturedStudioMode | null {
   let captured: CapturedStudioMode | null = null
   if (typeof options !== 'object' || options === null) {
     throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'Studio server options are required.')
@@ -280,8 +324,9 @@ function listen(server: Server): Promise<AddressInfo> {
  * session. Credential readiness is deferred to accepted start requests.
  */
 export async function startStudioServer(options: StudioServerOptions): Promise<StudioServerHandle> {
-  const captured = assertOptions(options)
-  const { repoRoot } = options
+  if ((options as { project?: unknown } | null)?.project !== undefined) return startProjectStudioServer(options as ProjectStudioServerOptions)
+  const captured = assertOptions(options as LegacyStudioServerOptions | CapturedStudioServerOptions)
+  const { repoRoot } = options as LegacyStudioServerOptions | CapturedStudioServerOptions
   const mode: { readonly kind: 'legacy'; readonly options: LegacyStudioServerOptions } | { readonly kind: 'captured'; readonly captured: CapturedStudioMode } =
     captured === null ? { kind: 'legacy', options: options as LegacyStudioServerOptions } : { kind: 'captured', captured }
   const studioRoot = await readStudioRoot(options.studioRoot)
@@ -533,6 +578,334 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
         for (const stream of streams) stream.end()
         server.closeAllConnections()
       })
+      return closing
+    },
+  })
+}
+
+const MAX_PROJECT_BODY_BYTES = 32 * 1_024
+const PROJECT_SETTING_FIELDS = new Set(['project_id', 'baseline_commit', 'settings', 'confirm'])
+const PROJECT_PREPARE_FIELDS = new Set(['configuration_id'])
+const PROJECT_SERVER_FIELDS = new Set(['targetOrigin', 'studioRoot', 'project'])
+
+type ProjectConfigurationView = {
+  readonly state: 'required' | 'review' | 'confirmed' | 'rejected'
+  readonly source: 'suggestion' | 'file' | 'confirmed' | 'rejected'
+  readonly configuration_id: string | null
+  readonly configuration_digest: string | null
+  readonly reasons: readonly string[]
+  readonly settings: ProjectSettings
+}
+type ProjectPreparationView = {
+  readonly state: 'idle' | 'preparing' | 'ready' | 'failed'
+  readonly reason: string | null
+  readonly target_url: string | null
+  readonly output_sha256: string | null
+  readonly checks: readonly { readonly id: string; readonly status: 'passed' | 'failed' | 'not_evaluated' }[]
+}
+
+function readProjectBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    let settled = false
+    const rejectOnce = (error: unknown): void => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+    req.on('data', (chunk: Buffer | string) => {
+      if (settled) return
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += bytes.length
+      if (size > MAX_PROJECT_BODY_BYTES) {
+        rejectOnce(fail(413, 'REQUEST_BODY_TOO_LARGE', 'The project request body is too large.'))
+        req.resume()
+        return
+      }
+      chunks.push(bytes)
+    })
+    req.once('error', () => rejectOnce(fail(400, 'REQUEST_BODY_INVALID', 'The project request body is invalid.')))
+    req.once('end', () => {
+      if (settled) return
+      let parsed: unknown
+      try {
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
+        parsed = JSON.parse(text)
+      } catch {
+        rejectOnce(fail(400, 'REQUEST_JSON_INVALID', 'The project request body is not valid UTF-8 JSON.'))
+        return
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        rejectOnce(fail(400, 'REQUEST_BODY_INVALID', 'The project request body must be an object.'))
+        return
+      }
+      settled = true
+      resolve(parsed)
+    })
+  })
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, fields: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => fields.has(key))
+}
+
+function projectReasonList(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values.filter((value) => REASON_CODE_PATTERN.test(value)))].slice(0, 16))
+}
+
+function initialProjectConfiguration(mode: ProjectStudioMode): ProjectConfigurationView {
+  const settings = mode.initialSettings ?? mode.suggestion
+  const source = mode.initialSettings === null ? 'suggestion' : 'file'
+  return Object.freeze({
+    state: mode.initialSettings === null ? 'required' : 'review',
+    source,
+    configuration_id: null,
+    configuration_digest: null,
+    reasons: Object.freeze([]),
+    settings,
+  })
+}
+
+function projectPreparationView(state: ProjectPreparationView['state'], reason: string | null = null): ProjectPreparationView {
+  return Object.freeze({ state, reason, target_url: null, output_sha256: null, checks: Object.freeze([]) })
+}
+
+function summarizeProjectContext(mode: ProjectStudioMode, admissionState: 'ready' | 'stale', admissionReasons: readonly string[], configuration: ProjectConfigurationView, preparation: ProjectPreparationView): Record<string, unknown> {
+  const context = mode.context
+  return {
+    kind: 'project-live',
+    project: {
+      project_id: context.project_id,
+      display_root: context.display_root,
+      label: context.label,
+      baseline_commit: context.baseline_commit,
+      branch: context.branch,
+      category: context.category,
+      admission: { state: admissionState, reasons: admissionReasons },
+    },
+    model_configured: mode.modelConfigured,
+    configuration,
+    preparation,
+  }
+}
+
+function assertProjectMode(options: ProjectStudioServerOptions): void {
+  if (typeof options !== 'object' || options === null || Object.keys(options).some((key) => !PROJECT_SERVER_FIELDS.has(key))) {
+    throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'Project Studio options are invalid.')
+  }
+  const mode = options.project
+  const context = ProjectSettingsSchema.safeParse(mode?.suggestion)
+  const initial = mode?.initialSettings === null ? null : ProjectSettingsSchema.safeParse(mode?.initialSettings)
+  if (
+    typeof mode !== 'object' ||
+    mode === null ||
+    typeof mode.modelConfigured !== 'boolean' ||
+    !parseProjectContext(mode.context).ok ||
+    !context.success ||
+    (initial !== null && !initial.success) ||
+    typeof mode.configure !== 'function' ||
+    typeof mode.prepare !== 'function' ||
+    typeof mode.release !== 'function'
+  ) {
+    throw new StudioSecurityError('STUDIO_LAUNCH_CONFIG_INVALID', 'Project Studio options are invalid.')
+  }
+}
+
+/** Project-only guarded setup API. It never exposes the integrity manifest or starts work before confirmation. */
+async function startProjectStudioServer(options: ProjectStudioServerOptions): Promise<StudioServerHandle> {
+  assertProjectMode(options)
+  const studioRoot = await readStudioRoot(options.studioRoot)
+  const { project: mode, targetOrigin } = options
+  const server = createServer()
+  const address = await listen(server)
+  const session = createLaunchSession({ port: address.port, targetOrigin })
+  let closing: Promise<void> | null = null
+  let closed = false
+  let admissionState: 'ready' | 'stale' = 'ready'
+  let admissionReasons: readonly string[] = Object.freeze([])
+  let configurationView = initialProjectConfiguration(mode)
+  let configuration: ExecutionConfiguration | null = null
+  let preparation = projectPreparationView('idle')
+  let activePreparation: AbortController | null = null
+  let targetOwned = false
+  let preparationSequence = 0
+
+  const contextView = (): Record<string, unknown> =>
+    summarizeProjectContext(mode, admissionState, admissionReasons, configurationView, preparation)
+
+  const releaseTarget = async (): Promise<void> => {
+    if (!targetOwned) return
+    targetOwned = false
+    await mode.release()
+  }
+
+  const completePreparation = async (sequence: number, controller: AbortController, current: ExecutionConfiguration): Promise<void> => {
+    try {
+      const value = await mode.prepare(current, controller.signal)
+      if (closed || controller.signal.aborted || sequence !== preparationSequence) {
+        await mode.release().catch(() => undefined)
+        return
+      }
+      const target = new URL(value.target_url)
+      if (
+        target.origin !== targetOrigin ||
+        target.username !== '' ||
+        target.password !== '' ||
+        !projectSha256Schema.safeParse(value.output_sha256).success ||
+        !Array.isArray(value.checks) ||
+        value.checks.length > 64 ||
+        value.checks.some((check) => typeof check.id !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,47}$/.test(check.id) || !['passed', 'failed', 'not_evaluated'].includes(check.status))
+      ) {
+        throw new ProjectPreparationError('PROJECT_PREPARE_FAILED')
+      }
+      targetOwned = true
+      preparation = Object.freeze({
+        state: 'ready',
+        reason: null,
+        target_url: target.href,
+        output_sha256: value.output_sha256,
+        checks: Object.freeze(value.checks.map((check) => Object.freeze({ id: check.id, status: check.status }))),
+      })
+    } catch (error) {
+      if (closed || controller.signal.aborted || sequence !== preparationSequence) return
+      if (error instanceof ProjectPreparationError && error.code === 'PROJECT_BASELINE_STALE') {
+        admissionState = 'stale'
+        admissionReasons = projectReasonList(error.reasons.length ? error.reasons : ['PROJECT_BASELINE_CHANGED'])
+        configuration = null
+        configurationView = Object.freeze({ ...configurationView, state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: admissionReasons })
+        preparation = projectPreparationView('failed', 'PROJECT_BASELINE_STALE')
+      } else {
+        const reason = error instanceof ProjectPreparationError ? error.code : 'PROJECT_PREPARE_FAILED'
+        preparation = projectPreparationView('failed', reason)
+      }
+    } finally {
+      if (activePreparation === controller) activePreparation = null
+    }
+  }
+
+  const parseJsonRequest = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
+    const contentType = req.headers['content-type']
+    if (typeof contentType !== 'string' || !/^application\/json(?:\s*;|$)/i.test(contentType)) {
+      throw fail(415, 'CONTENT_TYPE_UNSUPPORTED', 'Project requests must use application/json.')
+    }
+    return (await readProjectBody(req)) as Record<string, unknown>
+  }
+
+  const route = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const pathname = (req.url ?? '/').split(/[?#]/, 1)[0] ?? '/'
+    const method = req.method ?? 'GET'
+    if (pathname === '/api/project/context') {
+      if (method !== 'GET') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      sendJson(res, 200, contextView())
+      return
+    }
+    if (pathname === '/api/project/configuration') {
+      if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      const body = await parseJsonRequest(req)
+      if (!hasOnlyKeys(body, PROJECT_SETTING_FIELDS)) throw fail(400, 'REQUEST_FIELD_REJECTED', 'The project configuration request contains unsupported fields.')
+      if (body.confirm !== true) throw fail(400, 'CONFIRMATION_REQUIRED', 'Review and confirm the project settings before continuing.')
+      if (admissionState !== 'ready') throw fail(409, 'PROJECT_BASELINE_STALE', 'The admitted project baseline is stale.')
+      if (typeof body.project_id !== 'string' || body.project_id !== mode.context.project_id || typeof body.baseline_commit !== 'string' || body.baseline_commit !== mode.context.baseline_commit) {
+        throw fail(409, 'PROJECT_IDENTITY_MISMATCH', 'The configuration does not match the admitted project identity.')
+      }
+      if (activePreparation !== null || preparation.state === 'preparing') throw fail(409, 'PROJECT_PREPARATION_ACTIVE', 'Project preparation is already active.')
+      const parsedSettings = ProjectSettingsSchema.safeParse(body.settings)
+      if (!parsedSettings.success) {
+        configuration = null
+        configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: Object.freeze(['CONFIGURATION_INVALID']), settings: configurationView.settings })
+        throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are invalid.')
+      }
+      const confirmedAt = new Date().toISOString()
+      let result: ConfigurationResult
+      try {
+        result = mode.configure(parsedSettings.data, confirmedAt)
+      } catch {
+        result = { ok: false, reasons: ['CONFIGURATION_INVALID'] }
+      }
+      if (!result.ok) {
+        const reasons = projectReasonList(result.reasons)
+        configuration = null
+        configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons, settings: parsedSettings.data })
+        throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are not supported by the admitted profile.')
+      }
+      const checked = parseExecutionConfiguration(result.configuration)
+      if (
+        !checked.ok ||
+        checked.value.project_id !== mode.context.project_id ||
+        checked.value.baseline_commit !== mode.context.baseline_commit ||
+        checked.value.target_origin !== targetOrigin ||
+        checked.value.confirmation.state !== 'confirmed'
+      ) {
+        configuration = null
+        configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: Object.freeze(['CONFIGURATION_INVALID']), settings: parsedSettings.data })
+        throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are not supported by the admitted profile.')
+      }
+      await releaseTarget().catch(() => undefined)
+      configuration = checked.value
+      configurationView = Object.freeze({
+        state: 'confirmed',
+        source: 'confirmed',
+        configuration_id: checked.value.configuration_id,
+        configuration_digest: checked.value.configuration_digest,
+        reasons: Object.freeze([]),
+        settings: parsedSettings.data,
+      })
+      preparation = projectPreparationView('idle')
+      sendJson(res, 200, { configuration_id: checked.value.configuration_id, configuration_digest: checked.value.configuration_digest })
+      return
+    }
+    if (pathname === '/api/project/prepare') {
+      if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      const body = await parseJsonRequest(req)
+      if (!hasOnlyKeys(body, PROJECT_PREPARE_FIELDS)) throw fail(400, 'REQUEST_FIELD_REJECTED', 'The project preparation request contains unsupported fields.')
+      if (admissionState !== 'ready') throw fail(409, 'PROJECT_BASELINE_STALE', 'The admitted project baseline is stale.')
+      if (configuration === null || configurationView.state !== 'confirmed') throw fail(409, 'CONFIGURATION_REQUIRED', 'Confirm project settings before preparing the target.')
+      if (typeof body.configuration_id !== 'string' || body.configuration_id !== configuration.configuration_id) {
+        throw fail(409, 'CONFIGURATION_STALE', 'The project configuration has changed; confirm it again.')
+      }
+      if (activePreparation !== null || preparation.state === 'preparing') throw fail(409, 'PROJECT_PREPARATION_ACTIVE', 'Project preparation is already active.')
+      const controller = new AbortController()
+      activePreparation = controller
+      const sequence = ++preparationSequence
+      preparation = projectPreparationView('preparing')
+      void completePreparation(sequence, controller, configuration)
+      sendJson(res, 202, { state: 'preparing' })
+      return
+    }
+    if (pathname.startsWith('/api/')) throw fail(404, 'NOT_FOUND', 'The requested route does not exist.')
+    if (studioRoot === null) throw fail(404, 'NOT_FOUND', 'The requested route does not exist.')
+    if (method !== 'GET' && method !== 'HEAD') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+    const segments = requestSegments(req.url)
+    const bytes = segments === null ? null : await readServedFile(studioRoot, segments)
+    if (segments === null || bytes === null) throw fail(404, 'NOT_FOUND', 'The requested route does not exist.')
+    const extension = path.extname(segments.at(-1) ?? '').toLowerCase()
+    res.statusCode = 200
+    res.setHeader('Content-Type', CONTENT_TYPES[extension] ?? 'application/octet-stream')
+    res.setHeader('Content-Length', String(bytes.length))
+    res.end(method === 'HEAD' ? undefined : bytes)
+  }
+
+  server.on('request', withStudioGuards(session, route))
+  return Object.freeze({
+    session,
+    origin: session.origin,
+    address: Object.freeze({ ...address }),
+    close(): Promise<void> {
+      closing ??= (async () => {
+        closed = true
+        ++preparationSequence
+        activePreparation?.abort()
+        activePreparation = null
+        try {
+          await releaseTarget()
+        } finally {
+          await new Promise<void>((resolve) => {
+            server.close(() => resolve())
+            server.closeAllConnections()
+          })
+        }
+      })()
       return closing
     },
   })

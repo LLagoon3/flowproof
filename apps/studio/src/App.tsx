@@ -13,6 +13,7 @@ import type { SelectedEvidence } from './presentation.js'
 import { canStartRun, initialStudioState, runEventHandlers, selectCapturedTarget, selectStudioMode, studioReducer } from './state.js'
 import type { StudioState } from './state.js'
 import type { CanvasTab, CapturedPaneLabel } from './components/TargetPane.js'
+import { ProjectSetup } from './components/ProjectSetup.js'
 
 // The Studio workspace: a work panel on the left with the prepared case or the fixed candidate,
 // the agent work with the finalized run's concise result (its Proof Trail, or its checks, identity
@@ -134,7 +135,12 @@ function CapturedContext({ state }: { readonly state: StudioState }) {
   )
 }
 
-export function App({ client: providedClient }: AppProps) {
+export function App(props: AppProps) {
+  const projectMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('mode') === 'project'
+  return projectMode ? <ProjectSetup /> : <PreparedApp {...props} />
+}
+
+function PreparedApp({ client: providedClient }: AppProps) {
   const [client] = useState(() => providedClient ?? createStudioClient())
   const [state, dispatch] = useReducer(studioReducer, initialStudioState)
   const [draft, setDraft] = useState<Draft | null>(null)

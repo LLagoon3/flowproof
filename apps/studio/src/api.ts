@@ -294,6 +294,97 @@ function deepFreeze<T>(value: T): T {
 /** Validated data is copied and frozen so neither the caller nor the UI can change it later. */
 const frozenCopy = <T>(value: T): T => deepFreeze(structuredClone(value))
 
+export interface ProjectSettingsView {
+  readonly entry_path: string
+  readonly build: { readonly argv: readonly string[]; readonly output_directory: string }
+  readonly required_project_checks: readonly { readonly id: string; readonly argv: readonly string[] }[]
+}
+
+export interface ProjectContextView {
+  readonly kind: 'project-live'
+  readonly project: {
+    readonly project_id: string
+    readonly display_root: string
+    readonly label: string
+    readonly baseline_commit: string
+    readonly branch: string | null
+    readonly category: 'vite-static-v1'
+    readonly admission: { readonly state: 'inspecting' | 'ready' | 'blocked' | 'stale'; readonly reasons: readonly string[] }
+  }
+  readonly model_configured: boolean
+  readonly configuration: {
+    readonly state: 'required' | 'review' | 'confirmed' | 'rejected'
+    readonly source: 'suggestion' | 'file' | 'confirmed' | 'rejected'
+    readonly configuration_id: string | null
+    readonly configuration_digest: string | null
+    readonly reasons: readonly string[]
+    readonly settings: ProjectSettingsView
+  }
+  readonly preparation: {
+    readonly state: 'idle' | 'preparing' | 'ready' | 'failed'
+    readonly reason: string | null
+    readonly target_url: string | null
+    readonly output_sha256: string | null
+    readonly checks: readonly { readonly id: string; readonly status: 'passed' | 'failed' | 'not_evaluated' }[]
+  }
+}
+
+const projectSettingsKeys = ['entry_path', 'build', 'required_project_checks'] as const
+const projectArgv = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length > 0 && value.length <= 128 && value.every((part) => typeof part === 'string' && part.length <= 2_048 && !/[\u0000-\u001f\u007f]/.test(part))
+
+function isProjectSettingsView(value: unknown): value is ProjectSettingsView {
+  if (!isObject(value) || !hasExactKeys(value, projectSettingsKeys) || !isText(value.entry_path, 2_048) || !value.entry_path.startsWith('/')) return false
+  if (!isObject(value.build) || !hasExactKeys(value.build, ['argv', 'output_directory']) || !projectArgv(value.build.argv) || !isRelativePath(value.build.output_directory)) return false
+  if (!Array.isArray(value.required_project_checks) || value.required_project_checks.length > 16) return false
+  return value.required_project_checks.every(
+    (check) => isObject(check) && hasExactKeys(check, ['id', 'argv']) && matches(check.id, KEBAB_ID_PATTERN) && projectArgv(check.argv),
+  )
+}
+
+/** Strict browser-safe mirror of the scrubbed setup-context response. */
+export function parseProjectContextView(input: unknown): ProjectContextView | null {
+  if (!isObject(input) || !hasExactKeys(input, ['kind', 'project', 'model_configured', 'configuration', 'preparation']) || input.kind !== 'project-live') return null
+  const project = input.project
+  const configuration = input.configuration
+  const preparation = input.preparation
+  if (
+    !isObject(project) ||
+    !hasExactKeys(project, ['project_id', 'display_root', 'label', 'baseline_commit', 'branch', 'category', 'admission']) ||
+    !isUuid(project.project_id) ||
+    !isText(project.display_root, 1_024) ||
+    !isText(project.label, 128) ||
+    !matches(project.baseline_commit, GIT_OID_PATTERN) ||
+    !(project.branch === null || isText(project.branch, 256)) ||
+    project.category !== 'vite-static-v1' ||
+    !isObject(project.admission) ||
+    !hasExactKeys(project.admission, ['state', 'reasons']) ||
+    !isOneOf(project.admission.state, ['inspecting', 'ready', 'blocked', 'stale'] as const) ||
+    !isUniqueList(project.admission.reasons, (reason) => matches(reason, REASON_CODE_PATTERN)) ||
+    typeof input.model_configured !== 'boolean' ||
+    !isObject(configuration) ||
+    !hasExactKeys(configuration, ['state', 'source', 'configuration_id', 'configuration_digest', 'reasons', 'settings']) ||
+    !isOneOf(configuration.state, ['required', 'review', 'confirmed', 'rejected'] as const) ||
+    !isOneOf(configuration.source, ['suggestion', 'file', 'confirmed', 'rejected'] as const) ||
+    !(configuration.configuration_id === null || isUuid(configuration.configuration_id)) ||
+    !(configuration.configuration_digest === null || matches(configuration.configuration_digest, SHA256_PATTERN)) ||
+    !isUniqueList(configuration.reasons, (reason) => matches(reason, REASON_CODE_PATTERN)) ||
+    !isProjectSettingsView(configuration.settings) ||
+    !isObject(preparation) ||
+    !hasExactKeys(preparation, ['state', 'reason', 'target_url', 'output_sha256', 'checks']) ||
+    !isOneOf(preparation.state, ['idle', 'preparing', 'ready', 'failed'] as const) ||
+    !(preparation.reason === null || matches(preparation.reason, REASON_CODE_PATTERN)) ||
+    !(preparation.target_url === null || isText(preparation.target_url, 2_048)) ||
+    !(preparation.output_sha256 === null || matches(preparation.output_sha256, SHA256_PATTERN)) ||
+    !Array.isArray(preparation.checks) ||
+    preparation.checks.length > 64 ||
+    !preparation.checks.every((check) => isObject(check) && hasExactKeys(check, ['id', 'status']) && matches(check.id, KEBAB_ID_PATTERN) && isOneOf(check.status, ['passed', 'failed', 'not_evaluated'] as const))
+  ) return null
+  if (configuration.state === 'confirmed' && (configuration.configuration_id === null || configuration.configuration_digest === null)) return null
+  if (preparation.state === 'ready' && (preparation.target_url === null || preparation.output_sha256 === null)) return null
+  return frozenCopy(input as unknown as ProjectContextView)
+}
+
 function isGateSummary(value: unknown): value is GateSummary {
   return (
     isObject(value) &&
