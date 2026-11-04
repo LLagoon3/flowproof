@@ -48,3 +48,33 @@ build, focused, chromium, probe and additional-probe). The parent-only probe ser
 closed in `finally`; no original repository, provider, deployment or sibling container was used.
 `git diff --check origin/main..HEAD` passed. Hosted updated-HEAD CI and the second Codex review remain
 separate, pending checks before merge.
+
+# S3 PR28 review round 2 — paintable-surface corrections
+
+Scope: review threads 4473364097 and 4473364109, both in `renderedText` (`projectPrivacy.ts`). Base `2cacfc0`, fix commit `6a3ced4`. Synthetic values only; no provider, push or deployment.
+
+Shared cause: visibility and content shortcuts ran before every paintable surface had been assessed, and box visibility (`checkVisibility`) stood in for paint visibility.
+
+| Finding | Fix | Regression (headed Chromium, real-pixel control first) |
+| --- | --- | --- |
+| `appendPseudo` returned on empty content before checking the pseudo's own `url()` images | url image properties of every pseudo are checked before any visibility or content return | empty-content `::before` 200x40 url background; text `::after` with url background |
+| `parent.checkVisibility()` is false for a `display: contents` parent, so its painted bare text was skipped | a node's content paints unless it has no layout (box ancestor `checkVisibility()` false) or a box ancestor has opacity 0; text uses its parent's computed visibility; `display: contents` elements skip only their own box images; the html/body root checks are unchanged | wrapper bare text; wrapper `::before` text; a refused password reflected into a wrapper; plus a visible `::before` in a `visibility: hidden` element and bare text directly in an open shadow root (same predicate) |
+
+Guard: a page with `display: none`, `visibility: hidden` and opacity-0 hidden text, plus head style/script text and body script text, still seals `ready` with images retained and no seed in the capture.
+
+## Round 2 results (logs in ignored `.flowproof/task-logs/006-project-live-verification/s3-review2/`)
+
+| Check | Result | Log |
+| --- | --- | --- |
+| Red before fix, 8 new headed tests | 7 failed (6 sealed `ready` with images retained, the reflection case had no `IMAGE_SENSITIVE_TEXT`), every pixel control passed; the hidden-text guard passed | `red-e2e.log` |
+| Workspace `pnpm typecheck` / `pnpm build` | passed / passed | `green-typecheck.log`, `green-build.log` |
+| `vitest --project unit --project contract` | 37 files, 1252 passed, 5 skipped (existing opt-in `runIf(CHROMIUM)` replay tests in `project-replay.test.ts`) | `green-unit-contract.log` |
+| Headed Chromium `project-privacy.spec.ts` | 22/22 (the 14 earlier tests + 8 new), 0 skipped | `green-e2e.log` |
+
+All heavy steps ran under `flock -w 1800 /tmp/flowproof-spec006-heavy.lock` on owned ports 43160-43161.
+
+## Round 2 gaps
+
+- This round did not assess these surfaces: closed shadow roots (not readable from page script), `::backdrop`, `::first-line`/`::first-letter` backgrounds, and url values in `mask-image`, `filter` or `-webkit-box-reflect`.
+- Pseudo url checks now fail closed even when the pseudo is hidden or not generated (`content: none`), and for inherited `list-style-image` in hidden subtrees. These are deliberate false positives.
+- Integration, UI and the full e2e suite were not rerun in this unit.
