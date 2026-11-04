@@ -103,3 +103,19 @@ Heavy steps ran under `flock -w 1800 /tmp/flowproof-spec006-heavy.lock`. The e2e
 - The property and pseudo lists are an explicit enumeration of known URL-bearing paint surfaces in current Chromium. A property outside the list is not inspected.
 - The URL checks deliberately fail closed for surfaces that may not paint: hidden or ungenerated pseudos, a `::backdrop` rule with no open modal, `clip-path: url(#local)` and inherited `list-style-image`. This can mark some safe pages unsupported.
 - Integration, UI and the full e2e suite were not rerun in this unit.
+
+## Independent parent verification of the combined round-2 correction
+
+The parent inspected the complete changes from `2cacfc0` through `ca787b9`, including the shared
+visibility logic and additional URL-bearing paint surfaces. Under the exact heavy lock, workspace
+`pnpm typecheck` and `pnpm build` passed; privacy/capture/replay focused checks passed **143 tests**
+with **5 existing opt-in replay skips**. Actual headed Chromium privacy checks passed **32/32**.
+The parent independently reran its original actual-Chromium surface probe against the built module
+and asserted all eight outcomes, public/hidden positive controls, the three previously reproduced
+first-letter/first-line/backdrop pixel controls, and zero retained unsafe pixels. No provider calls
+or universal hostile-page privacy claim is made. Closed-shadow/explicit enumeration limits above
+remain disclosed within the admitted synthetic/local-app boundary.
+
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/pr28-parent-r3/`. The probe's server
+and browser close in `finally`; no raw screenshot is retained. Updated-HEAD hosted CI and third
+Codex review remain independent pending gates. The earlier CI success covers `2cacfc0` only.

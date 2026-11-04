@@ -5,14 +5,13 @@
 
 **Branch**: `feat/006-project-live-verification` | **Created**: 2026-11-04
 
-**Authorization**: The owner requested Tasks after the Plan report, then requested an explicit slice
-scope and parallel-ready breakdown. That scheduling revision changed documents only; it did not
-execute source edits, image provisioning, product tests, model calls, push, PR, merge or deployment.
-On 2026-11-04 the owner authorized local S1 implementation only (message 25437: start from slice 1
-following the workflow skill); this excludes push, PR, merge, deployment, model calls and S2+.
-S1 (T001–T009) is implemented locally and marked from its evidence in [verification.md](verification.md);
-T010–T055 are unexecuted. Each later slice must be authorized separately; actual live acceptance
-requires available permitted credentials, fixtures and runtime resources.
+**Authorization**: The owner authorized implementation, publication, review-loop corrections and
+conditional merge of all remaining S2–S7 slices on 2026-11-04 (message 25501), using Opus with parent
+independent verification. S1 and S4 have merged through PRs #27 and #29. Each later slice still follows
+its predecessor merges and its own verification/PR gates. Checked tasks describe implemented work
+present in this branch; unchecked sibling tasks do not revoke the authorization or describe another
+worktree's status. Actual provider acceptance remains T053 after final regression; T054 requires real
+owner feedback and is never self-approved. Deployment remains canceled and outside scope.
 
 **Tests**: Required acceptance coverage comes from the Spec's independent tests/SC-001–SC-010 and the
 Plan's explicit risk-based verification/TDD strategy. Write focused parser/authority/path/privacy/race
