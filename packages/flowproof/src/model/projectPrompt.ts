@@ -42,6 +42,10 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 const IMAGE_FRAMING_RESERVE = 512
 /** Selection-time allowance for omission disclosure; the final exact byte check always applies. */
 const DISCLOSURE_RESERVE = 32 * 1_024
+/** Room the client's wire envelope (model, store, strict response format) needs beyond `serialized`. */
+export const PROJECT_REQUEST_ENVELOPE_RESERVE = 32 * 1_024
+/** Bound for `serialized`, so the actual wire request stays within the 8 MiB limit. */
+const REQUEST_BUDGET = PROJECT_LIMITS.maxRequestBytes - PROJECT_REQUEST_ENVELOPE_RESERVE
 const descriptionSchema = safeTextSchema(2_000, { multiline: true })
 const answerSchema = safeTextSchema(1_000, { multiline: true })
 
@@ -122,6 +126,8 @@ export interface ProjectPromptManifest {
   readonly definition_id: string | null
   readonly definition_digest: string | null
   readonly question_id: string | null
+  /** The single answered question a clarified analysis is bound to; null otherwise. */
+  readonly clarification: { readonly question_id: string; readonly answer_id: string } | null
   readonly included_source_paths: readonly string[]
   readonly included_image_ids: readonly string[]
   readonly included_observation_ids: readonly string[]
@@ -199,7 +205,7 @@ const UNSUPPORTED_RULE =
 export const PROJECT_ANALYSIS_INSTRUCTIONS = [
   'Phase: analysis.',
   ...COMMON_RULES,
-  'Interpret the demonstrated problem from the ordered target actions, errors, admitted source and images. Return one closed variant:',
+  'Interpret the demonstrated problem from the ordered target actions, errors, admitted source and images. Return {"result": <variant>} where <variant> is one closed variant:',
   READY_RULE,
   '- status "clarify": observed_facts, citations and one question {question_id, text, missing_intent, alternatives} only when the intended behaviour is genuinely ambiguous; question_id must equal binding.question_id. Do not assume the answer.',
   UNSUPPORTED_RULE,
@@ -208,7 +214,7 @@ export const PROJECT_ANALYSIS_INSTRUCTIONS = [
 export const PROJECT_CLARIFIED_ANALYSIS_INSTRUCTIONS = [
   'Phase: clarified-analysis.',
   ...COMMON_RULES,
-  'The context contains the single earlier clarification question and the user’s explicit answer. Use that answer; status "clarify" is not allowed in this phase. Return one closed variant:',
+  'The context contains the single earlier clarification question and the user’s explicit answer. Use that answer; status "clarify" is not allowed in this phase. Return {"result": <variant>} where <variant> is one closed variant:',
   READY_RULE,
   UNSUPPORTED_RULE,
 ].join('\n')
@@ -343,7 +349,7 @@ function selectEvidence(observations: readonly SafeObservation[], essential: Rea
   const essentialErrors = errors.filter((error) => essential.has(error.observation_id))
   if (essentialImages.length > PROJECT_LIMITS.maxRequestImages) return fail('PROMPT_ESSENTIAL_OMISSION', 'images')
   if (essentialImages.length + essentialErrors.length > MAX_PROMPT_OBSERVATIONS) return fail('PROMPT_ESSENTIAL_OMISSION', 'observations')
-  let remaining = PROJECT_LIMITS.maxRequestBytes - baseBytes - DISCLOSURE_RESERVE - essentialImages.reduce((sum, image) => sum + imageCost(image), 0)
+  let remaining = REQUEST_BUDGET - baseBytes - DISCLOSURE_RESERVE - essentialImages.reduce((sum, image) => sum + imageCost(image), 0)
   if (remaining < 0) return fail('PROMPT_REQUEST_LIMIT', 'essential')
   const chosen = new Set(essentialImages.map((image) => image.observation_id))
   const omitted: ProjectPromptOmission[] = []
@@ -423,7 +429,7 @@ function finish(plan: PromptPlan): ProjectPromptResult<ProjectPrompt> {
   }
   const { input, serialized } = assemble(instructions, plan.context(selected.value, images), images)
   const requestBytes = Buffer.byteLength(serialized, 'utf8')
-  if (requestBytes > PROJECT_LIMITS.maxRequestBytes) return fail('PROMPT_REQUEST_LIMIT', 'request')
+  if (requestBytes > REQUEST_BUDGET) return fail('PROMPT_REQUEST_LIMIT', 'request')
   const selectedIds = new Set([...selected.value.images, ...selected.value.errors].map((observation) => observation.observation_id))
   const manifest: ProjectPromptManifest = Object.freeze({
     prompt_version: PROJECT_PROMPT_VERSION,
@@ -476,6 +482,7 @@ export function buildProjectAnalysisPrompt(input: ProjectAnalysisPromptInput): P
   }
 
   let clarification: Record<string, unknown> | null = null
+  let answered: { readonly question_id: string; readonly answer_id: string } | null = null
   const phase: ProjectPromptPhase = input.clarification ? 'clarified-analysis' : 'analysis'
   if (input.clarification) {
     const prior = InterpretationSchema.safeParse(input.clarification.prior)
@@ -485,6 +492,7 @@ export function buildProjectAnalysisPrompt(input: ProjectAnalysisPromptInput): P
     if (previous.run_id !== input.run_id || previous.capture_id !== capture.capture_id || previous.report_sha256 !== reportSha256) return fail('PROMPT_CLARIFICATION_INVALID', 'prior.binding')
     if (!isUuid(input.clarification.answer_id) || !answerSchema.safeParse(input.clarification.answer).success) return fail('PROMPT_CLARIFICATION_INVALID', 'answer')
     const question = previous.result.question
+    answered = Object.freeze({ question_id: question.question_id, answer_id: input.clarification.answer_id })
     clarification = redactStrings(
       { question_id: question.question_id, question: question.text, missing_intent: question.missing_intent, alternatives: question.alternatives, answer_id: input.clarification.answer_id, answer: input.clarification.answer },
       registry,
@@ -512,7 +520,7 @@ export function buildProjectAnalysisPrompt(input: ProjectAnalysisPromptInput): P
     observations: capture.observations,
     essential,
     sources: sources.value,
-    binding: { baseline_commit: capture.baseline_commit, capture_id: capture.capture_id, report_sha256: reportSha256, definition_id: null, definition_digest: null, question_id: questionId },
+    binding: { baseline_commit: capture.baseline_commit, capture_id: capture.capture_id, report_sha256: reportSha256, definition_id: null, definition_digest: null, question_id: questionId, clarification: answered },
     context: (selection, images) => ({
       prompt_version: PROJECT_PROMPT_VERSION,
       binding,
@@ -581,7 +589,7 @@ export function buildProjectCorrectionPrompt(input: ProjectCorrectionPromptInput
     observations,
     essential,
     sources: sources.value,
-    binding: { baseline_commit: definition.baseline_commit, capture_id: definition.capture_id, report_sha256: definition.report_sha256, definition_id: definition.definition_id, definition_digest: definition.definition_digest, question_id: null },
+    binding: { baseline_commit: definition.baseline_commit, capture_id: definition.capture_id, report_sha256: definition.report_sha256, definition_id: definition.definition_id, definition_digest: definition.definition_digest, question_id: null, clarification: null },
     context: (selection, images) => ({
       prompt_version: PROJECT_PROMPT_VERSION,
       binding,
