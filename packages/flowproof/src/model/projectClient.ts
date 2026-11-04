@@ -15,7 +15,10 @@
  * Every started exchange yields one S1 ProviderInvocation whose observed model and response ID come
  * from the validated response, never from configuration. No record, error or log carries the key,
  * prompt, provider body, provider error text or reasoning. An injected HTTP implementation is always
- * labelled `test_transport`, which can never satisfy live acceptance. This client does not prove a
+ * labelled `test_transport`, which can never satisfy live acceptance. Only deeply frozen prompts
+ * returned by the projectPrompt builders are admitted, and the exact request body is fixed before
+ * any await, so copied/rebound manifests or later caller mutation cannot change what is sent or
+ * what the record and output validation trust. This client does not prove a
  * baseline replay: the correction prompt's baseline boundary is supplied by the host orchestrator
  * (S6), which must derive it from an actual executed replay.
  */
@@ -39,6 +42,7 @@ import {
   PROJECT_ANALYSIS_INSTRUCTIONS,
   PROJECT_CLARIFIED_ANALYSIS_INSTRUCTIONS,
   PROJECT_CORRECTION_INSTRUCTIONS,
+  isBuiltProjectPrompt,
   validateProjectAnalysisOutput,
   validateProjectCorrectionOutput,
   type ProjectAnalysisOutput,
@@ -173,6 +177,7 @@ const MESSAGES = {
   PROMPT_OUTPUT_QUESTION_MISMATCH: 'The clarification question does not match the host question.',
   PROMPT_OUTPUT_CLARIFICATION_REPEATED: 'A clarified analysis asked another question.',
   PROMPT_OUTPUT_PATH_UNKNOWN: 'The correction targets a file that was not included.',
+  PROMPT_UNTRUSTED: 'The prompt is not a builder-owned FlowProof prompt.',
 } as const
 export type ProjectModelErrorCode = keyof typeof MESSAGES
 
@@ -340,7 +345,7 @@ export function createProjectModelSession(options: ProjectModelSessionOptions): 
   function admit(prompt: ProjectPrompt, route: 'analysis' | 'correction'): ProjectModelErrorCode | null {
     if (run.signal.aborted) return 'PROVIDER_ABORTED'
     if (active) return 'PROVIDER_BUSY'
-    if (!isRecord(prompt) || !intact(prompt)) return 'PROVIDER_PROMPT_INVALID'
+    if (!isBuiltProjectPrompt(prompt) || !intact(prompt)) return 'PROVIDER_PROMPT_INVALID'
     const phase = prompt.phase
     if ((route === 'correction') !== (phase === 'correction')) return 'PROVIDER_PROMPT_INVALID'
     if (used[phase]) return 'PROVIDER_BUDGET_EXHAUSTED'
@@ -356,6 +361,9 @@ export function createProjectModelSession(options: ProjectModelSessionOptions): 
   async function invoke<T>(prompt: ProjectPrompt, validate: (prompt: ProjectPrompt, output: unknown) => ProjectPromptResult<T>): Promise<ProjectModelResult<T>> {
     const phase = prompt.phase
     const manifest = prompt.manifest
+    // Fixed before any await: the admitted prompt is frozen and this exact body is all that may leave.
+    const params = { model: META_MODEL_ID, instructions: prompt.instructions, input: prompt.input, store: false, text: { format: PHASES[phase].format } }
+    const expectedBody = JSON.stringify(params)
     used[phase] = true
     invocationIds.add(manifest.invocation_id)
     active = true
@@ -395,7 +403,7 @@ export function createProjectModelSession(options: ProjectModelSessionOptions): 
       // body is measured against the request limit before it leaves.
       const send: MetaFetch = async (input, init) => {
         const body = typeof init?.body === 'string' ? init.body : null
-        if (body === null) refused = 'PROVIDER_PROMPT_INVALID'
+        if (body === null || body !== expectedBody) refused = 'PROVIDER_PROMPT_INVALID'
         else if (Buffer.byteLength(body, 'utf8') > PROJECT_LIMITS.maxRequestBytes) refused = 'PROVIDER_REQUEST_LIMIT'
         if (refused !== null || body === null) throw new ProjectModelError(refused ?? 'PROVIDER_PROMPT_INVALID')
         sentBytes = Buffer.byteLength(body, 'utf8')
@@ -423,7 +431,6 @@ export function createProjectModelSession(options: ProjectModelSessionOptions): 
         logLevel: 'off',
         logger: SILENT_LOGGER,
       })
-      const params = { model: META_MODEL_ID, instructions: prompt.instructions, input: prompt.input, store: false, text: { format: PHASES[phase].format } }
       const work = (async () => {
         const response = await client.responses.create(params as never, { signal: controller.signal }).asResponse()
         return parseJson(await response.text())
