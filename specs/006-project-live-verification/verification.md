@@ -11,7 +11,7 @@ calls or S2+. The parent session retains independent review and delivery.
 **Branch / baseline**: `feat/006-project-live-verification`, baseline
 `9b3b96210c0b3f8b1c7142c23b7404ec421ea476` (`origin/main` `878df7ead7767d9c084fc7a6717769140428f31b`, no
 upstream delta at start). Code SHA for the S1 evidence below:
-`826958e8ee23de36b8d4658d6e6d56c4aeabafc9`. Logs live in the Git-ignored
+`cec6e273ab7cc62580d6c6887e83522b919358c0`. Logs live in the Git-ignored
 `.flowproof/task-logs/006-project-live-verification/`.
 
 ## Commits
@@ -24,6 +24,7 @@ upstream delta at start). Code SHA for the S1 evidence below:
 | `009dd21` | T004, T005 | Strict closed project-live contracts and contract tests |
 | `5c794e8` | T006, T007 | Outside-project owner-only project store and tests |
 | `826958e` | T008, T009 | Run-state helpers, lifecycle/ownership skeleton and tests |
+| `cec6e27` | T004, T005 | Parent-review fix: completed result invocation summaries require the observed requested model and response ID; a ready capture forbids dropped/unsupported counters |
 
 T001–T005 were committed by the first S1 run; that run's output exceeded the CLI transcript limit, so
 the parent recovered HEAD `009dd21` and is reviewing those commits independently. T006–T009 were
@@ -36,7 +37,7 @@ completed in the recovery run. Both runs used this worktree as the only writer.
 | T001 | `tests/integration/project-live-fixture.test.ts` (5): lock/manifest verification, clean independent repo outside FlowProof, snapshot detects tracked/untracked/ignored/index/refs/Git-dir changes | `t001.log` |
 | T002 | `tests/unit/project-runtime-preparation.test.ts` (7); actual image prepared and re-verified (below) | `t002-unit.log`, `t002-mutation.log`, `t002-prepare.out`, `t002-verify.out`, `s1-image-verify.out` |
 | T003 | `tests/integration/project-live-discovery.test.ts` (5): `pnpm test` listing, a bare run, negated project filters and default Playwright discovery never reach the live smoke or manual runner; only explicit `--project project-meta-smoke` can, and it fails rather than passing vacuously when its file is absent | `t003-red.log` → `t003-green.log` |
-| T004/T005 | `tests/contract/project-contracts.test.ts` (49) | `t004-red.log` → `t005-green.log` |
+| T004/T005 | `tests/contract/project-contracts.test.ts` (51) | `t004-red.log` → `t005-green.log`; review fix `t005-fix-red.log` (2 failed) → `t005-fix-green.log` (51 passed) |
 | T006/T007 | `tests/unit/project-store.test.ts` (18) | `t006-red.log` (18 failed on assertions against a stub) → `t007-green.log` (18 passed) |
 | T008/T009 | `tests/unit/project-lifecycle.test.ts` (15) | `t008-red.log` (15 failed on assertions against stubs) → `t009-green.log` (15 passed) |
 
@@ -44,7 +45,7 @@ completed in the recovery run. Both runs used this worktree as the only writer.
 
 Private manifest `.flowproof/task-logs/006-project-live-verification/vite-static-v1.manifest.json`
 (`manifest_sha256` `17a86078eb55e2169f40e90eb17a1caea4c361fcd085710b976a8655f8963139`), prepared
-2026-11-04T10:54:55Z with Docker 29.1.3, re-verified at the S1 code SHA with `verify --manifest`:
+2026-11-04T10:54:55Z with Docker 29.1.3, re-verified at `826958e` with `verify --manifest` (`cec6e27` does not touch runtime preparation):
 
 - Image ID `sha256:7e0ba4db1a543d98c2591bc13c6bd1da14fd0a81c4aafa87eb948b4d9c1cdb43`, linux/amd64, user
   `65532:65532`; base `node:24.16.0-bookworm-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c574f736c476489d09f560a203`.
@@ -57,16 +58,16 @@ Private manifest `.flowproof/task-logs/006-project-live-verification/vite-static
 - Preparation self-check (`--network=none`): sample build passed and `node --test` project check passed
   (3 tests). This is an operator preparation smoke, not selected-project execution.
 
-## S1 Validation (code SHA `826958e`)
+## S1 Validation (code SHA `cec6e27`)
 
 | Check | Result | Log |
 | --- | --- | --- |
-| `pnpm typecheck` | passed | `t009-typecheck.log` |
-| `pnpm build` | passed | `s1-build.log` |
+| `pnpm typecheck` | passed | `t005-fix-typecheck.log` |
+| `pnpm build` | passed | `s1-build-cec6e27.log` |
 | `git diff --check 9b3b962..HEAD` | clean | — |
-| S1 focused set, serial (6 files) | 99/99 passed | `s1-focused.log` |
-| Image `verify --manifest` | `verified`, IDs above | `s1-image-verify.out` |
-| Default Vitest suite, serial (`unit`, `contract`, `integration`, `ui`) | 55 files / 1820 tests passed (236 s) | `s1-default-suite.log` |
+| S1 focused set, serial (6 files) | 101/101 passed | `s1-focused-cec6e27.log` |
+| Image `verify --manifest` (at `826958e`) | `verified`, IDs above | `s1-image-verify.out` |
+| Default Vitest suite, serial (`unit`, `contract`, `integration`, `ui`), at `826958e` | 55 files / 1820 tests passed (236 s); `cec6e27` changes only the project contracts, imported solely by S1 modules/tests | `s1-default-suite.log` |
 
 Not run in S1: headed Playwright/browser suites (no UI change), the explicit `project-meta-smoke`
 gate, any model call, any full project-live flow or owner walkthrough.
