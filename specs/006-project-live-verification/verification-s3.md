@@ -112,3 +112,25 @@ Xvfb exits with each command. No Docker/container or image work was used. Port c
 are recorded by the completion report. The full 1165-test workspace suite and selected-project/live
 acceptance were not rerun; integration/order races T026, production workflow, model/provider, S5+, and
 S6 remain outside this slice by design.
+
+
+## Source-parent independent verification
+
+The source parent independently reviewed the final correction diff at `9eba3a0eed115493b03f3657bc7821f379d3a9d5`
+(implementation unchanged from `c56803e`) after the recovery writer settled. Under the exact shared
+`/tmp/flowproof-spec006-heavy.lock` lease, the parent reran workspace typecheck and build, the two-file
+S3 focused suite (**61/61**, no skips), the actual headed Chromium privacy suite (**8/8**, no skips),
+and the existing browser-capture/probe-install-order integration regressions (**10/10**, no skips).
+Logs are ignored under `.flowproof/task-logs/006-project-live-verification/parent-final/`.
+
+A separate direct-built-module probe, not the S3 test helpers or their in-process recorder fake,
+passed **40 assertions**: refused 1/2/3-character values cannot appear in locators, errors, navigation,
+source or assessed screenshots; clearing the registry restores a valid public control; case-changed,
+percent/double-percent/form-encoded reflections are refused; sensitive query and matrix parameters
+are rejected. This probe verifies sanitizer APIs, not a browser capture or provider submission.
+The Chromium suite supplies the separate real rendered-pixel evidence.
+
+The parent verified the exact four supported task marks, all 55 unchanged task definitions, and an
+unchanged requirements-quality checklist. Reserved ports were free after the owned tests. No model,
+selected-project acceptance, production integration or publication is claimed. S2/S4 results remain
+in their separate authorized worktrees rather than being silently combined here.
