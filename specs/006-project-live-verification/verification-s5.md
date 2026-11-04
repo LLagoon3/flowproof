@@ -172,3 +172,42 @@ These are module/protocol-contract checks, not proof of a reproduced baseline, a
 compatibility, full project workflow or human usability. T031 remains authored but unchecked until
 its explicit live execution in T053. Full default/headed hosted CI and exact-head review are separate
 publication/merge gates, recorded in PR metadata without a results-only source commit afterward.
+
+## Units D/D2 — CI E2E `canvas-plausible-wrong`: released frame shown live
+
+PR31 CI 41922770619 failed one legacy captured-verification case
+(`expectGuardedPane`: first `!frameAttached` sample index 5, last live-labelled index 5). Not a
+sample-count threshold: one rAF sample showed a live label on a physically detached iframe.
+
+Cause (code path, then controlled reproduction): `verify/capturedRun.ts` emits its `scan` and
+`cleanup` activity (which ends the live presentation in `selectCapturedTarget`) and then calls
+`disposeCapture`, whose `studio/launch.ts` `releaseTargetFrame` removes the iframe directly through
+CDP. The Studio learns of the activity only through the SSE stream and a React render, so nothing
+ordered the presentation against the physical removal; a late delivered measured-phase event could
+also present an already released frame as live. Not caused by the S5 model/prompt code.
+
+Fix (`cb41b5e`): `TargetPane` (captured mode only) observes its iframe's removal with a
+MutationObserver and commits a sticky `not-live` label with `flushSync` in that microtask, before
+the next frame; a later stale live event cannot re-live it, the iframe is never recreated, and
+cover/focus/guard, the keyed live wrapper, completed-evidence replacement and the legacy Studio are
+unchanged. The UI browser-safety allowlist adds exactly `react-dom` (same pinned 19.3.1 browser
+dependency as the allowed `react-dom/client`, root entry used only for `flushSync`); the engine/Zod/
+Node guard is unchanged.
+
+Harness fact: the E2E harness clones committed HEAD (`tests/support/repoFixture.ts`), so every run
+below names its exact tested SHA. Unit D's earlier "6 passed, 1 failed" run tested the test-only
+`9ec3669`, not the then-uncommitted fix.
+
+| Run (exact heavy lock) | Tested SHA | Result |
+| --- | --- | --- |
+| Unit D controlled red: 300 ms delay of the Studio's own run events | `9ec3669` (no fix) | failed as CI: released index 4, last live 5 |
+| Unit D2, fixed delay with fix | `cb41b5e` | original assertion passed; candidate-live then honestly never shown, so a fixed-delay expectation was nondeterministic and was replaced |
+| Deterministic red: hold Studio replay events until the iframe is detached, then deliver paced by animation frames | `d2d1c9a` (temporary revert of the fix, later dropped) | failed: `candidate-live` presented after the release |
+| Green: all captured-verification E2E (`--list`: 7 tests in 1 file) | `2fcbf74` | 7 passed, 0 skipped, 0 flaky |
+| UI project | `2fcbf74` | 4 files, 378 passed |
+| Typecheck + build | `2fcbf74` | passed |
+
+The held-event case asserts the hold engaged (`held > 0`, started while attached, drained). No timeout,
+retry or existing assertion was weakened; no fixed sleep decides the controlled case. No flowproof
+containers remained. Full suite, providers and publication were not run.
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/s5-unit-d{,2}/`.
