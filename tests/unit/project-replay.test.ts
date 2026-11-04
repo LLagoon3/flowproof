@@ -584,6 +584,8 @@ describe('compileFrozenReplay rejects before freezing', () => {
 interface FakeClock extends LifecycleClock {
   advanceNext(): boolean
   pending(): number
+  /** Moves time forward without firing timers, like a primitive that blocked the event loop. */
+  jump(ms: number): void
 }
 
 function fakeClock(): FakeClock {
@@ -610,6 +612,9 @@ function fakeClock(): FakeClock {
       return true
     },
     pending: () => timers.size,
+    jump(ms) {
+      now += ms
+    },
   }
 }
 
@@ -665,6 +670,14 @@ class FakePage {
   activeHang: FakePage['hang'] = null
   released = 0
   releaseFails = false
+  /** Timeout argument each primitive received, per method. */
+  readonly timeouts = new Map<string, number[]>()
+  /** Synchronous time a primitive takes, from the timeout it received. */
+  readonly durations = new Map<string, (timeoutMs: number) => number>()
+  /** Side effect run when a primitive is called (for example a hostile popup). */
+  readonly onCall = new Map<string, () => void>()
+  onRelease: (() => void) | null = null
+  onUrlRead: (() => void) | null = null
 
   constructor(readonly clock: FakeClock) {}
 
@@ -683,8 +696,12 @@ class FakePage {
     return element
   }
 
-  private record<T>(method: string, detail: string, run: () => T): Promise<T> {
+  private record<T>(method: string, detail: string, timeoutMs: number | null, run: () => T): Promise<T> {
     this.calls.push(detail === '' ? method : `${method}:${detail}`)
+    if (timeoutMs !== null) this.timeouts.set(method, [...(this.timeouts.get(method) ?? []), timeoutMs])
+    this.onCall.get(method)?.()
+    const duration = this.durations.get(method)
+    if (duration !== undefined && timeoutMs !== null) this.clock.jump(duration(timeoutMs))
     if (this.hang?.method === method) {
       const hang = this.hang
       this.hang = null
@@ -702,36 +719,40 @@ class FakePage {
     const key = (locator: Locator): string => canonicalJson(locator)
     return {
       viewport: () => this.viewportSize,
-      navigate: (url) =>
-        this.record('navigate', url, () => {
+      navigate: (url, timeout) =>
+        this.record('navigate', url, timeout, () => {
           this.url = url
           return { status: this.navigateStatus }
         }),
-      currentUrl: () => this.url,
-      count: (locator) => this.record('count', key(locator), () => this.matches(locator).length),
-      isVisible: (locator) => this.record('isVisible', key(locator), () => this.one(locator).visible),
-      fieldKind: (locator) => this.record('fieldKind', key(locator), () => this.one(locator).kind),
-      click: (locator) =>
-        this.record('click', key(locator), () => {
+      currentUrl: () => {
+        this.onUrlRead?.()
+        return this.url
+      },
+      count: (locator, timeout) => this.record('count', key(locator), timeout, () => this.matches(locator).length),
+      isVisible: (locator, timeout) => this.record('isVisible', key(locator), timeout, () => this.one(locator).visible),
+      fieldKind: (locator, timeout) => this.record('fieldKind', key(locator), timeout, () => this.one(locator).kind),
+      click: (locator, timeout) =>
+        this.record('click', key(locator), timeout, () => {
           this.onClick.get(this.one(locator).key)?.()
         }),
-      fill: (locator, value) =>
-        this.record('fill', `${key(locator)}=${value}`, () => {
+      fill: (locator, value, timeout) =>
+        this.record('fill', `${key(locator)}=${value}`, timeout, () => {
           this.one(locator).value = value
         }),
-      select: (locator, value) =>
-        this.record('select', `${key(locator)}=${value}`, () => {
+      select: (locator, value, timeout) =>
+        this.record('select', `${key(locator)}=${value}`, timeout, () => {
           this.one(locator).value = value
         }),
-      scroll: (locator, x, y) => this.record('scroll', `${locator === null ? 'page' : key(locator)}@${x},${y}`, () => undefined),
-      text: (locator) => this.record('text', key(locator), () => this.one(locator).text),
-      value: (locator) => this.record('value', key(locator), () => this.one(locator).value),
+      scroll: (locator, x, y, timeout) => this.record('scroll', `${locator === null ? 'page' : key(locator)}@${x},${y}`, timeout, () => undefined),
+      text: (locator, timeout) => this.record('text', key(locator), timeout, () => this.one(locator).text),
+      value: (locator, timeout) => this.record('value', key(locator), timeout, () => this.one(locator).value),
       violations: () => this.violationCodes,
     }
   }
 
   release = async (): Promise<void> => {
     this.released += 1
+    this.onRelease?.()
     // Like closing a browser context, release settles a call that was left in flight.
     if (this.activeHang?.resolveOnRelease === true) this.activeHang.resolve?.()
     if (this.releaseFails) throw new Error('context close failed')
@@ -802,7 +823,14 @@ const phaseConsole = (phase = 'baseline', availability: 'available' | 'unavailab
 })
 
 /** IN-PROCESS FAKE collector: attests availability and returns prepared observations. */
-function fakeCollector(options: { readonly available?: readonly ObservationType[]; readonly observations?: readonly Json[] } = {}): ReplayEvidenceCollector & {
+function fakeCollector(
+  options: {
+    readonly available?: readonly ObservationType[]
+    readonly observations?: readonly Json[]
+    readonly onCheckpoint?: (point: ReplayCheckpoint) => void
+    readonly onDrain?: () => void
+  } = {},
+): ReplayEvidenceCollector & {
   readonly checkpoints: ReplayCheckpoint[]
 } {
   const checkpoints: ReplayCheckpoint[] = []
@@ -812,8 +840,12 @@ function fakeCollector(options: { readonly available?: readonly ObservationType[
     available: (type) => available.has(type),
     checkpoint: async (point) => {
       checkpoints.push(point)
+      options.onCheckpoint?.(point)
     },
-    drain: async () => options.observations ?? [phaseImage()],
+    drain: async () => {
+      options.onDrain?.()
+      return options.observations ?? [phaseImage()]
+    },
   }
 }
 
@@ -1307,6 +1339,247 @@ describe('executeFrozenReplay bounds, cancellation and cleanup', () => {
   })
 })
 
+describe('executeFrozenReplay fails closed on late target events', () => {
+  type Stage = 'end checkpoint' | 'condition evaluation' | 'evidence drain' | 'session release'
+  type LateEvent = 'popup' | 'origin'
+
+  const runWith = async (stage: Stage | null, event: LateEvent, duplicates: boolean): Promise<{ result: ReplayExecutionResult; drained: boolean }> => {
+    let target: FakePage | undefined
+    let drained = false
+    const happen = (): void => {
+      if (target === undefined) return
+      if (event === 'popup') target.violationCodes.push('REPLAY_POPUP')
+      else target.url = 'http://localhost:49999/studio'
+    }
+    const collector = fakeCollector({
+      observations: [phaseImage()],
+      onCheckpoint: (point) => {
+        if (stage === 'end checkpoint' && point.kind === 'end') happen()
+      },
+      onDrain: () => {
+        drained = true
+        if (stage === 'evidence drain') happen()
+      },
+    })
+    const { result } = await execute(compiled(), {
+      collector,
+      page: (clock) => {
+        const app = taskApp(clock, { duplicates })
+        target = app
+        // `text` is used only by the final text condition in this definition.
+        if (stage === 'condition evaluation') app.onCall.set('text', happen)
+        if (stage === 'session release') app.onRelease = happen
+        return app
+      },
+    })
+    return { result, drained }
+  }
+
+  const cases: [LateEvent, Stage, boolean][] = []
+  for (const stage of ['end checkpoint', 'condition evaluation', 'evidence drain', 'session release'] as const) {
+    for (const event of ['popup', 'origin'] as const) {
+      // After release the page is gone; only host-recorded events (popup) remain observable.
+      if (stage === 'session release' && event === 'origin') continue
+      for (const duplicates of [false, true]) cases.push([event, stage, duplicates])
+    }
+  }
+
+  it.each(cases)('a late %s during %s leaves no verdict (defective target: %s)', async (event, stage, duplicates) => {
+    const control = await runWith(null, event, duplicates)
+    expect(control.result.outcome).toBe(duplicates ? 'conditions-unsatisfied' : 'conditions-satisfied')
+    const { result: late, drained } = await runWith(stage, event, duplicates)
+    expect(late.outcome).toBe('operational-failure')
+    expect(late.reason).toBe(event === 'popup' ? 'REPLAY_POPUP' : 'NAVIGATION_LEFT_TARGET')
+    expect(late.released).toBe(true)
+    expect(late.joined).toBe(true)
+    // The event is caught at the stage where it happened, before any later stage runs.
+    const evaluated = late.conditions.map((condition) => condition.status !== 'not_evaluated')
+    if (stage === 'end checkpoint') expect(evaluated).toEqual([false, false, false])
+    if (stage === 'condition evaluation') expect(evaluated).toEqual([true, true, false])
+    expect(drained).toBe(stage === 'evidence drain' || stage === 'session release')
+  })
+})
+
+describe('executeFrozenReplay propagates effective wait, action and phase deadlines', () => {
+  const once = (ms: number): ((timeoutMs: number) => number) => {
+    let used = false
+    return () => {
+      if (used) return 0
+      used = true
+      return ms
+    }
+  }
+  const candidatePage =
+    (prepare: (page: FakePage) => void) =>
+    (clock: FakeClock): FakePage => {
+      const app = taskApp(clock, { duplicates: false })
+      prepare(app)
+      return app
+    }
+  const imageOnly = () => fakeCollector({ observations: [phaseImage()] })
+  const shortWait = () =>
+    compiled({ actions: [...DEFAULT_ACTIONS.slice(0, 3), { op: 'wait', until: { kind: 'text', locator: SUMMARY, text: '1 open task' }, timeout_ms: 20 }] })
+
+  it('gives a declared wait only its remaining time and rejects a success that arrives after it', async () => {
+    const honoring = await execute(shortWait(), { page: candidatePage((page) => page.durations.set('text', (timeout) => timeout - 1)), collector: imageOnly() })
+    // The wait's text probe receives the 20 ms declared wait, not the 10-second action bound.
+    expect(honoring.page.timeouts.get('text')?.[0]).toBe(20)
+    expect(honoring.result.actions[3]).toMatchObject({ status: 'executed', reason: null })
+    expect(honoring.result.outcome).toBe('conditions-satisfied')
+
+    const late = await execute(shortWait(), { page: candidatePage((page) => page.durations.set('text', once(9_999))), collector: imageOnly() })
+    expect(late.result.actions[3]).toMatchObject({ status: 'failed', reason: 'WAIT_TIMEOUT' })
+    expect(late.result.outcome).toBe('operational-failure')
+    expect(late.result.reason).toBe('WAIT_TIMEOUT')
+    expect(late.result.released && late.result.joined).toBe(true)
+  })
+
+  it('rejects a path wait whose state was read only after the declared wait elapsed', async () => {
+    const frozen = compiled({ actions: [{ op: 'wait', until: { kind: 'path', path: '/' }, timeout_ms: 20 }, DEFAULT_ACTIONS[2] as Json] })
+    const run = async (jumpMs: number) =>
+      execute(frozen, {
+        page: candidatePage((page) => {
+          // URL reads: after entry, after the start checkpoint, then the wait's own probe.
+          let reads = 0
+          page.onUrlRead = () => {
+            reads += 1
+            if (reads === 3) page.clock.jump(jumpMs)
+          }
+        }),
+        collector: imageOnly(),
+      })
+    expect((await run(20)).result.actions[0]).toMatchObject({ status: 'executed', reason: null })
+    const late = await run(21)
+    expect(late.result.actions[0]).toMatchObject({ status: 'failed', reason: 'WAIT_TIMEOUT' })
+    expect(late.page.calls.some((call) => call.startsWith('click'))).toBe(false)
+  })
+
+  it('shares one 10-second bound across locator resolution and the action primitive', async () => {
+    const appearLate = (page: FakePage): void => {
+      const add = page.elements.find((element) => element.key === 'add')
+      if (add !== undefined) add.appearsAt = 9_000
+    }
+    const inTime = await execute(compiled(), { page: candidatePage(appearLate), collector: imageOnly() })
+    expect(inTime.page.timeouts.get('click')).toEqual([1_000])
+    expect(inTime.result.outcome).toBe('conditions-satisfied')
+
+    const lateClick = await execute(compiled(), {
+      page: candidatePage((page) => {
+        appearLate(page)
+        page.durations.set('click', () => 1_001)
+      }),
+      collector: imageOnly(),
+    })
+    expect(lateClick.result.actions[2]).toMatchObject({ status: 'failed', reason: 'REPLAY_ACTION_TIMEOUT' })
+    expect(lateClick.result.outcome).toBe('operational-failure')
+  })
+
+  it('names the last observed unmet state when the window closes during a probe', async () => {
+    const { page, result } = await execute(compiled(), {
+      page: candidatePage((app) => {
+        app.elements.push({ key: 'add-2', role: 'button', name: 'Add task', visible: true, text: 'Add task', value: '', kind: 'unsupported' })
+        // The probe started with the last 100 ms of the window overruns it.
+        app.durations.set('count', (timeout) => (timeout <= 100 ? timeout + 1 : 0))
+      }),
+      collector: imageOnly(),
+    })
+    expect(result.actions[2]).toMatchObject({ status: 'failed', reason: 'LOCATOR_AMBIGUOUS' })
+    expect(page.calls.some((call) => call.startsWith('click'))).toBe(false)
+  })
+
+  it('rejects a locator resolution that completes after its window without acting', async () => {
+    const { page, result } = await execute(compiled(), { page: candidatePage((app) => app.durations.set('count', once(10_500))), collector: imageOnly() })
+    expect(result.actions[0]).toMatchObject({ status: 'failed', reason: 'REPLAY_ACTION_TIMEOUT' })
+    expect(page.calls.some((call) => call.startsWith('select') || call.startsWith('fieldKind'))).toBe(false)
+  })
+
+  it('caps primitives by the remaining 120-second phase and rejects a late arrival at the phase end', async () => {
+    const steps = 14
+    const recorded = Array.from({ length: steps }, (_, index) => ({ type: 'click', locators: [role(`Step ${index + 1}`)] }))
+    const actions = Array.from({ length: steps }, (_, index) => ({ op: 'click', locator: role(`Step ${index + 1}`) }))
+    const frozen = (): FrozenReplay => compiled({ recorded, actions, conditions: [{ kind: 'element-count', locator: ITEM, count: 0 }] })
+    const stepsPage = (duration: (timeoutMs: number) => number) => (clock: FakeClock): FakePage => {
+      const app = new FakePage(clock)
+      app.elements = Array.from({ length: steps }, (_, index) => ({ key: `step-${index + 1}`, role: 'button', name: `Step ${index + 1}`, visible: true, text: null, value: '', kind: 'unsupported' as const }))
+      app.durations.set('click', duration)
+      return app
+    }
+    const honoring = await execute(frozen(), { page: stepsPage((timeout) => Math.min(9_500, timeout - 1)), collector: imageOnly() })
+    expect(honoring.page.timeouts.get('click')).toEqual([...Array.from({ length: 12 }, () => 10_000), 6_000, 1])
+    expect(honoring.result.outcome).toBe('conditions-satisfied')
+    expect(honoring.clock.now()).toBeLessThan(EXECUTION_LIMITS.phase_timeout_ms)
+
+    const late = await execute(frozen(), { page: stepsPage(() => 9_500), collector: imageOnly() })
+    expect(late.result.actions[12]).toMatchObject({ status: 'failed', reason: 'REPLAY_PHASE_TIMEOUT' })
+    expect(late.result.actions[13]?.status).toBe('not_executed')
+    expect(late.result.reason).toBe('REPLAY_PHASE_TIMEOUT')
+  })
+
+  it('bounds condition evaluation and final collection, rejecting successes that arrive late', async () => {
+    const lateCondition = await execute(compiled(), { page: candidatePage((page) => page.durations.set('text', () => 10_001)), collector: imageOnly() })
+    expect(lateCondition.result.conditions[1]).toMatchObject({ status: 'unevaluable', reason: 'CONDITION_TIMEOUT' })
+    expect(lateCondition.result.outcome).toBe('operational-failure')
+
+    for (const stage of ['checkpoint', 'drain'] as const) {
+      let target: FakePage | undefined
+      const jump = (): void => target?.clock.jump(10_001)
+      const collector = fakeCollector({
+        observations: [phaseImage()],
+        onCheckpoint: (point) => {
+          if (stage === 'checkpoint' && point.kind === 'end') jump()
+        },
+        onDrain: () => {
+          if (stage === 'drain') jump()
+        },
+      })
+      const { result } = await execute(compiled(), {
+        page: candidatePage((page) => {
+          target = page
+        }),
+        collector,
+      })
+      expect(result.outcome, stage).toBe('operational-failure')
+      expect(result.reason, stage).toBe('EVIDENCE_COLLECTION_FAILED')
+      expect(result.released && result.joined).toBe(true)
+    }
+  })
+
+  it('stays canceled when cancellation arrives during final collection and joins the drain', async () => {
+    let target: FakePage | undefined
+    let abort: (() => void) | undefined
+    const collector: ReplayEvidenceCollector = {
+      available: () => true,
+      drain: () =>
+        new Promise((resolve) => {
+          if (target !== undefined) target.onRelease = () => resolve([phaseImage()])
+          queueMicrotask(() => abort?.())
+        }),
+    }
+    const { result, page } = await execute(compiled(), {
+      page: candidatePage((app) => {
+        target = app
+      }),
+      collector,
+      during: (_page, controller) => {
+        abort = () => controller.abort()
+      },
+    })
+    expect(result.outcome).toBe('canceled')
+    expect(result.joined).toBe(true)
+    expect(page.released).toBe(1)
+  })
+
+  it('rejects duplicate or wrong-viewport phase observations', async () => {
+    const duplicate = await execute(compiled(), { page: candidatePage(() => undefined), collector: fakeCollector({ observations: [phaseImage(), phaseImage()] }) })
+    expect(duplicate.result.reason).toBe('EVIDENCE_BINDING_MISMATCH')
+    const small = phaseImage()
+    Object.assign(small.payload as Json, { viewport: { width: 1024, height: 768 }, clip: { x: 0, y: 0, width: 1024, height: 768 } })
+    const viewport = await execute(compiled(), { page: candidatePage(() => undefined), collector: fakeCollector({ observations: [small] }) })
+    expect(viewport.result.reason).toBe('EVIDENCE_BINDING_MISMATCH')
+    expect(viewport.result.outcome).toBe('operational-failure')
+  })
+})
+
 describe('frozen definitions persist only outside the candidate mount', () => {
   it('stores the exact definition in the outside-checkout store and detects any other content', async () => {
     const temp = await createTempDirectory('flowproof-replay-store-')
@@ -1350,6 +1623,8 @@ const syntheticPage = (duplicates: boolean): string => `<!doctype html><html><he
 <button type="button" id="add">Add task</button>
 <button type="button" class="dup">Duplicate</button><button type="button" class="dup">Duplicate</button>
 <button type="button" id="remember">Remember</button>
+<button type="button" id="open-later">Open later</button>
+<button type="button" id="leave-later">Leave later</button>
 <a href="http://localhost:${EXTERNAL_PORT}/help">Help</a>
 <ul id="list"></ul>
 <p data-testid="task-summary">0 open tasks</p>
@@ -1359,6 +1634,8 @@ const syntheticPage = (duplicates: boolean): string => `<!doctype html><html><he
   document.querySelector('[data-testid="stored-on-load"]').textContent = localStorage.getItem('remembered') || 'none';
   fetch('http://localhost:${EXTERNAL_PORT}/beacon').catch(function () {});
   document.getElementById('remember').addEventListener('click', function () { localStorage.setItem('remembered', 'yes'); document.cookie = 'remembered=yes'; });
+  document.getElementById('open-later').addEventListener('click', function () { setTimeout(function () { window.open('/', '_blank'); }, 300); });
+  document.getElementById('leave-later').addEventListener('click', function () { setTimeout(function () { location.href = 'http://localhost:${EXTERNAL_PORT}/away'; }, 300); });
   document.getElementById('add').addEventListener('click', function () {
     var title = document.querySelector('[data-testid="task-title"]').value;
     for (var i = 0; i < ${duplicates ? 2 : 1}; i += 1) { var li = document.createElement('li'); li.setAttribute('data-testid', 'task-item'); li.textContent = title; document.getElementById('list').appendChild(li); }
@@ -1474,6 +1751,32 @@ describe.runIf(CHROMIUM)('actual Chromium replay session on a synthetic page (op
     } finally {
       await context.close()
     }
+  }, 30_000)
+
+  it('fails closed when a popup or origin change arrives during final evidence collection', async () => {
+    // IN-PROCESS FAKE collector whose drain takes 1.5 s, so the page's delayed (300 ms) event lands inside it.
+    const slowDrain = (): ReplayEvidenceCollector => ({
+      available: (type) => type === 'image',
+      drain: () => new Promise((resolve) => setTimeout(() => resolve([phaseImage()]), 1_500)),
+    })
+    const before = externalHits
+    for (const [name, reason] of [
+      ['Open later', 'REPLAY_POPUP'],
+      ['Leave later', 'NAVIGATION_LEFT_TARGET'],
+    ] as const) {
+      const frozen = chromiumScenario({
+        recorded: [{ type: 'click', locators: [role(name)] }],
+        actions: [{ op: 'click', locator: role(name) }],
+        conditions: [{ kind: 'element-count', locator: ITEM, count: 0 }],
+      })
+      const result = await run(frozen, 'baseline', BUILD, slowDrain())
+      expect(result.actions[0]?.status, name).toBe('executed')
+      expect(result.conditions[0]?.status, name).toBe('satisfied')
+      expect(result.outcome, name).toBe('operational-failure')
+      expect(result.reason, name).toBe(reason)
+      expect(result.released).toBe(true)
+    }
+    expect(externalHits).toBe(before)
   }, 30_000)
 
   it('stops when a click leaves the target origin and refuses the external request', async () => {

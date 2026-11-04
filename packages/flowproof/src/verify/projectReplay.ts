@@ -559,7 +559,11 @@ export interface ReplayEvidenceCollector {
   /** Host-attested availability of a collector in this session. */
   available(type: ObservationType): boolean
   checkpoint?(point: ReplayCheckpoint): Promise<void>
-  /** Observations collected in this session; untrusted until parsed and bound. */
+  /**
+   * Ends the phase's observation window and returns what was collected since the session opened;
+   * untrusted until parsed and bound. Events after drain belong to no verdict: `no-error` asserts
+   * absence only within this window, never that the page cannot raise the error later.
+   */
   drain(): Promise<readonly unknown[]>
 }
 
@@ -780,8 +784,25 @@ export interface ReplayExecutionOptions {
 
 type Guarded<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string }
 type Probe<T> = { readonly done: true; readonly value: T } | { readonly done: false; readonly reason: string; readonly final?: boolean }
+/** An absolute monotonic deadline and the reason reported once it passes. */
+interface Bound {
+  readonly deadline: number
+  readonly reason: string
+}
 
 const driverReason = (error: unknown): string => (error instanceof ReplayDriverError && REASON.test(error.code) ? error.code : 'REPLAY_ACTION_FAILED')
+
+/** The first host-recorded unsupported event (popup, dialog, download), or null. */
+function recordedViolation(driver: ReplayDriver): string | null {
+  let violations: readonly string[]
+  try {
+    violations = driver.violations()
+  } catch {
+    return 'REPLAY_ACTION_FAILED'
+  }
+  if (violations.length === 0) return null
+  return violations.find((code) => REASON.test(code)) ?? 'REPLAY_ACTION_FAILED'
+}
 
 function timed<T>(clock: LifecycleClock, promise: Promise<T>, ms: number, onTimeout: T): Promise<T> {
   return new Promise((resolve) => {
@@ -836,7 +857,12 @@ export async function executeFrozenReplay(frozen: unknown, session: ReplaySessio
   const joined = inflight.size === 0 || (await timed(clock, Promise.allSettled([...inflight]).then(() => true), EXECUTION_LIMITS.stop_grace_ms, false))
   // A cancellation requested at any point before the result is returned is sticky.
   const canceled = signal.aborted && body.outcome !== 'rejected'
-  return deepFreeze({ ...body, ...(canceled ? { outcome: 'canceled' as const, reason: 'REPLAY_CANCELED' } : {}), released, joined })
+  if (canceled) return deepFreeze({ ...body, outcome: 'canceled' as const, reason: 'REPLAY_CANCELED', released, joined })
+  // A verdict survives only if no producer outlived it and nothing unsupported happened up to release.
+  const verdict = body.outcome === 'conditions-satisfied' || body.outcome === 'conditions-unsatisfied'
+  const late = verdict ? (joined ? recordedViolation(state.driver) : 'REPLAY_PRODUCER_NOT_JOINED') : null
+  if (late !== null) return deepFreeze({ ...body, outcome: 'operational-failure' as const, reason: late, released, joined })
+  return deepFreeze({ ...body, released, joined })
 }
 
 async function interpret(
@@ -899,19 +925,30 @@ async function interpret(
     return { ...rejected('REPLAY_VIEWPORT_MISMATCH', binding), actions, conditions }
   }
 
-  const deadline = clock.now() + EXECUTION_LIMITS.phase_timeout_ms
+  const phaseDeadline = clock.now() + EXECUTION_LIMITS.phase_timeout_ms
 
-  /** One bounded driver call raced against cancellation and the action/phase bound. */
-  const call = <T>(produce: (timeoutMs: number) => Promise<T>): Promise<Guarded<T>> => {
+  /** A bound of `ms` from now, reported with `reason`; the fixed phase deadline always caps it. */
+  const within = (ms: number, reason: string): Bound => {
+    const own = clock.now() + ms
+    return own < phaseDeadline ? { deadline: own, reason } : { deadline: phaseDeadline, reason: 'REPLAY_PHASE_TIMEOUT' }
+  }
+
+  /**
+   * One driver call under `limit`. The primitive receives only the time left before the deadline;
+   * the call settles at the deadline or on cancellation; and a result arriving after the deadline
+   * (for example after a blocked event loop) is a timeout, never a success.
+   */
+  const call = <T>(limit: Bound, produce: (timeoutMs: number) => Promise<T>): Promise<Guarded<T>> => {
     if (signal.aborted) return Promise.resolve({ ok: false, reason: 'REPLAY_CANCELED' })
-    const remaining = deadline - clock.now()
-    if (remaining <= 0) return Promise.resolve({ ok: false, reason: 'REPLAY_PHASE_TIMEOUT' })
-    const bound = Math.min(PROJECT_LIMITS.maxWaitMs, remaining)
+    const remaining = limit.deadline - clock.now()
+    if (remaining <= 0) return Promise.resolve({ ok: false, reason: limit.reason })
+    // Playwright treats a zero timeout as unlimited, so the smallest bound handed out is 1 ms.
+    const timeoutMs = Math.max(1, Math.floor(remaining))
     let promise: Promise<T>
     try {
-      promise = Promise.resolve(produce(bound))
+      promise = Promise.resolve(produce(timeoutMs))
     } catch (error) {
-      return Promise.resolve({ ok: false, reason: driverReason(error) })
+      return Promise.resolve({ ok: false, reason: clock.now() > limit.deadline ? limit.reason : driverReason(error) })
     }
     inflight.add(promise)
     const forget = (): void => {
@@ -928,13 +965,14 @@ async function interpret(
         resolve(value)
       }
       const onAbort = (): void => settle({ ok: false, reason: 'REPLAY_CANCELED' })
-      const timer = clock.setTimer(() => settle({ ok: false, reason: bound < PROJECT_LIMITS.maxWaitMs ? 'REPLAY_PHASE_TIMEOUT' : 'REPLAY_ACTION_TIMEOUT' }), bound)
+      const late = (): boolean => clock.now() > limit.deadline
+      const timer = clock.setTimer(() => settle({ ok: false, reason: limit.reason }), Math.max(0, limit.deadline - clock.now()))
       signal.addEventListener('abort', onAbort, { once: true })
       // A driver that aborted synchronously while starting the call is still canceled.
       if (signal.aborted) onAbort()
       promise.then(
-        (value) => settle({ ok: true, value }),
-        (error: unknown) => settle({ ok: false, reason: driverReason(error) }),
+        (value) => settle(late() ? { ok: false, reason: limit.reason } : { ok: true, value }),
+        (error: unknown) => settle({ ok: false, reason: late() ? limit.reason : driverReason(error) }),
       )
     })
   }
@@ -953,16 +991,28 @@ async function interpret(
       signal.addEventListener('abort', onAbort, { once: true })
     })
 
-  /** Probes deterministic state immediately, then at the poll interval until done or the bound elapses. */
-  const poll = async <T>(probe: () => Promise<Probe<T>>, timeoutMs: number): Promise<Guarded<T>> => {
-    const until = Math.min(clock.now() + timeoutMs, deadline)
+  /**
+   * Probes deterministic state immediately, then at the poll interval, under one bound shared by every
+   * probe call. A probe that succeeds after the bound passed is not a success.
+   */
+  const poll = async <T>(limit: Bound, probe: (limit: Bound) => Promise<Probe<T>>): Promise<Guarded<T>> => {
+    let unmet: string | null = null
     for (;;) {
-      const result = await probe()
-      if (result.done) return { ok: true, value: result.value }
-      if (result.final === true || signal.aborted) return { ok: false, reason: signal.aborted ? 'REPLAY_CANCELED' : result.reason }
-      const left = until - clock.now()
-      if (left <= 0) return { ok: false, reason: clock.now() >= deadline ? 'REPLAY_PHASE_TIMEOUT' : result.reason }
+      const result = await probe(limit)
+      if (signal.aborted) return { ok: false, reason: 'REPLAY_CANCELED' }
+      if (result.done) return clock.now() <= limit.deadline ? { ok: true, value: result.value } : { ok: false, reason: limit.reason }
+      if (result.final === true) {
+        // A probe cut off by this window's own deadline reports the state observed before it.
+        const cutOff = result.reason === limit.reason && limit.reason !== 'REPLAY_PHASE_TIMEOUT'
+        return { ok: false, reason: cutOff && unmet !== null ? unmet : result.reason }
+      }
+      unmet = result.reason
+      // The last unmet state names the failure (not found, ambiguous, wait) unless the phase ended.
+      const expired = { ok: false as const, reason: limit.reason === 'REPLAY_PHASE_TIMEOUT' ? limit.reason : result.reason }
+      const left = limit.deadline - clock.now()
+      if (left <= 0) return expired
       if (!(await delay(Math.min(REPLAY_POLL_INTERVAL_MS, left)))) return { ok: false, reason: 'REPLAY_CANCELED' }
+      if (limit.deadline - clock.now() <= 0) return expired
     }
   }
 
@@ -976,31 +1026,19 @@ async function interpret(
     }
   }
 
-  const stillOnTarget = (): string | null => {
-    let violations: readonly string[] = []
-    try {
-      violations = driver.violations()
-    } catch {
-      return 'REPLAY_ACTION_FAILED'
-    }
-    const violation = violations.find((code) => REASON.test(code))
-    if (violation !== undefined) return violation
-    if (violations.length > 0) return 'REPLAY_ACTION_FAILED'
-    return targetPath() === null ? 'NAVIGATION_LEFT_TARGET' : null
-  }
-
-  const resolveCount = async (locator: Locator): Promise<Guarded<number>> => call((timeout) => driver.count(locator, timeout))
+  /** Checked after every step, condition and collection: a late popup/dialog/download or origin change fails closed. */
+  const stillOnTarget = (): string | null => recordedViolation(driver) ?? (targetPath() === null ? 'NAVIGATION_LEFT_TARGET' : null)
 
   /** Waits (bounded) until the locator resolves to exactly one element. */
-  const unique = (locator: Locator): Promise<Guarded<true>> =>
-    poll<true>(async () => {
-      const counted = await resolveCount(locator)
+  const unique = (locator: Locator, limit: Bound): Promise<Guarded<true>> =>
+    poll<true>(limit, async (bound) => {
+      const counted = await call(bound, (timeout) => driver.count(locator, timeout))
       if (!counted.ok) return { done: false, reason: counted.reason, final: true }
       if (counted.value === 1) return { done: true, value: true }
       return { done: false, reason: counted.value === 0 ? 'LOCATOR_NOT_FOUND' : 'LOCATOR_AMBIGUOUS' }
-    }, PROJECT_LIMITS.maxWaitMs)
+    })
 
-  const navigate = async (path: string): Promise<string | null> => {
+  const navigate = async (path: string, limit: Bound): Promise<string | null> => {
     let url: URL
     try {
       url = new URL(path, origin)
@@ -1008,141 +1046,168 @@ async function interpret(
       return 'NAVIGATION_EXTERNAL'
     }
     if (url.origin !== origin) return 'NAVIGATION_EXTERNAL'
-    const navigated = await call((timeout) => driver.navigate(url.href, timeout))
+    const navigated = await call(limit, (timeout) => driver.navigate(url.href, timeout))
     if (!navigated.ok) return navigated.reason === 'REPLAY_ACTION_FAILED' ? 'NAVIGATION_FAILED' : navigated.reason
     const status = navigated.value.status
     if (status !== null && (status < 200 || status >= 400)) return 'NAVIGATION_HTTP_ERROR'
     return null
   }
 
-  const probeWait = async (until: WaitAction['until']): Promise<Probe<true>> => {
+  const probeWait = async (until: WaitAction['until'], limit: Bound): Promise<Probe<true>> => {
     if (until.kind === 'path') {
       const path = targetPath()
       if (path === null) return { done: false, reason: 'NAVIGATION_LEFT_TARGET', final: true }
       return path === until.path ? { done: true, value: true } : { done: false, reason: 'WAIT_TIMEOUT' }
     }
-    const counted = await resolveCount(until.locator)
+    const counted = await call(limit, (timeout) => driver.count(until.locator, timeout))
     if (!counted.ok) return { done: false, reason: counted.reason, final: true }
     if (counted.value !== 1) return { done: false, reason: counted.value === 0 ? 'WAIT_TIMEOUT' : 'LOCATOR_AMBIGUOUS' }
     if (until.kind === 'visible') {
-      const visible = await call((timeout) => driver.isVisible(until.locator, timeout))
+      const visible = await call(limit, (timeout) => driver.isVisible(until.locator, timeout))
       if (!visible.ok) return { done: false, reason: visible.reason, final: true }
       return visible.value ? { done: true, value: true } : { done: false, reason: 'WAIT_TIMEOUT' }
     }
-    const text = await call((timeout) => driver.text(until.locator, timeout))
+    const text = await call(limit, (timeout) => driver.text(until.locator, timeout))
     if (!text.ok) return { done: false, reason: text.reason, final: true }
     return text.value !== null && normalizeText(text.value) === normalizeText(until.text) ? { done: true, value: true } : { done: false, reason: 'WAIT_TIMEOUT' }
   }
 
+  /** One action: a declared wait gets its own timeout; any other action shares one 10-second bound. */
   const perform = async (action: ReplayAction): Promise<string | null> => {
+    if (action.op === 'wait') {
+      const waited = await poll(within(action.timeout_ms, 'WAIT_TIMEOUT'), (limit) => probeWait(action.until, limit))
+      return waited.ok ? null : waited.reason
+    }
+    const limit = within(PROJECT_LIMITS.maxWaitMs, 'REPLAY_ACTION_TIMEOUT')
     switch (action.op) {
       case 'navigate':
-        return navigate(action.path)
-      case 'wait': {
-        const waited = await poll(() => probeWait(action.until), action.timeout_ms)
-        return waited.ok ? null : waited.reason
-      }
+        return navigate(action.path, limit)
       case 'scroll': {
         const element = action.target.kind === 'element' ? action.target.locator : null
         if (element !== null) {
-          const resolved = await unique(element)
+          const resolved = await unique(element, limit)
           if (!resolved.ok) return resolved.reason
         }
-        const scrolled = await call((timeout) => driver.scroll(element, action.x, action.y, timeout))
+        const scrolled = await call(limit, (timeout) => driver.scroll(element, action.x, action.y, timeout))
         return scrolled.ok ? null : scrolled.reason
       }
       case 'click':
       case 'fill':
       case 'select': {
-        const resolved = await unique(action.locator)
+        const resolved = await unique(action.locator, limit)
         if (!resolved.ok) return resolved.reason
         if (action.op === 'click') {
-          const clicked = await call((timeout) => driver.click(action.locator, timeout))
+          const clicked = await call(limit, (timeout) => driver.click(action.locator, timeout))
           return clicked.ok ? null : clicked.reason
         }
-        const kind = await call((timeout) => driver.fieldKind(action.locator, timeout))
+        const kind = await call(limit, (timeout) => driver.fieldKind(action.locator, timeout))
         if (!kind.ok) return kind.reason
         if (action.op === 'fill') {
           if (kind.value !== 'text') return 'FILL_TARGET_UNSUPPORTED'
-          const filled = await call((timeout) => driver.fill(action.locator, action.value, timeout))
+          const filled = await call(limit, (timeout) => driver.fill(action.locator, action.value, timeout))
           return filled.ok ? null : filled.reason
         }
         if (kind.value !== 'select') return 'SELECT_TARGET_UNSUPPORTED'
-        const selected = await call((timeout) => driver.select(action.locator, action.value, timeout))
+        const selected = await call(limit, (timeout) => driver.select(action.locator, action.value, timeout))
         return selected.ok ? null : selected.reason
       }
     }
   }
 
+  const collectionReason = (reason: string): string => (reason === 'REPLAY_CANCELED' || reason === 'REPLAY_PHASE_TIMEOUT' ? reason : 'EVIDENCE_COLLECTION_FAILED')
+
   const checkpoint = async (point: ReplayCheckpoint): Promise<string | null> => {
     const record = collector?.checkpoint
     if (collector === null || record === undefined) return null
-    const done = await call(() => record.call(collector, point))
-    return done.ok ? null : done.reason === 'REPLAY_CANCELED' ? done.reason : 'EVIDENCE_COLLECTION_FAILED'
+    const done = await call(within(PROJECT_LIMITS.maxWaitMs, 'EVIDENCE_COLLECTION_FAILED'), () => record.call(collector, point))
+    return done.ok ? null : collectionReason(done.reason)
   }
+
+  const stopped = (reason: string): ReplayOutcome => (reason === 'REPLAY_CANCELED' ? 'canceled' : 'operational-failure')
 
   // Entry state, then every action in frozen order. Any failure stops further actions.
-  const entry = (await navigate(definition.replay.entry_path)) ?? stillOnTarget() ?? (await checkpoint({ kind: 'start', action_index: null }))
-  if (entry !== null) return finish(entry === 'REPLAY_CANCELED' ? 'canceled' : 'operational-failure', entry)
+  const entry =
+    (await navigate(definition.replay.entry_path, within(PROJECT_LIMITS.maxWaitMs, 'REPLAY_ACTION_TIMEOUT'))) ??
+    stillOnTarget() ??
+    (await checkpoint({ kind: 'start', action_index: null })) ??
+    stillOnTarget()
+  if (entry !== null) return finish(stopped(entry), entry)
   for (const [index, action] of definition.replay.actions.entries()) {
-    const failure = (await perform(action)) ?? (action.op === 'wait' ? null : stillOnTarget()) ?? (await checkpoint({ kind: 'action', action_index: index }))
+    const failure = (await perform(action)) ?? stillOnTarget() ?? (await checkpoint({ kind: 'action', action_index: index })) ?? stillOnTarget()
     actions[index] = { index, op: action.op, status: failure === null ? 'executed' : 'failed', reason: failure }
-    if (failure !== null) return finish(failure === 'REPLAY_CANCELED' ? 'canceled' : 'operational-failure', failure)
+    if (failure !== null) return finish(stopped(failure), failure)
   }
-  const ended = stillOnTarget() ?? (await checkpoint({ kind: 'end', action_index: null }))
-  if (ended !== null) return finish(ended === 'REPLAY_CANCELED' ? 'canceled' : 'operational-failure', ended)
+  const ended = stillOnTarget() ?? (await checkpoint({ kind: 'end', action_index: null })) ?? stillOnTarget()
+  if (ended !== null) return finish(stopped(ended), ended)
 
-  // DOM/URL conditions on the final state, once each: no implicit retry turns a failure into a pass.
-  const evaluate = async (condition: Exclude<ExpectedCondition, { kind: 'no-error' }>): Promise<{ status: ReplayConditionStatus; reason: string | null }> => {
+  // DOM/URL conditions on the final state, once each, each under its own bound: no implicit retry
+  // turns a failure into a pass.
+  const evaluate = async (condition: Exclude<ExpectedCondition, { kind: 'no-error' }>, limit: Bound): Promise<{ status: ReplayConditionStatus; reason: string | null }> => {
     const unevaluable = (reason: string) => ({ status: 'unevaluable' as const, reason })
     const verdict = (satisfied: boolean) => ({ status: satisfied ? ('satisfied' as const) : ('unsatisfied' as const), reason: null })
     if (condition.kind === 'path') {
       const path = targetPath()
       return path === null ? unevaluable('NAVIGATION_LEFT_TARGET') : verdict(path === condition.path)
     }
-    const counted = await resolveCount(condition.locator)
+    const counted = await call(limit, (timeout) => driver.count(condition.locator, timeout))
     if (!counted.ok) return unevaluable(counted.reason)
     const count = counted.value
     if (condition.kind === 'element-count') return verdict(count === condition.count)
     if (count > 1) return unevaluable('LOCATOR_AMBIGUOUS')
     if (condition.kind === 'element-visible') {
       if (count === 0) return verdict(!condition.visible)
-      const visible = await call((timeout) => driver.isVisible(condition.locator, timeout))
+      const visible = await call(limit, (timeout) => driver.isVisible(condition.locator, timeout))
       return visible.ok ? verdict(visible.value === condition.visible) : unevaluable(visible.reason)
     }
     if (count === 0) return unevaluable('CONDITION_TARGET_MISSING')
     if (condition.kind === 'text') {
-      const text = await call((timeout) => driver.text(condition.locator, timeout))
+      const text = await call(limit, (timeout) => driver.text(condition.locator, timeout))
       if (!text.ok) return unevaluable(text.reason)
       if (text.value === null) return unevaluable('CONDITION_TARGET_UNSUPPORTED')
       return verdict(condition.match === 'exact' ? text.value === condition.text : normalizeText(text.value) === normalizeText(condition.text))
     }
-    const kind = await call((timeout) => driver.fieldKind(condition.locator, timeout))
+    const kind = await call(limit, (timeout) => driver.fieldKind(condition.locator, timeout))
     if (!kind.ok) return unevaluable(kind.reason)
     if (kind.value === 'unsupported') return unevaluable('CONDITION_TARGET_UNSUPPORTED')
-    const value = await call((timeout) => driver.value(condition.locator, timeout))
+    const value = await call(limit, (timeout) => driver.value(condition.locator, timeout))
     return value.ok ? verdict(value.value === condition.value) : unevaluable(value.reason)
   }
   for (const [index, condition] of definition.expected_conditions.entries()) {
     if (condition.kind === 'no-error') continue
-    const evaluated = await evaluate(condition)
+    const evaluated = await evaluate(condition, within(PROJECT_LIMITS.maxWaitMs, 'CONDITION_TIMEOUT'))
     if (evaluated.reason === 'REPLAY_CANCELED') return finish('canceled', 'REPLAY_CANCELED')
     conditions[index] = { index, kind: condition.kind, ...evaluated }
+    const moved = stillOnTarget()
+    if (moved !== null) return finish('operational-failure', moved)
   }
 
-  // Run-bound evidence: wrong run/phase/baseline/build observations are rejected, never dropped.
-  const drained: Guarded<readonly unknown[]> = collector === null ? { ok: true, value: [] } : await call(() => collector.drain())
-  if (!drained.ok) return finish(drained.reason === 'REPLAY_CANCELED' ? 'canceled' : 'operational-failure', drained.reason === 'REPLAY_CANCELED' ? drained.reason : 'EVIDENCE_COLLECTION_FAILED')
+  // Run-bound evidence. Drain ends the observation window; wrong run/phase/baseline/build/viewport or
+  // duplicate observations are rejected, never dropped.
+  const drained: Guarded<readonly unknown[]> =
+    collector === null ? { ok: true, value: [] } : await call(within(PROJECT_LIMITS.maxWaitMs, 'EVIDENCE_COLLECTION_FAILED'), () => collector.drain())
+  if (!drained.ok) return finish(stopped(drained.reason), collectionReason(drained.reason))
+  const afterDrain = stillOnTarget()
+  if (afterDrain !== null) return finish('operational-failure', afterDrain)
   if (!Array.isArray(drained.value) || drained.value.length > PROJECT_LIMITS.maxObservations) return finish('operational-failure', 'EVIDENCE_BINDING_MISMATCH')
   const bound: SafeObservation[] = []
+  const seen = new Set<string>()
+  const { width, height } = definition.replay.viewport
   for (const item of drained.value) {
     const parsed = parseSafeObservation(item)
     if (!parsed.ok) return finish('operational-failure', 'EVIDENCE_BINDING_MISMATCH')
     const observation = parsed.value
-    const buildMismatch = observation.type === 'image' && observation.payload !== null && observation.payload.build_sha256 !== binding.build_sha256
-    if (observation.run_id !== binding.run_id || observation.phase !== binding.phase || observation.baseline_commit !== definition.baseline_commit || buildMismatch) {
+    const image = observation.type === 'image' ? observation.payload : null
+    const imageMismatch = image !== null && (image.build_sha256 !== binding.build_sha256 || image.viewport.width !== width || image.viewport.height !== height)
+    if (
+      seen.has(observation.observation_id) ||
+      observation.run_id !== binding.run_id ||
+      observation.phase !== binding.phase ||
+      observation.baseline_commit !== definition.baseline_commit ||
+      imageMismatch
+    ) {
       return finish('operational-failure', 'EVIDENCE_BINDING_MISMATCH')
     }
+    seen.add(observation.observation_id)
     bound.push(observation)
   }
   const evidence: ReplayEvidenceReference[] = bound
