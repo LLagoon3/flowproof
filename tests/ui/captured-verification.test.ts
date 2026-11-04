@@ -473,7 +473,10 @@ describe('Captured client contract: opt-in catalog discrimination', () => {
 // ---------------------------------------------------------------------------------------
 
 const STUDIO_SRC = fileURLToPath(new URL('../../apps/studio/src/', import.meta.url))
-const BARE_RUNTIME_IMPORTS = new Set(['react', 'react-dom/client'])
+// The Studio's one pinned browser React dependency: `react-dom/client` mounts the app and the root
+// `react-dom` entry supplies only `flushSync`, which commits the target pane's non-live label in
+// the same task that observed the launcher remove the released frame. No engine, Zod or Node module.
+const BARE_RUNTIME_IMPORTS = new Set(['react', 'react-dom', 'react-dom/client'])
 
 function studioSources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

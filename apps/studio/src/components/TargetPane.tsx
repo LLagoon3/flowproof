@@ -1,4 +1,5 @@
-import { memo, useEffect, useId, useRef } from 'react'
+import { memo, useEffect, useId, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { KeyboardEvent } from 'react'
 
 import type { CanvasView, EvidenceComparisonView, SelectedEvidence } from '../presentation.js'
@@ -101,6 +102,32 @@ export const TargetPane = memo(function TargetPane({
   const evidenceTitleRef = useRef<HTMLHeadingElement>(null)
   const focusHandled = useRef(focusEvidence)
 
+  // A physically released target is never presented live. The launcher removes the iframe itself,
+  // and that removal can precede the delivery of the run activity that already ended the live phase
+  // (activity travels the event stream; the release does not). The removal is observed here and the
+  // non-live label committed synchronously, before the next frame renders. It is sticky: nothing
+  // recreates the frame, and only the completed evidence follows.
+  const [frameReleased, setFrameReleased] = useState(false)
+  const captured = capturedLabel !== undefined
+  useEffect(() => {
+    if (!captured) return
+    const frame = frameRef.current
+    const wrapper = frame?.parentNode ?? null
+    if (frame === null || wrapper === null) return
+    const observer = new MutationObserver(() => {
+      if (frame.isConnected && frame.parentNode === wrapper) return
+      observer.disconnect()
+      flushSync(() => setFrameReleased(true))
+    })
+    observer.observe(wrapper, { childList: true })
+    if (!frame.isConnected) {
+      observer.disconnect()
+      setFrameReleased(true)
+    }
+    return () => observer.disconnect()
+  }, [captured])
+  const presentedLabel = frameReleased && (capturedLabel === 'baseline-live' || capturedLabel === 'candidate-live') ? 'not-live' : capturedLabel
+
   // The captured evidence replaces the released target; legacy evidence is a tab over the kept frame.
   const capturedEvidence = capturedLabel === 'completed-evidence' && evidence?.mode === 'captured' ? evidence : null
   const legacyEvidence = tabs && evidence?.mode === 'legacy' ? evidence : null
@@ -154,8 +181,8 @@ export const TargetPane = memo(function TargetPane({
           Prepared application
         </h2>
         {capturedLabel !== undefined && (
-          <p className="target-pane__state" role="status" data-target-presentation={capturedLabel}>
-            {LABELS[capturedLabel]}
+          <p className="target-pane__state" role="status" data-target-presentation={presentedLabel}>
+            {LABELS[presentedLabel ?? capturedLabel]}
           </p>
         )}
         {concealed && (
