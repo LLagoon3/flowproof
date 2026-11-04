@@ -131,3 +131,39 @@ refusal of old routes does not depend on them.
 
 Zero provider calls; labelled `test_recorder`/`test_transport` only. Marks unchanged (T026/T029 open).
 Remaining: A3b launcher `openDemonstration`, A4 real Chromium T026.
+
+## Unit A3b — real launcher demonstration ports (T029 wiring; Chromium acceptance is A4)
+
+Base `56bedc3`. Source `eb00268` (`studio/launch.ts`, `cli.ts`).
+
+`startProjectStudio` now supplies `openDemonstration` per host-minted run:
+- `startRecorder`: the launcher-owned Studio `page` (unavailable before it exists), its single direct
+  `[data-testid="project-target"]` frame (exactly one iframe, parent = main frame, origin = confirmed
+  target origin), the CSS viewport measured on that iframe element in the Studio document (host side,
+  not reported by the target) and validated as the S1 viewport with device scale 1, a `CaptureBinding`
+  from admitted project + confirmed configuration + ready output digest (`projectCaptureBinding`), then
+  the merged S3 `startProjectRecorder` (entry reset to the configured entry path) via
+  `demonstrationRecorderOf`.
+- `loadSources` (`loadAdmittedProjectSources`): baseline checked before and after; a fresh verified
+  admission snapshot; every admitted committed `src/` text file read no-follow and checked against the
+  admitted size/SHA-256 and strict UTF-8; snapshot removed; deeply frozen result. Beyond 32 files or
+  256 KiB it refuses (`SOURCE_LIMIT_EXCEEDED`), never truncates; no relevance selection is defined.
+- `model` (`projectDemonstrationModel`): the S5 session reads only `MODEL_API_KEY` of the explicit
+  host `modelEnv`; the CLI passes `modelEnv: { MODEL_API_KEY: process.env.MODEL_API_KEY }` and never a
+  fake. `modelFake` (labelled `test_transport`) is a test-only launcher option. No key in JSON, events,
+  configuration, runtime mounts or child environment; setup and recording work without a key.
+
+| Step | Tested SHA | Result |
+| --- | --- | --- |
+| Red-first seam cases | `803d9c9` | 6 failed (`... is not a function`); the 4 binding-refusal cases passed only vacuously (TypeError) before the seams existed |
+| Green seams | `eb00268` | `project-demonstration-ports.test.ts` 10 passed |
+| Seams + service (lock) | `eb00268` | 33 passed |
+| `tests/unit/project-lifecycle.test.ts` (lock) | `eb00268` | 15 passed |
+| Contract project incl. routes/CLI setup (lock) | `eb00268` | 13 files, 488 passed |
+| Typecheck + build (lock) | `eb00268` | passed |
+
+Sources tests use a real materialized and admitted sample repository (working-tree edit -> refused
+`PROJECT_BASELINE_STALE`; 33 committed extra sources -> refused). Not exercised here: the private
+`projectTargetFrame` and `startRecorder` path on real Chromium, recorder release ordering on the real
+frame, and the route mapping of a source refusal (generic `SOURCES_UNAVAILABLE`); these are A4 (T026).
+The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding). Marks unchanged.
