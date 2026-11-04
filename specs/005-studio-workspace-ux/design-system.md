@@ -255,3 +255,51 @@ feedback remain unresolved; the earlier preview-direction acceptance is unchange
 200% zoom was not rerun on this changed code/CSS; the previous slice's zoom evidence is not a
 current pass. No screen-reader or non-Chromium review was performed. No new animation,
 external font, dependency, runtime behavior or publication was introduced.
+
+
+## Final local real-Studio inventory (slice 4, 2026-11-04)
+
+Runtime-tested revision: `015d5cad369c510c40f6b5dfa18094290d7c178b`. The accepted minimalist
+preview remains the direction, not automatic acceptance of this final production implementation.
+The source parent independently inspected the actual commits, current rendered captures and
+native OS-screen captures. This is mechanical/agent review only; T033 remains unchecked.
+
+| Control family | Final real-Studio treatment |
+| --- | --- |
+| Workspace shell | Existing canvas-first, seven-width light shell; stable mounted work/read owners; compact stacking and external collapse/result restore. |
+| Buttons | Existing bounded start; one quiet Compare before and after entry; disabled terminal captured start; visible keyboard focus. No new execution action. |
+| Request field | Existing bounded legacy composer/draft only; captured mode still has no chat. |
+| Tabs | Finalized legacy Target/Evidence tabs with arrow/Home/End behavior; the target is hidden/inert, not replaced. Captured final evidence has no target tab or surviving frame. |
+| Status indicators | Exact family verdict, concise explanation, every failed/unevaluable name. Unreadable evidence uses warning, never a verification-failure color or revised verdict. |
+| Observed work | Existing flat chronological rows, retained raw events and reading position; no new bordered-card wall, invented tool call or progress. |
+| Disclosures | One initially closed Details preserves work plus family-specific gates/checks, provenance/diff or identity/cleanup; artifact reads and selections survive unrelated updates. |
+
+Before/after headings name each phase. Actual evidence identities remain accessible; no raw-path
+read or fabricated replacement image is introduced. Missing phase, unreceived ID, loading and
+unreadable states stay distinct. Stored evidence is labelled not live; captured final review does
+not recreate its disposed target. Existing tokens, local fonts and restrained focus/hover behavior
+are retained; no animation, package or CSP expansion was added.
+
+Independent final verification: typecheck/build, 1721 Vitest cases (including 378 UI), 24 default
+headed cases, the opt-in native-200% case, and two additional parent-only real-mode final-evidence
+native-200% checks passed. The default suite still skips the four owner reviews and its ordinary
+native case; native was separately executed, not silently counted among the 24. Current rendered
+contrast minima were text 5.47:1, controls 3.67:1, focus 7.39:1, with no recorded failures.
+The native tests use actual OS shortcuts, unchanged outer bounds, 640 x 360 effective CSS viewport
+at DPR 2, visible Chromium 200% indicators and successful resets. The parent inspected OS captures
+of both evidence screens; viewport-constrained page screenshots alone are not used as proof of
+the browser's visible zoom indicator. Exact commands, logs and evidence roots are in the
+[slice 4 verification record](./tasks.md#slice-4-verification-record-2026-11-04).
+
+### Pending actual owner observations (T033)
+
+| Criterion | Required owner observation | Current status |
+| --- | --- | --- |
+| SC-001 | Identify/start each real mode without coaching; actual per-mode start time. | Pending; no owner timing recorded. |
+| SC-002 | Six real-UI state answers, next actions and response times from the capture index. | Pending; screenshots are not comprehension answers. |
+| SC-003 | Successful and unsuccessful/unevaluable examples in each mode: find verdict, failed checks and evidence; distinguish stored from live; actual walkthrough times. | Pending for all four interactive examples; no automatic timing is relabelled as owner performance. |
+| SC-007 | Owner decision on final real-UI hierarchy, density and canvas/work balance; record any revision. | Pending; prior minimalist preview-direction acceptance is retained but not extended to final UI acceptance. |
+
+Use the named bounded opt-in `owner-review` cases and the validation guide when the owner is
+present. No Inspector, unbounded wait or fabricated response is needed. Parent mechanical review
+does not close these items, and local implementation does not authorize publication or release.
