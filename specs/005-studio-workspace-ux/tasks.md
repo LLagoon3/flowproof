@@ -4,8 +4,10 @@
 [data-model.md](./data-model.md), [UI contract](./contracts/workspace-ui.md), and
 [validation guide](./quickstart.md).
 
-**Status**: Tasks prepared after owner approval of the Plan direction on 2026-11-03. Analyze corrections were authorized on 2026-11-03; no task
-below is implemented or verified by documentation correction. Execution is one authorized slice at a time.
+**Status**: Slice 1 (T001-T008) merged in PR #23 at `3c7acb3`. The owner authorized local
+implementation and verification of slice 2 (T009-T016) on 2026-11-04 using the coding workflow.
+T017+ and push, PR creation, review triggers, merge and deployment are outside this request.
+Only verified work is checked off; human-only usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
 Use test-first (RED then GREEN) regressions for risky product changes; the static design preview receives
@@ -239,3 +241,14 @@ the static preview's prior zoom gap; other gaps are recorded in the preview READ
 Publication status: [PR #23](https://github.com/LLagoon3/flowproof/pull/23) is open against `main`
 for slice 1 only. Exact-head CI and Codex review are tracked on that PR; their completion will be
 recorded in PR metadata without changing the reviewed source. Merge remains unauthorized.
+
+
+## Slice 2 implementation authorization (2026-11-04)
+
+The owner requested the coding workflow for the next slice after the slice 2 scope was explained.
+Work starts from merged `main` at `3c7acb3de2b39d7fdab113820dd29f284330bd4f` on
+`feat/005-studio-workspace-ux-shell`, for T009-T016 only. The accepted minimalist default layout
+is the reference; preview testing menus and synthetic data must not enter the real application.
+Retain existing work/result presentation until its later slice, rather than rewriting it here.
+Motion: retain restrained hover/focus feedback; introduce no new progress or entrance animation.
+No push, PR, bot review, merge, later-slice work or deployment is authorized by this instruction.
