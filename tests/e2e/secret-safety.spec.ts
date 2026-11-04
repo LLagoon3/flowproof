@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
 import { GATE_IDS, parseEvidenceBundle } from '../../packages/flowproof/src/contracts/index.js'
 import type { EvidenceBundle, RunResult } from '../../packages/flowproof/src/contracts/index.js'
@@ -13,6 +14,13 @@ import type { DiagnoseOptions, RecordedCall, RecordedTransport, TransportReadine
 import { REPO_ROOT, listTree } from '../support/repoFixture.js'
 import { DEMO_PORT, openStudioHarness } from '../support/studioHarness.js'
 import type { CleanupReport, StudioHarness } from '../support/studioHarness.js'
+
+/** Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). */
+async function openWorkDetails(page: Page): Promise<void> {
+  const toggle = page.locator('section.work-timeline button[data-disclosure="details"]')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
 
 // T063: seeded-marker secret safety across one headed Hero run. Synthetic markers are seeded in
 // credential positions of every untrusted input the run touches: the chat request, the target
@@ -167,6 +175,7 @@ test('seeded secret markers reach no artifact, Meta request, event, UI, diagnost
     expect(result.status).toBe('Verified Fix')
     expect(result.gates.map((gate) => [gate.gate_id, gate.status])).toEqual(GATE_IDS.map((gateId) => [gateId, 'pass']))
     expect(result.gates.find((gate) => gate.gate_id === 'secret_scan_clean')?.metrics).toMatchObject({ findings: 0 })
+    await openWorkDetails(page)
     const proofTrail = page.getByRole('region', { name: 'Proof Trail', exact: true })
     await expect(proofTrail.getByRole('region', { name: 'Proof Trail final status' })).toHaveAttribute('data-status', 'verified')
     const failure = await bundleAt(harness, runId, 'failure')

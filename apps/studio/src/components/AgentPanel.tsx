@@ -1,31 +1,40 @@
 import { useId } from 'react'
-import type { ChangeEvent, FormEvent } from 'react'
+import type { ChangeEvent, FormEvent, ReactNode } from 'react'
 
 import { MAX_REQUEST_TEXT_LENGTH, isValidRequestText, studioError } from '../api.js'
 import type { GateId, GateStatus, GateSummary, StudioError, StudioEvent, StudioEventType } from '../api.js'
-import type { RunPresentation } from '../presentation.js'
+import type { ResultSummaryView, RunPresentation } from '../presentation.js'
 import { canStartRun, selectGateRows, selectStudioMode } from '../state.js'
 import type { CandidateAvailability, RunView, StudioState } from '../state.js'
 import { CapturedVerification } from './CapturedVerification.js'
+import { ResultSummary } from './ResultSummary.js'
 import { WorkTimeline } from './WorkTimeline.js'
 import type { ActivityWarning } from './WorkTimeline.js'
 
 // The agent work of the Studio's work panel: the observed work (a short summary and the Details
-// of every accepted event, in `WorkTimeline`), announced Evidence IDs, candidate status, the nine
-// verification gates, and the final status, plus the bounded request composer that the work panel
-// shows as its entry. They only render the state they are given and report request intent through
-// callbacks; the workspace owns the client and the run. Every value is rendered as text, errors
-// show only the client-authored message for their stable code, and the final status comes only
-// from the authoritative run result. A host-fixed captured verification Studio shows its
-// candidate-verification work instead: no chat, legacy gates, diagnosis, provider or candidate-diff
-// section. A final status carries `data-workspace-result`, so the collapsed workspace can return
-// focus to it.
+// of every accepted event, in `WorkTimeline`) and, once the authoritative run result is bound, its
+// concise result (`ResultSummary`): the exact verdict, a short explanation and every failed or
+// unevaluable gate by name. The rest stays in the closed Details on demand: the nine verification
+// gates, announced Evidence IDs, candidate status and the run's Proof Trail. The panel also exports
+// the bounded request composer that the work panel shows as its entry. They only render the state
+// they are given and report request intent through callbacks; the workspace owns the client and
+// the run. Every value is rendered as text, errors show only the client-authored message for their
+// stable code, and the final status comes only from the authoritative run result. A host-fixed
+// captured verification Studio shows its candidate-verification work instead: no chat, legacy
+// gates, diagnosis, provider or candidate-diff section. A final status carries
+// `data-workspace-result`, so the collapsed workspace can return focus to it.
 
 export interface AgentPanelProps {
   /** The Studio state from `studioReducer`; the panel never changes it. */
   readonly state: StudioState
   /** The run presentation of that state, the same one the collapsed workspace status shows. */
   readonly presentation: RunPresentation
+  /** The concise final result of the current run (`selectResultSummary`); null without a bound result. */
+  readonly summary: ResultSummaryView | null
+  /** Shows the stored before/after evidence of the finalized run in the canvas. */
+  readonly onCompare: () => void
+  /** The legacy run's Proof Trail, kept mounted inside the Details once they exist. */
+  readonly resultDetails?: ReactNode
 }
 
 export interface RequestComposerProps {
@@ -172,47 +181,48 @@ export function RequestComposer({ state, requestText, onRequestTextChange, onSta
   )
 }
 
-function FinalStatus({ run }: { readonly run: RunView | null }) {
+/**
+ * The non-final status marker, kept in the document but not rendered: the work summary already
+ * states the run's state, and a verdict comes only from the result summary.
+ */
+function PendingStatus({ run, starting }: { readonly run: RunView | null; readonly starting: boolean }) {
   if (run === null) {
     return (
-      <p className="agent-status__final" role="status" data-status="none">
+      <p className="agent-status__final" data-status="none">
         No run yet.
       </p>
     )
   }
-  if (run.status === 'running') {
+  if (starting) {
     return (
-      <p className="agent-status__final" role="status" data-status="pending">
-        Final status pending until the run result is available.
+      <p className="agent-status__final" data-status="starting">
+        Starting the next run.
       </p>
     )
   }
   if (run.status === 'failed') {
     const safe = safeError(run.error)
     return (
-      <p className="agent-status__final" role="status" data-status="unavailable" data-code={safe.code}>
+      <p className="agent-status__final" data-status="unavailable" data-code={safe.code}>
         No final status. {safe.message}
       </p>
     )
   }
-  const { result } = run
   return (
-    <div className="agent-status__final" role="status" data-status={result.status === 'Verified Fix' ? 'verified' : 'unverified'} data-workspace-result="" tabIndex={-1}>
-      <p className="agent-status__verdict">{result.status}</p>
-      {result.failed_gate_ids.length > 0 && (
-        <p className="agent-status__failed">
-          Failed or unevaluable gates: {result.failed_gate_ids.map((gateId) => GATE_LABELS[gateId]).join(', ')}
-        </p>
-      )}
-    </div>
+    <p className="agent-status__final" data-status="pending">
+      Final status pending until the run result is available.
+    </p>
   )
 }
 
-function RunStatus({ state }: { readonly state: StudioState }) {
+const gateLabel = (id: string): string => GATE_LABELS[id as GateId]
+
+function RunStatus({ state, summary, onCompare }: { readonly state: StudioState; readonly summary: ResultSummaryView | null; readonly onCompare: () => void }) {
   return (
-    <section className="agent-panel__section agent-status" aria-label="Run status">
-      <h3 className="agent-panel__heading">Status</h3>
-      <FinalStatus run={state.run} />
+    // Without a result the section is not rendered, never repositioned, so result arrival keeps the
+    // browser's scroll anchoring and the reader's position in the work log.
+    <section className="agent-panel__section agent-status" aria-label="Run status" data-final={summary !== null} hidden={summary === null}>
+      {summary === null ? <PendingStatus run={state.run} starting={state.pendingStart !== null} /> : <ResultSummary view={summary} labelOf={gateLabel} onCompare={onCompare} />}
     </section>
   )
 }
@@ -315,13 +325,13 @@ function GateTable({ run }: { readonly run: RunView | null }) {
   )
 }
 
-export function AgentPanel({ state, presentation }: AgentPanelProps) {
+export function AgentPanel({ state, presentation, summary, onCompare, resultDetails }: AgentPanelProps) {
   const titleId = useId()
   if (selectStudioMode(state) === 'captured') {
     // The work panel's context names the candidate verification; there is no chat to edit its goal.
     return (
       <div className="agent-panel agent-panel--captured">
-        <CapturedVerification state={state} presentation={presentation} />
+        <CapturedVerification state={state} presentation={presentation} summary={summary} onCompare={onCompare} />
       </div>
     )
   }
@@ -330,11 +340,21 @@ export function AgentPanel({ state, presentation }: AgentPanelProps) {
       <h2 id={titleId} className="agent-panel__title visually-hidden">
         FlowProof agent
       </h2>
-      <RunStatus state={state} />
-      <WorkTimeline presentation={presentation} eventLabel={eventLabel} eventDetail={eventDetail} activityWarning={activityWarning(state.run)} />
-      <EvidenceList run={state.run} />
-      <CandidateStatus run={state.run} />
-      <GateTable run={state.run} />
+      <RunStatus state={state} summary={summary} onCompare={onCompare} />
+      <WorkTimeline
+        presentation={presentation}
+        eventLabel={eventLabel}
+        eventDetail={eventDetail}
+        activityWarning={activityWarning(state.run)}
+        details={
+          <>
+            <GateTable run={state.run} />
+            <EvidenceList run={state.run} />
+            <CandidateStatus run={state.run} />
+            {resultDetails}
+          </>
+        }
+      />
     </section>
   )
 }

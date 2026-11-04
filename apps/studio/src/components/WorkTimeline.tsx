@@ -16,6 +16,9 @@ import type { RunPresentation, WorkCardView } from '../presentation.js'
 // another run. New work never moves focus or scroll: when the reader is away from the latest work,
 // an explicit control returns there, to its newest event when the latest row's Events are open.
 // Only concise state changes are announced, never the log.
+// The same Details also holds the mode's run details after the rows (slice 4): the gates and Proof
+// Trail, or the checks, candidate identity and cleanup. They render once the run has observed work
+// or a final result, in one fixed position, so their reads and disclosures stay mounted with them.
 // The component renders the presentation it is given; it reads nothing and changes no run.
 
 export interface ActivityWarning {
@@ -34,6 +37,8 @@ export interface WorkTimelineProps {
   readonly eventDetail: (event: StudioEvent) => ReactNode
   /** The live-activity problem of a pending run, kept apart from its execution; null when none. */
   readonly activityWarning: ActivityWarning | null
+  /** The mode's run details, shown in the Details after the observed work. */
+  readonly details?: ReactNode
 }
 
 /** The disclosure key of the outer Details; rows use their stable work identities. */
@@ -140,7 +145,7 @@ function WorkRow({ card, mode, open, onToggle, eventLabel, eventDetail }: WorkRo
 }
 
 /** The observed work of the current run: a summary, then one Details disclosure of chronological rows. */
-export function WorkTimeline({ presentation, eventLabel, eventDetail, activityWarning }: WorkTimelineProps) {
+export function WorkTimeline({ presentation, eventLabel, eventDetail, activityWarning, details }: WorkTimelineProps) {
   const headingId = useId()
   const detailsId = useId()
   const { runId, cards, execution } = presentation
@@ -247,7 +252,7 @@ export function WorkTimeline({ presentation, eventLabel, eventDetail, activityWa
           )}
         </div>
       )}
-      {cards.length > 0 ? (
+      {cards.length > 0 || (final && details !== undefined) ? (
         <div className="work-timeline__details">
           <button
             type="button"
@@ -261,11 +266,16 @@ export function WorkTimeline({ presentation, eventLabel, eventDetail, activityWa
             <span>Details</span>
           </button>
           <div id={detailsId} className="work-timeline__panel" data-disclosure-panel="details" hidden={!detailsOpen}>
-            <ol className="work-rows" aria-label="Observed work, oldest first">
-              {cards.map((card) => (
-                <WorkRow key={card.id} card={card} mode={presentation.mode} open={open.has(card.id)} onToggle={toggle} eventLabel={eventLabel} eventDetail={eventDetail} />
-              ))}
-            </ol>
+            {cards.length > 0 ? (
+              <ol className="work-rows" aria-label="Observed work, oldest first">
+                {cards.map((card) => (
+                  <WorkRow key={card.id} card={card} mode={presentation.mode} open={open.has(card.id)} onToggle={toggle} eventLabel={eventLabel} eventDetail={eventDetail} />
+                ))}
+              </ol>
+            ) : (
+              <p className="work-timeline__empty">No live activity was observed for this run.</p>
+            )}
+            {details}
           </div>
         </div>
       ) : (

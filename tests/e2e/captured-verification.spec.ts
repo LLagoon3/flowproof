@@ -18,6 +18,17 @@ import { REPO_ROOT, listTree } from '../support/repoFixture.js'
 import { CAPTURED_SCENARIO_ID, DEMO_PORT, openCapturedVerificationHarness } from '../support/studioHarness.js'
 import type { CapturedStudioHarness, CleanupReport } from '../support/studioHarness.js'
 
+/**
+ * Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). The
+ * pane recording counts every real pointer press and key press as an input attempt on the target,
+ * so the disclosure is activated by its click event alone, which adds neither.
+ */
+async function openWorkDetails(page: Page): Promise<void> {
+  const toggle = page.locator('section.work-timeline button[data-disclosure="details"]')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.dispatchEvent('click')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+
 // T020 for T022 and T025-T027: the captured verification launched through
 // `startCapturedVerificationStudio` in the real headed Studio. Each case produces a prepared
 // Canvas candidate through the real Docker-backed capturing session against the harness clone,
@@ -419,12 +430,20 @@ async function expectCapturedSurface(page: Page, result: CapturedVerificationRes
   await expect(page.getByRole('heading', { name: 'Candidate verification', exact: true })).toBeVisible()
   const final = page.locator('.captured-status__final')
   await expect(final).toHaveAttribute('data-captured-status', result.status)
+  // The concise result names every failed or unevaluable check; everything else is in the Details.
+  const unsuccessful = page.locator('.result-summary__unsuccessful')
   if (result.status === 'passed') {
     await expect(final).toHaveText('Candidate verification passed')
+    await expect(unsuccessful).toHaveCount(0)
   } else {
     await expect(final.locator('.captured-status__verdict')).toHaveText(`Candidate verification ${result.status}`)
     await expect(final.locator('.captured-status__reason')).toHaveText(`${result.reason_code} ${result.message}`)
+    await expect(final.locator('.captured-status__reason')).toBeVisible()
+    const named = result.checks.filter((check) => check.status !== 'pass')
+    if (named.length === 0) await expect(unsuccessful).toHaveCount(0)
+    else await expect(unsuccessful).toHaveAttribute('data-unsuccessful', named.map((check) => check.check_id).join(' '))
   }
+  await openWorkDetails(page)
   const rows = page.locator('tr.captured-check')
   await expect(rows).toHaveCount(10)
   expect(await rows.evaluateAll((items) => items.map((item) => (item as HTMLElement).dataset.check))).toEqual([...CAPTURED_CHECK_IDS])
@@ -647,7 +666,7 @@ async function expectCapturedEvidencePane(harness: CapturedStudioHarness, result
     ]
     expect(announced).toHaveLength(1)
     const evidenceId = announced[0] ?? ''
-    await expect(figure).toHaveAttribute('data-evidence-state', 'shown')
+    await expect(figure).toHaveAttribute('data-evidence-state', 'available')
     await expect(figure).toContainText('Captured screenshot, not live')
     await expect(figure).toContainText(evidenceId)
     const image = figure.locator('img')
@@ -759,6 +778,7 @@ async function runCase(
     expectGuardedPane(await paneRecording(page), attempts, expectation.live)
     await saveScreenshot(page, expectation.screenshot)
     // The ten check rows sit below the status in the scrolling side pane.
+    await openWorkDetails(page)
     await page.locator('.captured-checks').scrollIntoViewIfNeeded()
     await saveScreenshot(page, expectation.screenshot.replace(/\.png$/, '-checks.png'))
     await check({ harness, canvas, tracker, started, result, events })

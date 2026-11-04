@@ -9,8 +9,12 @@ local slice 3 implementation (T017-T023) through the coding workflow on 2026-11-
 The accepted minimalist summary plus initially closed Details/log rows is the visual reference.
 The owner subsequently authorized slice 3 push, PR creation and the repository Codex
 review/correction loop (initial review plus at most three remediation rounds).
-T024+, merge and deployment remain unauthorized.
-Only verified work is checked off; human-only usability observations remain separate.
+Slice 3 merged in PR #25. The owner authorized local slice 4 (T024-T033) through the
+coding workflow on 2026-11-04. Slice 4 push, PR, review triggers, merge and deployment
+remain unauthorized.
+T024-T032 are now locally implemented and mechanically verified; T033 remains pending actual
+owner observations and final visual acceptance. Only verified work is checked off; human-only
+usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
 Use test-first (RED then GREEN) regressions for risky product changes; the static design preview receives
@@ -106,20 +110,20 @@ consumption. Stop before the final comparison rewrite; UI grouping is not a new 
 **Independent test**: Use both modes' authoritative results and known IDs, inspect available or absent
 before/after evidence, and prove that captured final review never recreates its released target.
 
-- [ ] T024 [US3] Add failing family-specific summary/evidence cases in `tests/ui/workspace-presentation.test.ts`, retaining `tests/ui/proof-trail.test.ts` and `tests/ui/captured-verification.test.ts` coverage for exact IDs/manifests, provenance, all required rows, unavailable results and wrong-run rejection (FR-007-FR-009, FR-013).
-- [ ] T025 [P] [US3] Extend `tests/e2e/workspace-ux.spec.ts` with final summary/detail navigation, selection retention, missing/not-received/unreadable images and captured no-live-frame-after-finalization assertions, same legacy iframe/frame through final canvas evidence tabs, and named opt-in bounded interactive `owner-review` cases without Inspector for successful and unsuccessful/unevaluable results in both modes per quickstart (FR-007-FR-009).
-- [ ] T026 [US3] Implement result/comparison adapters in `apps/studio/src/presentation.ts`; `selectedEvidence` is "null or { runId, phase }, where phase is failure or replay" and resets only when its identity becomes invalid; retain nine legacy gates, ten captured checks and separate success claims (FR-007-FR-009).
-- [ ] T027 [US3] Implement `apps/studio/src/components/ResultSummary.tsx` with the exact authoritative verdict, safe explanation, visible unsuccessful/unevaluable checks and accessible detail entry points; captured mode has no invented diagnosis/provenance (FR-007, FR-011).
-- [ ] T028 [US3] Implement `apps/studio/src/components/EvidenceComparison.tsx` with phase/ID labels and distinct available, phase-not-produced, ID-not-received, loading and unreadable states; reuse existing closed reads and escaped text, with no raw-path route or cross-run cache (FR-008, FR-009, FR-013).
-- [ ] T029 [US3] Integrate final comparison in `apps/studio/src/App.tsx` and `apps/studio/src/components/TargetPane.tsx` without replacing the active measured target; use final legacy canvas target/evidence tabs that hide/inert the original wrapper without unmounting it; keep one stable artifact owner, retain captured guard/release and legacy target lifetime, and never recreate a target for review (FR-008, FR-009, FR-013).
-- [ ] T030 [US3] Preserve legacy provenance/diff and captured identity/cleanup detail access in `apps/studio/src/components/ProofTrail.tsx` and `apps/studio/src/components/CapturedVerification.tsx`; keep one stable artifact-loading owner and disclosure state through unrelated updates (FR-007-FR-009, FR-013).
-- [ ] T031 [US3] Pass both-mode UI/browser checks in `tests/ui/workspace-presentation.test.ts` and `tests/e2e/workspace-ux.spec.ts`, plus rendered contrast/keyboard checks and the separate native-zoom procedure in quickstart; verify final verdict and selected evidence do not change on late activity or panel changes (SC-003-SC-006).
+- [X] T024 [US3] Add failing family-specific summary/evidence cases in `tests/ui/workspace-presentation.test.ts`, retaining `tests/ui/proof-trail.test.ts` and `tests/ui/captured-verification.test.ts` coverage for exact IDs/manifests, provenance, all required rows, unavailable results and wrong-run rejection (FR-007-FR-009, FR-013).
+- [X] T025 [P] [US3] Extend `tests/e2e/workspace-ux.spec.ts` with final summary/detail navigation, selection retention, missing/not-received/unreadable images and captured no-live-frame-after-finalization assertions, same legacy iframe/frame through final canvas evidence tabs, and named opt-in bounded interactive `owner-review` cases without Inspector for successful and unsuccessful/unevaluable results in both modes per quickstart (FR-007-FR-009).
+- [X] T026 [US3] Implement result/comparison adapters in `apps/studio/src/presentation.ts`; `selectedEvidence` is "null or { runId, phase }, where phase is failure or replay" and resets only when its identity becomes invalid; retain nine legacy gates, ten captured checks and separate success claims (FR-007-FR-009).
+- [X] T027 [US3] Implement `apps/studio/src/components/ResultSummary.tsx` with the exact authoritative verdict, safe explanation, visible unsuccessful/unevaluable checks and accessible detail entry points; captured mode has no invented diagnosis/provenance (FR-007, FR-011).
+- [X] T028 [US3] Implement `apps/studio/src/components/EvidenceComparison.tsx` with phase/ID labels and distinct available, phase-not-produced, ID-not-received, loading and unreadable states; reuse existing closed reads and escaped text, with no raw-path route or cross-run cache (FR-008, FR-009, FR-013).
+- [X] T029 [US3] Integrate final comparison in `apps/studio/src/App.tsx` and `apps/studio/src/components/TargetPane.tsx` without replacing the active measured target; use final legacy canvas target/evidence tabs that hide/inert the original wrapper without unmounting it; keep one stable artifact owner, retain captured guard/release and legacy target lifetime, and never recreate a target for review (FR-008, FR-009, FR-013).
+- [X] T030 [US3] Preserve legacy provenance/diff and captured identity/cleanup detail access in `apps/studio/src/components/ProofTrail.tsx` and `apps/studio/src/components/CapturedVerification.tsx`; keep one stable artifact-loading owner and disclosure state through unrelated updates (FR-007-FR-009, FR-013).
+- [X] T031 [US3] Pass both-mode UI/browser checks in `tests/ui/workspace-presentation.test.ts` and `tests/e2e/workspace-ux.spec.ts`, plus rendered contrast/keyboard checks and the separate native-zoom procedure in quickstart; verify final verdict and selected evidence do not change on late activity or panel changes (SC-003-SC-006).
 
 ## Phase 6: Polish and Final Cross-Cutting Verification
 
 These tasks are included in slice 4, not an unrelated fifth PR or a new product feature.
 
-- [ ] T032 Run the full typecheck/build/Vitest/headed commands from `specs/005-studio-workspace-ux/quickstart.md`, retaining all existing failure/load/interruption/cleanup/secret-safety assertions and comparing exact source revision, dependencies and CSP; record observed results in `specs/005-studio-workspace-ux/tasks.md` (FR-013, SC-006).
+- [X] T032 Run the full typecheck/build/Vitest/headed commands from `specs/005-studio-workspace-ux/quickstart.md`, retaining all existing failure/load/interruption/cleanup/secret-safety assertions and comparing exact source revision, dependencies and CSP; record observed results in `specs/005-studio-workspace-ux/tasks.md` (FR-013, SC-006).
 - [ ] T033 Record the final visual inventory and actual interactive real-Studio SC-001/SC-003 start/result timings in both modes (including unsuccessful/unevaluable results), six SC-002 real-UI screenshot state answers and SC-007 hierarchy/density/balance feedback in `specs/005-studio-workspace-ux/design-system.md`; separate mechanical checks from human acceptance and keep unresolved feedback explicit (SC-001-SC-003, SC-007).
 
 **Checkpoint / slice 4**: Real result/evidence UX and final compatibility evidence are ready for review.
@@ -433,3 +437,153 @@ Vitest was not rerun for this presentation-only slice; no full-Vitest count is c
 Optional Git auto-commit hooks remained disabled; no mandatory implement hook is registered.
 T024-T033 remain unchecked. No push, PR, bot-review request, merge, deployment or preview
 republication was performed. Stop at the slice 3 boundary.
+
+
+## Slice 4 implementation authorization (2026-11-04)
+
+After PR #25 merged, the owner requested the coding workflow for the final slice. Work starts
+from clean merged `main` at `099d4e196fb3c2fb481ffee9e6d6eaf7f901884b` on
+`feat/005-studio-workspace-ux-results`. Scope is T024-T033 only: authoritative concise results,
+run-bound stored comparison, retained family-specific details, and final compatibility evidence.
+Follow the accepted minimalist design; no new runtime, endpoint, dependency, CSP exception,
+model call or execution control. Preserve original live-frame ownership and captured disposal.
+
+The source parent owns independent review, task markers, and the final results record. Human-only
+SC-001/SC-002/SC-003 observations and SC-007 visual acceptance remain pending unless actual owner
+feedback exists. Do not fabricate timings or mark T033 complete on automated checks alone.
+Optional Git auto-commit hooks stay disabled; commits are manual reviewable units. No push, PR,
+review trigger, merge, deployment or preview republication is authorized by this instruction.
+
+
+## Slice 4 verification record (2026-11-04)
+
+T024-T032 are implemented and independently verified locally; T033 is deliberately unchecked.
+The isolated Claude Opus 5.5 (`anthropic/claude-opus-5-5`, xhigh) implementer timed out after
+leaving clean commits: `cdadb36` (family-bound adapters and regressions), `88fa0a2` (result/evidence
+UI and browser coverage), `5083e00` (selected-tab boundary), and `022491c` (reading-position
+preservation). The parent recovered and reviewed every actual commit and the aggregate 17-file
+code/test diff, rather than treating the timeout as a missing implementation or a passing handoff.
+Parent correction `015d5ca` changes only unreadable-evidence copy to the accepted warning color;
+it is not a verification-failure color and does not revise the verdict.
+
+All final checks below ran on clean committed source
+`015d5cad369c510c40f6b5dfa18094290d7c178b`, on
+`feat/005-studio-workspace-ux-results`. This is the parent of the results-only documentation
+commit; that later documentation commit is not represented as runtime-tested.
+
+| Independent parent check | Observed result |
+| --- | --- |
+| `pnpm typecheck` | exit 0 |
+| `pnpm build` | exit 0 |
+| `xvfb-run -a pnpm exec vitest run --project unit --project contract --project integration --project ui --no-file-parallelism --maxWorkers=1 --reporter=verbose` | 49 files, 1721 passed; unit 686, contract 320, integration 337, UI 378 |
+| `xvfb-run -a pnpm test:e2e` | 24 passed, 5 opt-in skipped, exit 0 |
+| `FLOWPROOF_ZOOM_REVIEW=1 pnpm exec playwright test tests/e2e/workspace-ux.spec.ts --grep native-zoom-review` on an isolated Xvfb desktop | 1 passed; ready and final result/evidence, exit 0 |
+| Parent-only two-mode final evidence native-zoom audit on the same source | 2 passed, exit 0; details below |
+| `git diff --check 2ca7ac9..015d5ca` and source-boundary audit | exit 0; clean tree, no forbidden changes |
+
+Logs and independent audits: `.flowproof/task-logs/slice4-parent/` (`summary.json`,
+`typecheck.log`, `build.log`, `vitest.log`, `e2e.log`, `native.log`, `native-summary.json`,
+`source-audit.json`, `evidence-audit.json`). Earlier interrupted checks are not passes: the timed-out
+child left its validation process running; the parent stopped the identified task-owned process
+groups, then stopped its initial rerun for the color correction. Only the clean final rerun above
+supports these counts. The worker separately passed 378 UI tests and its full headed suite at
+`022491c`; those historical checks are not substituted for the parent's corrected-revision checks.
+
+Test-first evidence retained in `.flowproof/task-logs/slice4-implementation/`:
+`01-red-ui.log` has 17 failed / 58 passed before the adapters/components existed;
+`09-red-e2e.log` has two failed new result/evidence cases on the adapter-only revision before
+UI integration. Final GREEN is the parent's unchanged clean-source execution above.
+
+The result is one exact family verdict, a short explanation and every failed/unevaluable name.
+One initially closed Details retains observed work and all nine legacy gates, fixture/provider
+provenance, diff and artifact text, or all ten captured checks, executed identity, scope and cleanup.
+A late event, lost activity or panel change cannot upgrade the authoritative verdict or replace a
+valid evidence selection. Stored comparisons distinguish phase not produced, ID not received,
+loading, loaded and unreadable; every image uses its authorized run-bound closed route. Tabs and
+collapse do not reload artifacts. Legacy Target/Evidence tabs hide/inert, never replace or reparent,
+the original target; captured final review has no iframe and never reopens the released target.
+
+Current official workspace evidence root:
+`.flowproof/review/005-studio-workspace-ux/015d5cad369c510c40f6b5dfa18094290d7c178b/`.
+The full headed run uses stamp `2026-11-04T05-00-52-430Z`; slice 4 cases are
+`slice4/legacy-final-evidence/` and `slice4/captured-final-evidence/`.
+All 12 non-native workspace case manifests report passed, clean source and no owned process,
+temporary or demo-port leftovers. The separately passed `slice4/native-zoom-review/` uses stamp
+`2026-11-04T05-02-28-138Z`. Parent manifest/cleanup audit found no failures. Rendered minima
+across these cases: normal text 5.47:1, controls 3.67:1, focus 7.39:1; this is not a full
+accessibility or screen-reader audit. Parent directly inspected current summary, loading/unreadable
+and native-zoom screen captures; this is agent inspection, not owner visual acceptance.
+
+The native test records Chromium's visible 200% indicator on the same page/window, effective
+1280 x 720 / DPR 1 -> 640 x 360 / DPR 2, unchanged 1288 x 805 outer bounds, and restored metrics.
+It covers ready/collapse plus final summary, evidence selection, keyboard tabs, same legacy frame
+and result restoration. To independently inspect both final evidence canvases at actual 200%, the
+parent also ran the ignored task-local `native-evidence.spec.ts` through
+`native-evidence.config.ts` under `.flowproof/task-logs/slice4-parent/`. Two real runs use the
+existing harnesses, recorded Hero and `canvas-fix`, no live provider. External OS input and root
+screen captures are operator-side evidence, not a repository dependency. The two mode directories
+under `native-evidence/` contain `manifest.json`, `os-200-summary.png`, `os-200-evidence.png` and
+`os-100-restored.png`; the parent inspected both 200% evidence screens with the visible browser
+indicator. Both retain exact verdict/evidence bindings, have no horizontal page overflow, restore
+100% metrics and clean up all owned resources. Legacy keeps its original frame; captured keeps none.
+These extra two checks do not alter the default suite's 24-pass count.
+
+The five default skips were native zoom (subsequently executed above) and four interactive owner
+reviews (successful/unsuccessful examples in both modes). Owner-operated SC-001/SC-003 timings,
+six SC-002 answers/next actions and SC-007 final hierarchy/density/balance acceptance remain
+pending, with no invented responses. The current six-state capture index remains under
+`slice3/six-state/2026-11-04T05-00-52-430Z/manifest.json`; captures are mechanical material,
+not comprehension results. See the final inventory and pending-owner matrix in `design-system.md`.
+No non-Chromium, screen-reader or live-provider run is claimed. Runtime/reducer/API/contracts,
+dependencies, CSP and existing authoritative state/proof/captured acceptance assertions are
+unchanged. Optional Git auto-commit hooks were skipped; no mandatory implement hook is registered.
+No push, PR, review trigger, merge, deployment or preview republication occurred. Stop here.
+
+
+### Owner-requested QA follow-up (2026-11-04)
+
+The owner confirmed normal operation/UI in the actual captured-success session and requested
+remaining agent-executable QA. Runtime/test bytes match the previously verified `015d5ca`; the
+committed source used by browser harness clones was `11d62e25eb1f812b71463345c84dc8ecaa37fd9c`.
+Only this owner-feedback documentation was being edited during the run, so some manifests
+truthfully mark the invoking worktree dirty; each isolated clone snapshot still names `11d62e2`.
+
+- `xvfb-run -a pnpm exec playwright test`: **24 passed, 5 skipped**, exit 0. Skips are the separate
+  native-zoom case and four human-only owner reviews, not missing automatic passes.
+- `pnpm exec vitest run --project ui --project integration tests/ui
+  tests/integration/studio-security.test.ts tests/integration/studio-api.test.ts
+  --no-file-parallelism --maxWorkers=1`: **6 files, 484 cases passed**, exit 0.
+- Covered both modes' successful/unsuccessful results, invalid citations, bad candidates, build/load
+  failures, interruption, activity loss, secret-marker isolation, API authentication/origin
+  restrictions, exact evidence identities and unavailable states, keyboard/focus/reading-position
+  retention, guarded frame ownership, and cleanup/original integrity.
+- Audited **12 per-case manifests**, **49 retained screenshots**, and one complete six-state index.
+  All per-case audits report no temporary leftovers/processes/listener and unchanged clone snapshots.
+  Opened the current both-mode loading/unreadable captures directly; warnings do not change verdicts.
+- Reused the already-executed native-200% checks on identical product/test/CSS bytes; no new native
+  zoom, typecheck/build or full 1721-case Vitest run is claimed by this follow-up.
+
+QA setup finding: stopping the manual launcher's supervisor with simultaneous control-group
+termination reported Chromium temporary socket/process leftovers. The completed verification
+result itself had cleanup complete and the original unchanged. After supervisor exit, its
+process, target listener and temporary root were absent; the failed audit was nevertheless retained.
+A fresh launch with ordered main-first termination (`KillMode=mixed`) was started and stopped:
+its audit reported `cleanupComplete=true`, no temporary leftovers/processes/listener, and original
+snapshot unchanged. This fixes the optional QA supervisor procedure, not product source.
+
+Logs: `.flowproof/task-logs/slice4-qa-followup/`; new browser evidence:
+`.flowproof/review/005-studio-workspace-ux/11d62e25eb1f812b71463345c84dc8ecaa37fd9c/`.
+All owned QA sessions were closed. No new product defect was found in these checks.
+T033 remains partial: the owner's positive UI feedback is recorded in design-system.md, but no
+missing timed comprehension responses were invented. No push, PR, merge or deployment occurred.
+
+
+## Slice 4 publication authorization (2026-11-04)
+
+After the owner confirmed normal operation/UI and the remaining agent-executable QA completed,
+the owner explicitly requested a PR and review. This authorizes publishing this slice to
+`LLagoon3/flowproof`, opening a PR against `main`, and the repository-required GitHub Codex review
+with up to three remediation rounds. Valid in-scope findings may be corrected, verified and pushed
+for fresh exact-head review. Publication does not turn the pending T033 timing/state-comprehension
+observations into passes. Record CI/review receipts in PR metadata without another results-only
+source commit. Merge and deployment remain unauthorized.

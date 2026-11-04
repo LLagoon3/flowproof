@@ -7,7 +7,9 @@
 **Status**: The owner accepted the minimalist preview on 2026-11-04. Slices 1 and 2 merged
 in PR #23 and PR #24. Local slice 3 implementation (T017-T023) was subsequently authorized;
 the owner subsequently authorized its PR publication and the repository review/correction loop.
-Merge, deployment and slice 4 remain unauthorized. The accepted preview
+Slice 3 merged in PR #25 at `099d4e196fb3c2fb481ffee9e6d6eaf7f901884b`.
+The owner authorized local slice 4 implementation (T024-T033) through the coding workflow
+on 2026-11-04. Slice 4 publication, review triggers, merge and deployment remain unauthorized. The accepted preview
 source and mechanical verification gaps are recorded in `design-system.md`.
 
 **Input**: After trying the working Studio, the owner identified substantial UI/UX improvements

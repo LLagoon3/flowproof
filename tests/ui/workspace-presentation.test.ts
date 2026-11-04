@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import * as contracts from '../../packages/flowproof/src/contracts/index.js'
-import { CONTRACT_SCHEMA_VERSION, parseStudioEvent } from '../../apps/studio/src/api.js'
+import { CAPTURED_CHECK_IDS, CONTRACT_SCHEMA_VERSION, GATE_IDS, parseRunResult, parseStudioEvent } from '../../apps/studio/src/api.js'
 import type { CapturedVerificationResult, GateSummary, RunResult, RunState, ScenarioSummary, StudioEvent, StudioEventType } from '../../apps/studio/src/api.js'
 import {
   DEFAULT_PANEL_WIDTH_STEP,
@@ -12,12 +12,25 @@ import {
   panelWidthRem,
   panelWidthStepAt,
   panelWidthStepForKey,
+  reconcileSelectedEvidence,
+  selectCanvasView,
   selectCompactStatus,
+  selectEvidenceComparison,
   selectMeasuringTarget,
+  selectResultSummary,
   selectRunPresentation,
   workspaceReducer,
 } from '../../apps/studio/src/presentation.js'
-import type { CompactStatusView, RunPresentation, WorkCardView, WorkspaceAction, WorkspacePresentation } from '../../apps/studio/src/presentation.js'
+import type {
+  CompactStatusView,
+  EvidenceComparisonView,
+  ResultSummaryView,
+  RunPresentation,
+  SelectedEvidence,
+  WorkCardView,
+  WorkspaceAction,
+  WorkspacePresentation,
+} from '../../apps/studio/src/presentation.js'
 import { CAPTURED_STATUS_LABELS, initialStudioState, selectCapturedOutcome, selectCapturedTarget, studioReducer } from '../../apps/studio/src/state.js'
 import type { StudioAction, StudioState } from '../../apps/studio/src/state.js'
 
@@ -931,5 +944,280 @@ describe('Work timeline component boundary', () => {
   it('removes the captured panel limit on listed activity', () => {
     const captured = readFileSync(new URL('../../apps/studio/src/components/CapturedVerification.tsx', import.meta.url), 'utf8')
     expect(captured).not.toMatch(/MAX_LISTED_ACTIVITY|\.slice\(\s*-/)
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// T024 for T026-T030 (Spec 005 slice 4): the final result summary, the before/after evidence
+// comparison and the selected evidence. Each family keeps its own source of truth: a legacy summary
+// comes from the bound run result (nine gates, provenance), a captured one from the bound strict
+// result (ten checks, identity, cleanup), and neither borrows the other's claim or fields. Evidence
+// sides use each family's existing authorization only: the legacy Evidence IDs the session holds
+// (announced or cited by the final gates) against the result's screenshot paths, and the captured
+// screenshot IDs announced with exactly the manifest the strict result records. A selection is
+// kept until its run identity becomes invalid, and never hides an active measurement.
+// ---------------------------------------------------------------------------------------
+
+/** A finalized legacy state: the flow's events, then the bound result. */
+const legacyFinal = (result: unknown, flow: readonly EventInput[] = LEGACY_FLOW): StudioState =>
+  reduce([...LEGACY_RUNNING, ...eventActions(events(flow, LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(result)])
+/** A finalized captured state: the flow's events, then the bound strict result. */
+const capturedFinal = (result: unknown, flow: readonly EventInput[] = CAPTURED_FLOW): StudioState =>
+  reduce([...CAPTURED_RUNNING, ...eventActions(events(flow, CAPTURED_RUN_ID), CAPTURED_RUN_ID), capturedResult(result)])
+
+/** Late live events after the bound result, numbered after the ones already accepted. */
+const lateActions = (inputs: readonly EventInput[], from: number, runId: string): StudioAction[] =>
+  eventActions(
+    inputs.map((input, index) => studioEvent(from + index, input, runId)),
+    runId,
+  )
+
+/** A contract-valid Unverified result whose candidate was applied: the replay Canvas mismatched. */
+const CANVAS_MISMATCH = {
+  ...VERIFIED,
+  status: 'Unverified',
+  failed_gate_ids: ['canvas_matches'],
+  gates: VERIFIED.gates.map((item) => (item.gate_id === 'canvas_matches' ? { ...item, status: 'fail', reason_code: 'CANVAS_MISMATCH', message: 'Gate canvas_matches reported fail.' } : item)),
+} as RunResult
+
+describe('Result summary: the exact family verdict from the bound result only', () => {
+  it('uses only contract-valid results as fixtures', () => {
+    for (const result of [VERIFIED, UNVERIFIED, CANVAS_MISMATCH]) {
+      expect(contracts.parseRunResult(result).ok).toBe(true)
+      expect(parseRunResult(result)).not.toBeNull()
+    }
+  })
+
+  it('has no summary before a bound result, after the final event, for an unreadable or a wrong-run result', () => {
+    const steps: StudioState[] = [initialStudioState, reduce([{ type: 'catalog/loaded', scenarios: LEGACY_SCENARIOS }]), reduce(LEGACY_RUNNING)]
+    let state = reduce(LEGACY_RUNNING)
+    for (const action of eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID)) steps.push((state = reduce([action], state)))
+    steps.push(reduce([{ type: 'stream/disconnected', runId: LEGACY_RUN_ID }], reduce(LEGACY_RUNNING)))
+    steps.push(reduce([{ type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'Verified Fix' } }], state))
+    steps.push(legacyFinal({ ...VERIFIED, run_id: OTHER_RUN_ID }))
+    steps.push(legacyFinal(PASSED))
+    for (const step of steps) {
+      expect(selectResultSummary(step)).toBeNull()
+      expect(selectEvidenceComparison(step)).toBeNull()
+    }
+    const capturedSteps = [reduce(CAPTURED_RUNNING), reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID)]), capturedFinal(VERIFIED), capturedFinal({ ...PASSED, run_id: OTHER_RUN_ID })]
+    for (const step of capturedSteps) {
+      expect(selectResultSummary(step)).toBeNull()
+      expect(selectEvidenceComparison(step)).toBeNull()
+    }
+  })
+
+  it('states Verified Fix with all nine gates in contract order and the live provider provenance', () => {
+    const view = selectResultSummary(legacyFinal(VERIFIED)) as Extract<ResultSummaryView, { mode: 'legacy' }>
+    expect(view).toMatchObject({ mode: 'legacy', runId: LEGACY_RUN_ID, verdict: 'Verified Fix', tone: 'success', unsuccessful: [], rejectedBy: null })
+    expect(view.explanation).toBe('All nine required gates passed in the final result.')
+    expect(view.rows.map((row) => row.gate_id)).toEqual([...GATE_IDS])
+    expect(view.rows).toEqual(GATE_IDS.map((gateId) => VERIFIED.gates.find((item) => item.gate_id === gateId)))
+    expect(view.provenance).toEqual({ kind: 'meta', model: VERIFIED.provider.model })
+    expect(view).not.toHaveProperty('identity')
+    expect(view).not.toHaveProperty('cleanup')
+  })
+
+  it('states Unverified with every failed and unevaluable gate visible, the guard rejection and the fixture provenance', () => {
+    const view = selectResultSummary(legacyFinal(UNVERIFIED)) as Extract<ResultSummaryView, { mode: 'legacy' }>
+    expect(view).toMatchObject({ mode: 'legacy', verdict: 'Unverified', tone: 'danger', rejectedBy: 'citations_valid' })
+    expect(view.unsuccessful.map((row) => row.id)).toEqual(UNVERIFIED.failed_gate_ids)
+    expect(view.unsuccessful.map((row) => row.status)).toEqual(['fail', 'unevaluable', 'unevaluable', 'unevaluable', 'unevaluable'])
+    expect(view.explanation).toBe('The candidate was rejected before patch application, so it was never applied or replayed.')
+    expect(view.rows).toHaveLength(9)
+    expect(view.provenance).toEqual({ kind: 'fixture', label: UNVERIFIED.provider.injected_fault_label })
+
+    const mismatch = selectResultSummary(legacyFinal(CANVAS_MISMATCH)) as Extract<ResultSummaryView, { mode: 'legacy' }>
+    expect(mismatch).toMatchObject({ verdict: 'Unverified', tone: 'danger', rejectedBy: null, unsuccessful: [{ id: 'canvas_matches', status: 'fail' }] })
+    expect(mismatch.explanation).toBe('Of the nine required gates, 1 failed.')
+  })
+
+  it('states the captured verdict with all ten checks, the strict reason copy, identity and cleanup, and no legacy claim or provenance', () => {
+    const passed = selectResultSummary(capturedFinal(PASSED)) as Extract<ResultSummaryView, { mode: 'captured' }>
+    expect(passed).toMatchObject({ mode: 'captured', runId: CAPTURED_RUN_ID, status: 'passed', verdict: 'Candidate verification passed', tone: 'success', reasonCode: null, unsuccessful: [] })
+    expect(passed.explanation).toBe('All ten checks passed in the strict verification result.')
+    expect(passed.rows.map((row) => row.check_id)).toEqual([...CAPTURED_CHECK_IDS])
+    expect(passed.identity).toMatchObject({ candidateDigest: PASSED.candidate_patch_sha256, baselineCommit: PASSED.baseline_commit })
+    expect(passed.cleanup).toEqual({
+      complete: PASSED.cleanup.complete,
+      remainingOwnedResources: PASSED.cleanup.remaining_owned_resources,
+      originalUnchanged: PASSED.cleanup.original_unchanged,
+      originalMismatches: PASSED.cleanup.original_mismatches,
+    })
+    expect(passed).not.toHaveProperty('provenance')
+    expect(passed).not.toHaveProperty('rejectedBy')
+
+    const failed = selectResultSummary(capturedFinal(FAILED)) as Extract<ResultSummaryView, { mode: 'captured' }>
+    expect(failed).toMatchObject({ status: 'failed', verdict: 'Candidate verification failed', tone: 'danger', reasonCode: FAILED.reason_code })
+    // The strict result's own fixed message, never a UI-invented diagnosis.
+    expect(failed.explanation).toBe(FAILED.message)
+    expect(failed.unsuccessful).toEqual(FAILED.checks.filter((check) => check.status !== 'pass').map((check) => ({ id: check.check_id, status: check.status })))
+    expect(failed.unsuccessful.length).toBeGreaterThan(0)
+
+    const interrupted = selectResultSummary(capturedFinal(INTERRUPTED)) as Extract<ResultSummaryView, { mode: 'captured' }>
+    expect(interrupted).toMatchObject({ status: 'interrupted', verdict: 'Candidate verification interrupted', tone: 'warning', explanation: INTERRUPTED.message })
+    for (const view of [passed, failed, interrupted]) expect(JSON.stringify(view)).not.toMatch(/Verified Fix|Unverified/)
+  })
+
+  it('keeps the verdict when late live activity arrives after the bound result, in both modes', () => {
+    const legacy = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 8), LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(UNVERIFIED)])
+    const legacyBefore = selectResultSummary(legacy)
+    const legacyLate = reduce(lateActions(LEGACY_FLOW.slice(8), 9, LEGACY_RUN_ID), legacy)
+    expect(legacyLate.run?.activity).toHaveLength(LEGACY_FLOW.length)
+    expect(selectResultSummary(legacyLate)).toEqual(legacyBefore)
+
+    const captured = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 7), CAPTURED_RUN_ID), CAPTURED_RUN_ID), capturedResult(FAILED)])
+    const capturedBefore = selectResultSummary(captured)
+    const capturedLate = reduce(lateActions(CAPTURED_FLOW.slice(7), 8, CAPTURED_RUN_ID), captured)
+    expect(capturedLate.capturedRun?.activity).toHaveLength(CAPTURED_FLOW.length)
+    expect(selectResultSummary(capturedLate)).toEqual(capturedBefore)
+  })
+
+  it('is withdrawn while the next legacy run is starting, like the run presentation', () => {
+    const final = legacyFinal(VERIFIED)
+    const starting = reduce([{ type: 'run/requested', requestText: GOAL }], final)
+    expect(starting.pendingStart).not.toBeNull()
+    expect(selectRunPresentation(starting).verdict).toBeNull()
+    expect(selectResultSummary(starting)).toBeNull()
+    expect(selectEvidenceComparison(starting)).toBeNull()
+  })
+})
+
+describe('Evidence comparison: family-bound before and after sides', () => {
+  const sides = (view: EvidenceComparisonView | null) => (view === null ? null : [view.before, view.after].map(({ side, phase, state, evidenceId }) => ({ side, phase, state, evidenceId })))
+
+  it('names the held legacy screenshot of each phase the result recorded', () => {
+    expect(selectEvidenceComparison(legacyFinal(VERIFIED))).toMatchObject({ mode: 'legacy', runId: LEGACY_RUN_ID })
+    expect(sides(selectEvidenceComparison(legacyFinal(VERIFIED)))).toEqual([
+      { side: 'before', phase: 'failure', state: 'available', evidenceId: 'ev_failure_screenshot_001' },
+      { side: 'after', phase: 'replay', state: 'available', evidenceId: 'ev_replay_screenshot_001' },
+    ])
+  })
+
+  it('states a legacy phase the result recorded no screenshot for as not produced, even when IDs were announced', () => {
+    expect(UNVERIFIED.replay_screenshot_path).toBeNull()
+    expect(sides(selectEvidenceComparison(legacyFinal(UNVERIFIED)))).toEqual([
+      { side: 'before', phase: 'failure', state: 'available', evidenceId: 'ev_failure_screenshot_001' },
+      { side: 'after', phase: 'replay', state: 'not-produced', evidenceId: null },
+    ])
+  })
+
+  it('states a recorded legacy screenshot whose Evidence ID the session never received as not received, never derived from its path', () => {
+    const lost = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 2), LEGACY_RUN_ID), LEGACY_RUN_ID), { type: 'stream/disconnected', runId: LEGACY_RUN_ID }, legacyResult(VERIFIED)])
+    expect(VERIFIED.failure_screenshot_path).not.toBeNull()
+    expect(sides(selectEvidenceComparison(lost))).toEqual([
+      { side: 'before', phase: 'failure', state: 'not-received', evidenceId: null },
+      { side: 'after', phase: 'replay', state: 'not-received', evidenceId: null },
+    ])
+  })
+
+  it('binds captured screenshots only to the exact manifests of the strict result', () => {
+    expect(sides(selectEvidenceComparison(capturedFinal(PASSED)))).toEqual([
+      { side: 'before', phase: 'failure', state: 'available', evidenceId: 'ev_failure_screenshot_001' },
+      { side: 'after', phase: 'replay', state: 'available', evidenceId: 'ev_replay_screenshot_001' },
+    ])
+    expect(selectEvidenceComparison(capturedFinal(PASSED))).toMatchObject({ mode: 'captured', runId: CAPTURED_RUN_ID })
+    // The same IDs announced with another manifest are not received for this result.
+    const elsewhere = CAPTURED_FLOW.map((input) => (input.type === 'evidence_added' ? { ...input, artifact_refs: ['evidence/other/manifest.json'] } : input))
+    expect(sides(selectEvidenceComparison(capturedFinal(PASSED, elsewhere)))).toEqual([
+      { side: 'before', phase: 'failure', state: 'not-received', evidenceId: null },
+      { side: 'after', phase: 'replay', state: 'not-received', evidenceId: null },
+    ])
+    expect(FAILED.after_evidence).toBeNull()
+    expect(sides(selectEvidenceComparison(capturedFinal(FAILED)))).toEqual([
+      { side: 'before', phase: 'failure', state: 'available', evidenceId: 'ev_failure_screenshot_001' },
+      { side: 'after', phase: 'replay', state: 'not-produced', evidenceId: null },
+    ])
+  })
+
+  it('never takes a screenshot ID of another run, and a late announcement of this run only completes its own side', () => {
+    const legacy = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 8), LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(VERIFIED)])
+    expect(sides(selectEvidenceComparison(legacy))?.[1]).toEqual({ side: 'after', phase: 'replay', state: 'not-received', evidenceId: null })
+    const foreign = reduce([{ type: 'stream/event', runId: OTHER_RUN_ID, event: studioEvent(9, LEGACY_FLOW[8] as EventInput, OTHER_RUN_ID) }], legacy)
+    expect(selectEvidenceComparison(foreign)).toEqual(selectEvidenceComparison(legacy))
+    const late = reduce(lateActions(LEGACY_FLOW.slice(8), 9, LEGACY_RUN_ID), legacy)
+    expect(sides(selectEvidenceComparison(late))).toEqual([
+      { side: 'before', phase: 'failure', state: 'available', evidenceId: 'ev_failure_screenshot_001' },
+      { side: 'after', phase: 'replay', state: 'available', evidenceId: 'ev_replay_screenshot_001' },
+    ])
+    expect(selectResultSummary(late)).toEqual(selectResultSummary(legacy))
+  })
+})
+
+describe('Selected evidence and the canvas view', () => {
+  it('keeps a selection of the current run unchanged and drops it only when its run identity is invalid', () => {
+    const final = legacyFinal(VERIFIED)
+    const comparison = selectEvidenceComparison(final)
+    const selected: SelectedEvidence = { runId: LEGACY_RUN_ID, phase: 'replay' }
+    expect(reconcileSelectedEvidence(selected, comparison)).toBe(selected)
+    expect(reconcileSelectedEvidence({ runId: LEGACY_RUN_ID, phase: 'failure' }, comparison)).toEqual({ runId: LEGACY_RUN_ID, phase: 'failure' })
+    expect(reconcileSelectedEvidence(null, comparison)).toBeNull()
+    expect(reconcileSelectedEvidence({ runId: OTHER_RUN_ID, phase: 'replay' }, comparison)).toBeNull()
+    expect(reconcileSelectedEvidence({ runId: LEGACY_RUN_ID, phase: 'diagnosis' } as unknown as SelectedEvidence, comparison)).toBeNull()
+    expect(reconcileSelectedEvidence(selected, null)).toBeNull()
+    // A not-produced side is still a valid selection: it states the absence.
+    expect(reconcileSelectedEvidence(selected, selectEvidenceComparison(legacyFinal(UNVERIFIED)))).toBe(selected)
+    // Late activity of the same run keeps the same selection.
+    const late = reduce(lateActions([{ type: 'agent_message', phase: 'finalized', message: 'Late activity.' }], LEGACY_FLOW.length + 1, LEGACY_RUN_ID), reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 10), LEGACY_RUN_ID), LEGACY_RUN_ID), legacyResult(VERIFIED)]))
+    expect(reconcileSelectedEvidence(selected, selectEvidenceComparison(late))).toBe(selected)
+  })
+
+  it('offers legacy target and evidence tabs only for a finalized run, and a selection shows the evidence', () => {
+    const final = legacyFinal(VERIFIED)
+    const selected: SelectedEvidence = { runId: LEGACY_RUN_ID, phase: 'failure' }
+    expect(selectCanvasView(final, null)).toEqual({ tabs: true, tab: 'target', selected: null })
+    expect(selectCanvasView(final, selected)).toEqual({ tabs: true, tab: 'evidence', selected })
+    expect(selectCanvasView(legacyFinal(UNVERIFIED), selected)).toEqual({ tabs: true, tab: 'evidence', selected })
+  })
+
+  it('never hides an active or starting measurement behind evidence, and a new legacy run drops the old selection', () => {
+    const selected: SelectedEvidence = { runId: LEGACY_RUN_ID, phase: 'failure' }
+    const hidden = { tabs: false, tab: 'target', selected: null }
+    expect(selectCanvasView(initialStudioState, selected)).toEqual(hidden)
+    expect(selectCanvasView(reduce(LEGACY_RUNNING), selected)).toEqual(hidden)
+    expect(selectCanvasView(reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID)]), selected)).toEqual(hidden)
+    const starting = reduce([{ type: 'run/requested', requestText: GOAL }], legacyFinal(VERIFIED))
+    expect(selectMeasuringTarget(starting)).toBe(true)
+    expect(selectCanvasView(starting, selected)).toEqual(hidden)
+    const next = reduce([{ type: 'run/started', start: { request_id: LEGACY_REQUEST_ID, run_id: OTHER_RUN_ID, events_url: `/api/runs/${OTHER_RUN_ID}/events` } }], starting)
+    expect(next.run?.runId).toBe(OTHER_RUN_ID)
+    expect(selectCanvasView(next, selected)).toEqual(hidden)
+    expect(selectCanvasView(reduce([{ type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }], reduce(LEGACY_RUNNING)), selected)).toEqual(hidden)
+  })
+
+  it('has no captured tabs: the measured target stays primary until the strict result, then the stored evidence replaces it', () => {
+    const selected: SelectedEvidence = { runId: CAPTURED_RUN_ID, phase: 'failure' }
+    const measuring = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 3), CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    expect(selectMeasuringTarget(measuring)).toBe(true)
+    expect(selectCanvasView(measuring, selected)).toEqual({ tabs: false, tab: 'target', selected: null })
+    const ended = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW, CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+    expect(selectCanvasView(ended, selected)).toEqual({ tabs: false, tab: 'target', selected: null })
+    expect(selectCanvasView(capturedFinal(PASSED), null)).toEqual({ tabs: false, tab: 'evidence', selected: null })
+    expect(selectCanvasView(capturedFinal(PASSED), selected)).toEqual({ tabs: false, tab: 'evidence', selected })
+    expect(selectCanvasView(capturedFinal({ ...PASSED, run_id: OTHER_RUN_ID }), selected)).toEqual({ tabs: false, tab: 'target', selected: null })
+  })
+})
+
+describe('Result and evidence component boundaries', () => {
+  const runtimeImports = (source: string): string[] => [...source.matchAll(/^import\s+(?!type\b)[^'"]*from\s+'([^']+)'/gm)].map((match) => match[1] as string).sort()
+
+  it('renders the summary from its view only: no client, reducer, storage, network or inline style', () => {
+    const file = new URL('../../apps/studio/src/components/ResultSummary.tsx', import.meta.url)
+    expect(existsSync(file)).toBe(true)
+    const source = readFileSync(file, 'utf8')
+    expect(runtimeImports(source).filter((specifier) => specifier !== 'react')).toEqual([])
+    expect(source).not.toMatch(/\b(fetch|EventSource|createStudioClient|startRun|pollResult|openRunEvents|readEvidence|studioReducer|localStorage|sessionStorage|dangerouslySetInnerHTML)\b/)
+    expect(source).not.toMatch(/\bstyle\s*=|\.style\b/)
+  })
+
+  it('reads screenshots only through the closed evidence route URL, with no raw path, cache or other request', () => {
+    const file = new URL('../../apps/studio/src/components/EvidenceComparison.tsx', import.meta.url)
+    expect(existsSync(file)).toBe(true)
+    const source = readFileSync(file, 'utf8')
+    expect(runtimeImports(source)).toEqual(['../api.js', 'react'])
+    expect(source).toMatch(/^import \{ evidenceUrl \} from '\.\.\/api\.js'$/m)
+    expect(source).not.toMatch(/\b(fetch|EventSource|createStudioClient|readEvidence|readCandidateDiff|studioReducer|localStorage|sessionStorage|caches|dangerouslySetInnerHTML)\b/)
+    expect(source).not.toMatch(/screenshot_path|manifest_path|artifact_path|screenshotPath/)
+    expect(source).not.toMatch(/\bstyle\s*=|\.style\b/)
   })
 })

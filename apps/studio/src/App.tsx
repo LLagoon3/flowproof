@@ -1,23 +1,28 @@
-import { useEffect, useId, useMemo, useReducer, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useReducer, useState } from 'react'
 import type { ChangeEvent } from 'react'
 
 import { createStudioClient, toStudioError } from './api.js'
-import type { RunEventSubscription, StudioClient, StudioError } from './api.js'
+import type { EvidencePhase, RunEventSubscription, StudioClient, StudioError } from './api.js'
 import { AgentPanel, RequestComposer } from './components/AgentPanel.js'
 import { CapturedStart } from './components/CapturedVerification.js'
 import { ProofTrail } from './components/ProofTrail.js'
 import { TargetPane } from './components/TargetPane.js'
 import { WorkspaceShell } from './components/WorkspaceShell.js'
-import { compactStatusOf, selectMeasuringTarget, selectRunPresentation } from './presentation.js'
-import { canStartRun, initialStudioState, runEventHandlers, selectCapturedEvidence, selectCapturedTarget, selectStudioMode, studioReducer } from './state.js'
+import { compactStatusOf, selectCanvasView, selectEvidenceComparison, selectMeasuringTarget, selectResultSummary, selectRunPresentation } from './presentation.js'
+import type { SelectedEvidence } from './presentation.js'
+import { canStartRun, initialStudioState, runEventHandlers, selectCapturedTarget, selectStudioMode, studioReducer } from './state.js'
 import type { StudioState } from './state.js'
-import type { CapturedPaneLabel } from './components/TargetPane.js'
+import type { CanvasTab, CapturedPaneLabel } from './components/TargetPane.js'
 
 // The Studio workspace: a work panel on the left with the prepared case or the fixed candidate,
-// the agent work and the finalized run's Proof Trail, and the request composer or the candidate
-// verification action as its entry; the larger canvas on the right frames the prepared application
-// (in a captured verification Studio, replaced by the finalized run's captured evidence once the
-// target was released). `WorkspaceShell` owns only the panel's width and collapse; each slot keeps
+// the agent work with the finalized run's concise result (its Proof Trail, or its checks, identity
+// and cleanup, inside the closed Details), and the request composer or the candidate verification
+// action as its entry; the larger canvas on the right frames the prepared application. Once a run
+// finalized, the canvas also holds its stored before/after evidence: a legacy Studio offers it in an
+// Evidence tab over the kept frame, and a captured verification Studio shows it in place of the
+// released target. The reader's evidence selection is local, bound to its run, and kept until that
+// run identity becomes invalid; it never reaches the reducer, the client or the network.
+// `WorkspaceShell` owns only the panel's width and collapse; each slot keeps
 // one stable position, so no layout choice remounts the target pane, the work or its reads, and a
 // layout request made while the target is measured waits until that measurement ends.
 // `studioReducer` alone decides what the session may do; the effects below only keep network work
@@ -191,11 +196,40 @@ export function App({ client: providedClient }: AppProps) {
   const changeRequestText = (text: string): void => setDraft({ scenarioId: state.selectedScenarioId, text })
   const startRun = (text: string): void => dispatch({ type: 'run/requested', requestText: text })
   const target = capturedTarget(state)
-  // The finalized captured run's evidence replaces the released target; kept stable for the memoized pane.
-  const completedEvidence = useMemo(() => selectCapturedEvidence(state.capturedRun), [state.capturedRun])
   const mode = selectStudioMode(state)
   // One run presentation for the panel's observed work and the collapsed workspace status.
   const presentation = selectRunPresentation(state)
+  const summary = selectResultSummary(state)
+  // The finalized run's stored evidence. It reads only the cases, the runs and a pending start, so it
+  // stays the same object for the memoized pane while they do.
+  const comparison = useMemo(() => selectEvidenceComparison(state), [state.catalog.scenarios, state.run, state.capturedRun, state.pendingStart])
+  const [selectedEvidence, setSelectedEvidence] = useState<SelectedEvidence | null>(null)
+  const [focusEvidence, setFocusEvidence] = useState(0)
+  const canvas = selectCanvasView(state, selectedEvidence)
+  const comparisonRunId = comparison?.runId ?? null
+  // Selecting evidence keeps a still-valid choice of the same run; another run starts on its failure side.
+  const selectEvidence = useCallback(
+    (phase: EvidencePhase | null): void => {
+      if (comparisonRunId === null) return
+      setSelectedEvidence((previous) => {
+        if (phase !== null) return previous?.runId === comparisonRunId && previous.phase === phase ? previous : { runId: comparisonRunId, phase }
+        return previous?.runId === comparisonRunId ? previous : { runId: comparisonRunId, phase: 'failure' }
+      })
+    },
+    [comparisonRunId],
+  )
+  const compareEvidence = useCallback((): void => {
+    selectEvidence(null)
+    setFocusEvidence((count) => count + 1)
+  }, [selectEvidence])
+  const viewEvidence = useCallback(
+    (phase: EvidencePhase): void => {
+      selectEvidence(phase)
+      setFocusEvidence((count) => count + 1)
+    },
+    [selectEvidence],
+  )
+  const selectTab = useCallback((tab: CanvasTab): void => (tab === 'evidence' ? selectEvidence(null) : setSelectedEvidence(null)), [selectEvidence])
 
   return (
     <div className="studio">
@@ -209,10 +243,13 @@ export function App({ client: providedClient }: AppProps) {
         holdLayout={selectMeasuringTarget(state)}
         context={mode === 'captured' ? <CapturedContext state={state} /> : <CasePicker state={state} onSelect={selectScenario} />}
         work={
-          <>
-            <AgentPanel state={state} presentation={presentation} />
-            <ProofTrail run={state.run} client={client} mode={mode} />
-          </>
+          <AgentPanel
+            state={state}
+            presentation={presentation}
+            summary={summary}
+            onCompare={compareEvidence}
+            resultDetails={<ProofTrail run={state.run} client={client} mode={mode} onViewEvidence={viewEvidence} />}
+          />
         }
         entry={
           mode === 'captured' ? (
@@ -221,7 +258,18 @@ export function App({ client: providedClient }: AppProps) {
             <RequestComposer state={state} requestText={requestText} onRequestTextChange={changeRequestText} onStartRun={startRun} />
           )
         }
-        canvas={<TargetPane capturedLabel={target.label} guarded={target.guarded} completedEvidence={target.label === 'completed-evidence' ? completedEvidence : null} />}
+        canvas={
+          <TargetPane
+            capturedLabel={target.label}
+            guarded={target.guarded}
+            evidence={canvas.tab === 'evidence' || canvas.tabs ? comparison : null}
+            tabs={canvas.tabs}
+            tab={canvas.tab}
+            selected={canvas.selected}
+            onSelectTab={selectTab}
+            focusEvidence={focusEvidence}
+          />
+        }
       />
     </div>
   )

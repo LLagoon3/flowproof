@@ -1,6 +1,28 @@
-import { selectCapturedOutcome, selectCapturedTarget, selectStudioMode } from './state.js'
-import type { RunState, StudioEvent } from './api.js'
-import type { CapturedOutcomeView, CapturedRunView, RunView, StreamStatus, StudioMode, StudioState } from './state.js'
+import {
+  selectCapturedChecks,
+  selectCapturedCleanup,
+  selectCapturedEvidence,
+  selectCapturedIdentity,
+  selectCapturedOutcome,
+  selectCapturedTarget,
+  selectGateRows,
+  selectProofTrail,
+  selectStudioMode,
+} from './state.js'
+import type { CapturedCheck, CapturedCheckId, CapturedStatus, EvidencePhase, GateId, GateOutcome, RunState, RunStatus, StudioEvent } from './api.js'
+import type {
+  CapturedCleanupView,
+  CapturedEvidenceSide,
+  CapturedIdentityView,
+  CapturedOutcomeView,
+  CapturedRunView,
+  ProofTrailCapture,
+  ProofTrailProvenance,
+  RunView,
+  StreamStatus,
+  StudioMode,
+  StudioState,
+} from './state.js'
 
 // The local presentation of the Studio workspace (Spec 005). It holds only layout choices of this
 // page: the work panel's width and whether it is collapsed. They never reach the run reducer, the
@@ -19,6 +41,12 @@ import type { CapturedOutcomeView, CapturedRunView, RunView, StreamStatus, Studi
 // connected, and the verdict. Live activity is advisory: a stream that ended, disconnected or was
 // rejected is at most a separate notice, never a verdict. A verdict appears only with a valid bound
 // final result, and it is that family's exact label; afterwards no late event revises it.
+//
+// The final result (slice 4) is summarized per family from that bound result only, and its stored
+// before/after evidence keeps each family's own authorization: the legacy Evidence IDs the session
+// holds, or the captured screenshots announced with the strict result's exact manifests. The
+// reader's evidence selection is local and stays until its run identity becomes invalid; it never
+// hides a starting or running measurement.
 
 /** The seven work-panel width choices, in rem; the CSS backs each with a class-like attribute rule. */
 export const PANEL_WIDTHS_REM = Object.freeze([20, 22, 24, 26, 28, 30, 32] as const)
@@ -470,4 +498,210 @@ export function selectMeasuringTarget(state: StudioState): boolean {
   if (isLostStream(run.stream.status)) return true
   if (!isLiveStream(run.stream.status)) return false
   return run.phase === null || LEGACY_MEASURED_PHASES.has(run.phase)
+}
+
+// ---------------------------------------------------------------------------------------
+// Final result summary and evidence comparison (slice 4)
+// ---------------------------------------------------------------------------------------
+
+/** A required gate or check that the bound result did not pass; none is ever omitted. */
+export interface UnsuccessfulOutcome<Id extends string> {
+  readonly id: Id
+  readonly status: 'fail' | 'unevaluable'
+}
+
+/**
+ * The concise final result of one run, from its family's bound result only. The legacy summary has
+ * the nine gates and the diagnosis provenance; the captured summary has the ten checks, the
+ * executed candidate identity and the cleanup facts, and no diagnosis or provenance claim.
+ */
+export type ResultSummaryView =
+  | {
+      readonly mode: 'legacy'
+      readonly runId: string
+      readonly verdict: RunStatus
+      readonly tone: CompactStatusTone
+      /** One short local sentence derived from the gate outcomes. */
+      readonly explanation: string
+      /** Every failed or unevaluable gate, in contract order. */
+      readonly unsuccessful: readonly UnsuccessfulOutcome<GateId>[]
+      /** The candidate guard that rejected the candidate before patch application; null otherwise. */
+      readonly rejectedBy: GateId | null
+      /** All nine final outcomes, in contract order. */
+      readonly rows: readonly GateOutcome[]
+      readonly provenance: ProofTrailProvenance
+    }
+  | {
+      readonly mode: 'captured'
+      readonly runId: string
+      readonly status: CapturedStatus
+      readonly verdict: string
+      readonly tone: CompactStatusTone
+      /** The strict result's own fixed message for a non-passing run; a local sentence when it passed. */
+      readonly explanation: string
+      /** The fixed outcome reason of a non-passing result; null when it passed. */
+      readonly reasonCode: string | null
+      /** Every failed or unevaluable check, in contract order. */
+      readonly unsuccessful: readonly UnsuccessfulOutcome<CapturedCheckId>[]
+      /** All ten checks, in contract order. */
+      readonly rows: readonly CapturedCheck[]
+      readonly identity: CapturedIdentityView
+      readonly cleanup: CapturedCleanupView
+    }
+
+/** The candidate guards: a failing one rejects the candidate before any patch application. */
+const GUARD_GATES: ReadonlySet<GateId> = new Set(['citations_valid', 'patch_scope_valid'])
+
+function legacyExplanation(verdict: RunStatus, unsuccessful: readonly UnsuccessfulOutcome<GateId>[], rejectedBy: GateId | null): string {
+  if (verdict === 'Verified Fix') return 'All nine required gates passed in the final result.'
+  if (rejectedBy !== null) return 'The candidate was rejected before patch application, so it was never applied or replayed.'
+  const failed = unsuccessful.filter((item) => item.status === 'fail').length
+  const unevaluable = unsuccessful.length - failed
+  const parts = [failed > 0 ? `${failed} failed` : null, unevaluable > 0 ? `${unevaluable} could not be evaluated` : null].filter((part) => part !== null)
+  return parts.length === 0 ? 'The final result is Unverified.' : `Of the nine required gates, ${parts.join(' and ')}.`
+}
+
+function legacySummary(run: RunView & { readonly status: 'finalized' }): ResultSummaryView {
+  const { result } = run
+  // The nine final outcomes in contract order, as the gate rows select them from the result.
+  const rows = selectGateRows(run).flatMap((row) => (row.outcome === null ? [] : [row.outcome]))
+  const unsuccessful = rows.filter((gate) => gate.status !== 'pass').map((gate) => ({ id: gate.gate_id, status: gate.status as UnsuccessfulOutcome<GateId>['status'] }))
+  const rejectedBy = result.candidate_diff_path === null ? (rows.find((gate) => GUARD_GATES.has(gate.gate_id) && gate.status === 'fail')?.gate_id ?? null) : null
+  const trail = selectProofTrail(run)
+  return {
+    mode: 'legacy',
+    runId: run.runId,
+    verdict: result.status,
+    tone: result.status === 'Verified Fix' ? 'success' : 'danger',
+    explanation: legacyExplanation(result.status, unsuccessful, rejectedBy),
+    unsuccessful,
+    rejectedBy,
+    rows,
+    provenance: (trail as NonNullable<typeof trail>).provenance,
+  }
+}
+
+function capturedSummary(run: CapturedRunView & { readonly status: 'finalized' }): ResultSummaryView {
+  const outcome = selectCapturedOutcome(run) as CapturedOutcomeView
+  const rows = selectCapturedChecks(run)
+  const unsuccessful = rows.filter((check) => check.status !== 'pass').map((check) => ({ id: check.check_id, status: check.status as UnsuccessfulOutcome<CapturedCheckId>['status'] }))
+  return {
+    mode: 'captured',
+    runId: run.runId,
+    status: outcome.status,
+    verdict: outcome.label,
+    tone: CAPTURED_TONES[outcome.status],
+    explanation: outcome.status === 'passed' || outcome.message === null ? 'All ten checks passed in the strict verification result.' : outcome.message,
+    reasonCode: outcome.reasonCode,
+    unsuccessful,
+    rows,
+    identity: selectCapturedIdentity(run) as CapturedIdentityView,
+    cleanup: selectCapturedCleanup(run) as CapturedCleanupView,
+  }
+}
+
+/**
+ * The final result summary of the current run: its family's exact verdict, a short explanation, the
+ * unsuccessful gates or checks and the family-specific details. None exists without a valid bound
+ * final result, or while a next legacy run is starting; late activity never revises it.
+ */
+export function selectResultSummary(state: StudioState): ResultSummaryView | null {
+  if (selectStudioMode(state) === 'captured') {
+    const run = state.capturedRun
+    return run?.status === 'finalized' ? capturedSummary(run) : null
+  }
+  const { run } = state
+  if (state.pendingStart !== null || run === null || run.status !== 'finalized') return null
+  return legacySummary(run)
+}
+
+/**
+ * One side of the stored before/after comparison: the phase it shows, and either the one authorized
+ * screenshot Evidence ID, a phase the result records no screenshot for, or a recorded screenshot
+ * whose Evidence ID this session did not receive. Loading and unreadable images are states of the
+ * rendered image, not of this view.
+ */
+export interface EvidenceSideView {
+  readonly side: 'before' | 'after'
+  readonly phase: EvidencePhase
+  readonly state: 'available' | 'not-produced' | 'not-received'
+  readonly evidenceId: string | null
+}
+
+/** The stored before/after evidence of one finalized run, bound to that run and its family's rules. */
+export interface EvidenceComparisonView {
+  readonly mode: StudioMode
+  readonly runId: string
+  /** The failure capture (legacy) or the recorded baseline (captured). */
+  readonly before: EvidenceSideView
+  /** The replay capture (legacy) or the candidate build (captured). */
+  readonly after: EvidenceSideView
+}
+
+function legacySide(side: EvidenceSideView['side'], capture: ProofTrailCapture): EvidenceSideView {
+  const { phase } = capture
+  if (capture.screenshotPath === null) return { side, phase, state: 'not-produced', evidenceId: null }
+  if (capture.screenshotEvidenceId === null) return { side, phase, state: 'not-received', evidenceId: null }
+  return { side, phase, state: 'available', evidenceId: capture.screenshotEvidenceId }
+}
+
+const capturedSide = ({ side, phase, state, evidenceId }: CapturedEvidenceSide): EvidenceSideView =>
+  state === 'shown' && evidenceId !== null ? { side, phase, state: 'available', evidenceId } : { side, phase, state: state === 'shown' ? 'not-received' : state, evidenceId: null }
+
+/**
+ * The stored evidence comparison of the current finalized run, by its family's existing
+ * authorization only: the legacy Proof Trail's held Evidence IDs against the result's screenshot
+ * paths, or the captured screenshots announced with the strict result's exact manifests. Nothing is
+ * derived from a path or taken from another run. None exists without a valid bound final result,
+ * or while a next legacy run is starting.
+ */
+export function selectEvidenceComparison(state: StudioState): EvidenceComparisonView | null {
+  if (selectStudioMode(state) === 'captured') {
+    const evidence = selectCapturedEvidence(state.capturedRun)
+    return evidence === null ? null : { mode: 'captured', runId: evidence.runId, before: capturedSide(evidence.before), after: capturedSide(evidence.after) }
+  }
+  if (state.pendingStart !== null) return null
+  const trail = selectProofTrail(state.run)
+  return trail === null ? null : { mode: 'legacy', runId: trail.runId, before: legacySide('before', trail.failure), after: legacySide('after', trail.replay) }
+}
+
+/** The stored evidence the reader selected: null, or one phase of one run. */
+export interface SelectedEvidence {
+  readonly runId: string
+  readonly phase: EvidencePhase
+}
+
+const EVIDENCE_PHASES: ReadonlySet<string> = new Set<EvidencePhase>(['failure', 'replay'])
+
+/**
+ * The selection while its identity is still valid: the same object while it names a phase of the
+ * comparison's run, otherwise null. Panel layout, late activity and result arrival are no inputs,
+ * so they never change it; another run, or no comparison, invalidates it.
+ */
+export function reconcileSelectedEvidence(selected: SelectedEvidence | null, comparison: EvidenceComparisonView | null): SelectedEvidence | null {
+  if (selected === null || comparison === null) return null
+  return selected.runId === comparison.runId && EVIDENCE_PHASES.has(selected.phase) ? selected : null
+}
+
+export interface CanvasView {
+  /** Legacy only: the finalized run's Target and Evidence tabs are offered. */
+  readonly tabs: boolean
+  /** What the canvas shows: the target frame, or the stored evidence of the finalized run. */
+  readonly tab: 'target' | 'evidence'
+  /** The still-valid selection; null otherwise. */
+  readonly selected: SelectedEvidence | null
+}
+
+/**
+ * What the canvas shows. A legacy Studio keeps its target frame and, once its run finalized, offers
+ * the stored evidence in a tab that the reader selects; a starting or running measurement never
+ * shows evidence. A captured Studio has no tabs: its measured target stays primary until the strict
+ * result, after which the stored evidence replaces the released target.
+ */
+export function selectCanvasView(state: StudioState, selected: SelectedEvidence | null): CanvasView {
+  const comparison = selectEvidenceComparison(state)
+  const valid = reconcileSelectedEvidence(selected, comparison)
+  if (comparison === null || selectMeasuringTarget(state)) return { tabs: false, tab: 'target', selected: null }
+  if (comparison.mode === 'captured') return { tabs: false, tab: 'evidence', selected: valid }
+  return { tabs: true, tab: valid === null ? 'target' : 'evidence', selected: valid }
 }

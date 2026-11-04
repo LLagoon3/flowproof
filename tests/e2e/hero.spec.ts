@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test } from '@playwright/test'
-import type { Locator } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 
 import { GATE_IDS, META_MODEL_ID, RUN_STATES, parseDiagnosis, parseEvidenceBundle } from '../../packages/flowproof/src/contracts/index.js'
 import type { EvidenceBundle, RunResult } from '../../packages/flowproof/src/contracts/index.js'
@@ -11,6 +11,13 @@ import { loadRecordedHeroResponse } from '../support/recordedTransport.js'
 import { REPO_ROOT, git } from '../support/repoFixture.js'
 import { DEMO_PORT, openStudioHarness } from '../support/studioHarness.js'
 import type { CleanupReport, StudioHarness } from '../support/studioHarness.js'
+
+/** Opens the work panel's Details, where the run details stay on demand (Spec 005 slice 4). */
+async function openWorkDetails(page: Page): Promise<void> {
+  const toggle = page.locator('section.work-timeline button[data-disclosure="details"]')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
 
 // T034/T049/T053: the headed recorded-Hero run. One real Studio run crosses every runtime layer
 // with the committed `provider.mode=meta` Hero scenario, a recorded diagnosis injected only
@@ -70,12 +77,20 @@ async function expectCaptureTrail(harness: StudioHarness, runId: string, section
     bundle.items.map((item) => item.evidence_id),
   )
 
+  // The screenshot is shown once, with the stored evidence in the canvas, which the trail opens on
+  // this phase; the trail itself reads no image.
   const screenshot = bundle.items.find((item) => item.type === 'screenshot')
-  const image = section.locator('img')
+  const page = section.page()
+  const phase = await section.getAttribute('data-phase')
+  await expect(section.locator('img')).toHaveCount(0)
+  await section.getByRole('button', { name: `View ${phase ?? ''} screenshot` }).click()
+  await expect(page.getByRole('tab', { name: 'Evidence' })).toHaveAttribute('aria-selected', 'true')
+  const image = page.locator(`.evidence-view [data-evidence-phase="${phase ?? ''}"] img`)
   await expect(image).toHaveCount(1)
   await expect(image).toBeVisible()
   await expect(image).toHaveAttribute('src', `/api/runs/${runId}/evidence/${screenshot?.evidence_id ?? ''}`)
   await expect.poll(() => loadedSize(image)).toEqual(scenario.scenario.app.canvas)
+  await page.getByRole('tab', { name: 'Target' }).click()
 
   for (const item of bundle.items.filter((candidate) => candidate.type !== 'screenshot')) {
     const shown = section.locator(`li[data-evidence-id="${item.evidence_id}"] pre`)
@@ -106,7 +121,8 @@ test('the recorded Hero run closes the loop to Verified Fix in the headed Studio
     const chat = page.getByLabel(/request/i)
     await expect(chat).toHaveValue(scenario.scenario.default_request)
     const proofTrail = page.getByRole('region', { name: 'Proof Trail', exact: true })
-    await expect(proofTrail).toContainText('The Proof Trail appears here after a run finalizes.')
+    // No Proof Trail or verdict exists before a run finalizes.
+    await expect(page.locator('section.proof-trail')).toHaveCount(0)
     const navigationsBeforeRun = harness.targetNavigations()
 
     // Start through chat without entering paths, oracles, commands, or gates.
@@ -183,7 +199,9 @@ test('the recorded Hero run closes the loop to Verified Fix in the headed Studio
       GATE_IDS.map((gateId) => [gateId, 'pass']),
     )
 
-    // The complete Proof Trail, inside the same Studio page, rendered from the stored run artifacts.
+    // The complete Proof Trail, inside the same Studio page, rendered from the stored run artifacts
+    // and kept in the work Details on demand.
+    await openWorkDetails(page)
     await expect(proofTrail).toHaveAttribute('data-run-id', runId)
     const finalStatus = proofTrail.getByRole('region', { name: 'Proof Trail final status' })
     await expect(finalStatus).toHaveAttribute('data-status', 'verified')
