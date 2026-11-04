@@ -7,7 +7,7 @@
 
 **Authorization**: The owner authorized implementation, publication, review-loop corrections and
 conditional merge of all remaining S2–S7 slices on 2026-11-04 (message 25501), using Opus with parent
-independent verification. S1 and S4 have merged through PRs #27 and #29. Each later slice still follows
+independent verification. S1, S3 and S4 have merged through PRs #27, #28 and #29. Each later slice still follows
 its predecessor merges and its own verification/PR gates. Checked tasks describe implemented work
 present in this branch; unchecked sibling tasks do not revoke the authorization or describe another
 worktree's status. Actual provider acceptance remains T053 after final regression; T054 requires real

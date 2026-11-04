@@ -147,3 +147,28 @@ or rebind the definition digest.
 
 Gap: provenance is in-process object identity for the trusted host; it is not a signature and does
 not survive serialization across processes (none is used). Live calls remain T053.
+
+
+## Independent parent verification before publication
+
+At implementation HEAD `dd22ef0ca42ea4d24b172d585fc654cc29a764fe`, the parent inspected the actual
+unit C source/test diff and independently ran all following checks under the exact shared
+`/tmp/flowproof-spec006-heavy.lock` lease (no actual provider request):
+
+- `pnpm typecheck` and `pnpm build`: passed.
+- Complete contract project: 12 files, 466 passed, zero skipped.
+- Legacy prompt/client/transport and project-live discovery: four files, 60 passed, zero skipped.
+- Original independent manifest-only evidence-rebinding probe against rebuilt production modules:
+  rejected before transport, `PROVIDER_PROMPT_INVALID`, zero calls. The historical red remains intact.
+- A separate independent built-module probe rejects a structurally cloned prompt with no invocation,
+  then admits the genuine prompt. Nested mutation attempts while the exchange is pending throw;
+  its legitimate cited response remains usable, the wire input hash matches the invocation and
+  no unadmitted source path enters the request. Exactly one explicitly labelled `test_transport`
+  call, not a live provider call.
+- `git diff --check`: passed. Legacy `prompt.ts`, `metaClient.ts` and `transport.ts` remain unchanged.
+
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/s5-parent-final/`.
+These are module/protocol-contract checks, not proof of a reproduced baseline, actual image-model
+compatibility, full project workflow or human usability. T031 remains authored but unchecked until
+its explicit live execution in T053. Full default/headed hosted CI and exact-head review are separate
+publication/merge gates, recorded in PR metadata without a results-only source commit afterward.
