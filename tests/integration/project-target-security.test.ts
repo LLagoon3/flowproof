@@ -1,5 +1,6 @@
 import { createServer, request } from 'node:http'
 import type { Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -34,8 +35,9 @@ import { commitFiles, containersWithLabel, runtimeManifestPath, sampleConfigFile
 // tests/e2e/project-setup.spec.ts). The browser context uses the production project policy.
 
 const TARGET_PORT = 43151
-const DECOY_LOOPBACK_PORT = 43152
-const DECOY_LOCALHOST_PORT = 43153
+// Production reserves 43150–43159 for project targets (a concurrently launched project Studio may
+// bind any of them), so decoys never use a fixed port there: they take OS-assigned ports outside it.
+const RESERVED_TARGET_PORTS = { first: 43_150, last: 43_159 } as const
 const TIMEOUT = 240_000
 
 const HOSTILE_MAIN = String.raw`
@@ -107,18 +109,40 @@ let hostRoot: string
 const decoyHits: string[] = []
 const decoys: Server[] = []
 
-async function decoy(port: number, host: string): Promise<void> {
-  const decoyServer = createServer((req, res) => {
-    decoyHits.push(`${host}:${port}${req.url ?? ''}`)
-    res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
-    res.end('decoy')
-  })
-  decoyServer.on('upgrade', (req, socket) => {
-    decoyHits.push(`upgrade ${host}:${port}${req.url ?? ''}`)
-    socket.destroy()
-  })
-  await new Promise<void>((resolve) => decoyServer.listen(port, host, resolve))
-  decoys.push(decoyServer)
+let decoyLoopbackPort = 0
+let decoyLocalhostPort = 0
+
+/**
+ * Starts one owned decoy on an OS-assigned port of `host` outside the reserved target range and
+ * returns that port. A bind error rejects (never an unhandled error and a hung hook); a port the
+ * OS happens to assign inside the reserved range is released and retried a bounded number of times.
+ */
+async function decoy(host: string): Promise<number> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    let port = 0
+    const decoyServer = createServer((req, res) => {
+      decoyHits.push(`${host}:${port}${req.url ?? ''}`)
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' })
+      res.end('decoy')
+    })
+    decoyServer.on('upgrade', (req, socket) => {
+      decoyHits.push(`upgrade ${host}:${port}${req.url ?? ''}`)
+      socket.destroy()
+    })
+    port = await new Promise<number>((resolve, reject) => {
+      decoyServer.once('error', reject)
+      decoyServer.listen(0, host, () => {
+        decoyServer.off('error', reject)
+        resolve((decoyServer.address() as AddressInfo).port)
+      })
+    })
+    if (port < RESERVED_TARGET_PORTS.first || port > RESERVED_TARGET_PORTS.last) {
+      decoys.push(decoyServer)
+      return port
+    }
+    await new Promise<void>((resolve) => decoyServer.close(() => resolve()))
+  }
+  throw new Error('No decoy port outside the reserved target range was assigned.')
 }
 
 function targetRequest(method: string, rawPath: string, host = `localhost:${TARGET_PORT}`): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }> {
@@ -175,8 +199,8 @@ beforeAll(async () => {
   }
   expect(output.files.map((entry) => entry.path)).toContain('sw.js')
 
-  await decoy(DECOY_LOOPBACK_PORT, '127.0.0.1')
-  await decoy(DECOY_LOCALHOST_PORT, 'localhost')
+  decoyLoopbackPort = await decoy('127.0.0.1')
+  decoyLocalhostPort = await decoy('localhost')
   target = await startProjectTargetApp({ port: TARGET_PORT })
 
   // LABELLED TEST HOST PAGE (not the Studio UI): one iframe with the production sandbox value.
@@ -197,7 +221,7 @@ beforeAll(async () => {
       release: async () => undefined,
     },
   })
-  const query = `?studio=${encodeURIComponent(server.origin)}&loop=${DECOY_LOOPBACK_PORT}&local=${DECOY_LOCALHOST_PORT}`
+  const query = `?studio=${encodeURIComponent(server.origin)}&loop=${decoyLoopbackPort}&local=${decoyLocalhostPort}`
   await writeFile(
     path.join(hostRoot, 'index.html'),
     `<!doctype html><html><head><meta charset="utf-8"><title>S2 security test host page</title></head><body><iframe id="target" sandbox="${PROJECT_TARGET_SANDBOX}" src="${target.origin}/${query}"></iframe></body></html>`,
@@ -271,7 +295,7 @@ describe('actual built target identity and confinement', () => {
 
 describe('browser confinement of target code', () => {
   it('denies the Studio, other loopback, private and external hosts, WebSockets, service workers, popups and downloads', async () => {
-    const query = `?studio=${encodeURIComponent(server.origin)}&loop=${DECOY_LOOPBACK_PORT}&local=${DECOY_LOCALHOST_PORT}&topNavigation=yes`
+    const query = `?studio=${encodeURIComponent(server.origin)}&loop=${decoyLoopbackPort}&local=${decoyLocalhostPort}&topNavigation=yes`
     const frame = targetFrame()
     const downloads: unknown[] = []
     page.on('download', (download) => downloads.push(download))
@@ -313,7 +337,7 @@ describe('browser confinement of target code', () => {
         studioPage: () => policyPage,
       })
       await policyPage.goto(`${server.origin}/`, { waitUntil: 'load' })
-      const query = `?studio=${encodeURIComponent(server.origin)}&loop=${DECOY_LOOPBACK_PORT}&local=${DECOY_LOCALHOST_PORT}&topNavigation=no&policyNavigation=1`
+      const query = `?studio=${encodeURIComponent(server.origin)}&loop=${decoyLoopbackPort}&local=${decoyLocalhostPort}&topNavigation=no&policyNavigation=1`
       const url = `${target.origin}/${query}`
       const navigating = policyPage.waitForEvent('framenavigated', { predicate: (candidate) => candidate.url() === url })
       await policyPage.evaluate((src) => {
@@ -330,7 +354,7 @@ describe('browser confinement of target code', () => {
       // Chromium may replace a rejected navigation with its opaque error page, but never commits
       // the disallowed origin or reaches the decoy server.
       expect([target.origin, 'null']).toContain(frameOrigin)
-      expect(routePolicy.blocked().some((entry) => entry.kind === 'navigation' && entry.origin === `http://127.0.0.1:${DECOY_LOOPBACK_PORT}`)).toBe(true)
+      expect(routePolicy.blocked().some((entry) => entry.kind === 'navigation' && entry.origin === `http://127.0.0.1:${decoyLoopbackPort}`)).toBe(true)
       expect(policyPage.url()).toBe(`${server.origin}/`)
       expect(decoyHits).toEqual([])
     } finally {

@@ -59,3 +59,29 @@ exit 0. Full default `pnpm test` under Xvfb with the retained manifest: **1963 p
 change and outside the hosted failures (972/1391 ms on the runner); they pass alone (2/2). Host
 containers 46 -> 46 identical; no listeners on 43150–43159. Logs: ignored
 `.flowproof/task-logs/006-project-live-verification/s2-ci-dns/`. Hosted CI for this commit is not run.
+
+## Target-security decoy fixture (parent serial run)
+
+The parent's full serial run failed `project-target-security.test.ts` with a 240 s `beforeAll` hook
+timeout plus an unhandled `listen EADDRINUSE 127.0.0.1:43152`. Cause in the fixture: its decoy
+servers listened on fixed ports 43152/43153, inside the 43150–43159 range production reserves for
+project targets (a concurrently launched project Studio scans and binds any free one), and the
+listen promise resolved only on `listening`, with no `error` handler, so an occupied port became
+an unhandled error and a hook that never settled. Which process held 43152 during that run is not
+recorded in the retained logs and is not asserted here.
+
+Red: with a controlled listener holding `127.0.0.1:43152`, the unchanged file reproduced exactly
+that failure (hook timeout at 240 s, unhandled `EADDRINUSE 127.0.0.1:43152`, 6 tests skipped).
+Fix (test fixture only): each decoy takes an OS-assigned port outside the reserved range (an
+in-range assignment is released and retried, bounded), rejects on a bind error, and is owned and
+closed in `afterAll`; the hostile page and the navigation assertion receive the actual ports. The
+target's reserved port 43151, production listen policy, origins, host guards and every security
+assertion are unchanged.
+
+Green (exact heavy lock, merged-S3 HEAD): the file passes 6/6 with 43152 and 43153 held by other
+listeners, 6/6 under the runner-like `::1`-first resolver, and in the focused set
+(`project-studio`, `project-runtime`, `project-target-security`, `worktree`: 49/49).
+`pnpm typecheck` and `pnpm build` exit 0. Host containers 46 -> 46 identical; no listeners left on
+43150–43159. Logs: ignored `.flowproof/task-logs/006-project-live-verification/s2-decoy/`. The full
+serial and full concurrent suites were not rerun here; hosted CI after publication must prove the
+whole check.
