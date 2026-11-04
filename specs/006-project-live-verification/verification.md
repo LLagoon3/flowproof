@@ -121,3 +121,39 @@ The full container list before and after the serial default suite was identical
   live or owner acceptance is claimed.
 - Pixel masking is not implemented here; the PNG attestation is a contract for the S3 producer.
 - `pnpm test:project-meta-smoke` loads `.env` when present; it was not run.
+
+## Independent Parent Review and Delivery
+
+The implementation and focused corrections used `anthropic/claude-opus-5-5` at `xhigh`. The source
+parent inspected the actual commits, source/test diff, fixture, preparation script and final clean
+worktree, then independently verified HEAD `93638b184ae433c847c96816a2c80ca3844c8e3f`
+(implementation SHA `6fdcbc4`; intervening changes were evidence-only).
+
+| Parent check | Observed result | Ignored local log |
+| --- | --- | --- |
+| `pnpm typecheck` | passed | `parent-typecheck.log` |
+| `pnpm build` | passed | `parent-build.log` |
+| Serial focused S1 tests: contracts, store, lifecycle, runtime preparation, fixture, discovery | 6 files / 104 tests passed | `parent-focused.log` |
+| Image `verify --manifest ... --self-check` | verified the recorded image, manifest and installed dependency tree; actual offline sample build and all 3 sample project checks passed | `parent-image-self-check.log` |
+| Separate direct-module adversarial probes | 16 assertions passed | `parent-adversarial.log` |
+| `git diff --check 9b3b962..HEAD` | clean | `parent-diffcheck.log` |
+
+The separate probes confirmed both repaired contract rejection cases (missing/wrong model provenance
+and lossy ready captures), exact pending-write versus discard/seal/submission revocation, no registry
+entries or orphan files after revocation, retained reads after sealing, wrong-digest rejection, late
+build completion suppression, sticky cancellation and one cleanup across concurrent finalizations.
+They materialized the independent sample with seeded tracked/untracked/ignored state and compared all
+original snapshot facets, including index, refs and Git directory: unchanged. The probes and image
+self-check removed their owned temporary directories; the complete container ID list was identical
+before/after the parent checks (`parent-validation-summary.json`). The prepared image is retained.
+
+The parent reproduced the initial defects before requesting the isolated correction commits; none
+remains in these checked cases. The parent did not repeat the earlier 1,820-test legacy suite or run
+headed Playwright/live-model/owner gates: the later fixes touch only the new foundation modules,
+and the focused checks above cover their affected behavior. Earlier suite results retain their exact
+SHA rather than being represented as final-HEAD full regression evidence.
+
+Only T001–T009 are complete (9 checked, 46 open); this completes the local S1 infrastructure slice,
+not the project-live product or live-model acceptance. No push, PR, GitHub review, merge, deployment,
+model invocation or S2+ implementation was performed. Optional Git auto-commit hooks remained
+disabled; reviewed manual commits were used. Stop at S1.

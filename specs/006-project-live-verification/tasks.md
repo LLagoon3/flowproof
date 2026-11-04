@@ -6,8 +6,8 @@
 **Branch**: `feat/006-project-live-verification` | **Created**: 2026-11-04
 
 **Authorization**: The owner requested Tasks after the Plan report, then requested an explicit slice
-scope and parallel-ready breakdown. This revision changes scheduling documents only: no source edits,
-image provisioning, product test execution, model calls, push, PR, merge or deployment.
+scope and parallel-ready breakdown. That scheduling revision changed documents only; it did not
+execute source edits, image provisioning, product tests, model calls, push, PR, merge or deployment.
 On 2026-11-04 the owner authorized local S1 implementation only (message 25437: start from slice 1
 following the workflow skill); this excludes push, PR, merge, deployment, model calls and S2+.
 S1 (T001–T009) is implemented locally and marked from its evidence in [verification.md](verification.md);
@@ -358,4 +358,4 @@ field, extra key, bound and illegal transition, not only the abbreviated labels 
   report and does not claim such findings were checked by that separate command.
 - No task is marked complete because it has been written. Every live gate, browser/runtime behavior,
   privacy/integrity check and human observation stays open until supporting evidence exists. Only S1
-(T001–T009) has been implemented; its evidence and remaining gaps are in [verification.md](verification.md).
+  (T001–T009) has been implemented; its evidence and remaining gaps are in [verification.md](verification.md).
