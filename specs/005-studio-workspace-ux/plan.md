@@ -8,7 +8,9 @@ PR and review/correction loop on 2026-11-04, then explicitly authorized its merg
 in PR #23. Slice 2 implementation (T009-T016), publication and the repository review/correction
 loop were authorized on 2026-11-04. Slice 2 merged in PR #24; local slice 3 (T017-T023)
 was subsequently authorized. The owner then authorized slice 3 PR publication and the repository
-review/correction loop. Merge, deployment and slice 4 remain unauthorized.
+review/correction loop. Slice 3 merged in PR #25 at `099d4e196fb3c2fb481ffee9e6d6eaf7f901884b`.
+The owner authorized local slice 4 implementation (T024-T033) through the coding workflow
+on 2026-11-04. Slice 4 publication, review triggers, merge and deployment remain unauthorized.
 
 **Input**: [Approved product direction and acceptance specification](./spec.md#clarifications).
 Baseline: merged Specs 001-004 at `8c40140`; specification clarification recorded separately.
