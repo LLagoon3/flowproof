@@ -60,12 +60,16 @@ class TestRecorder implements DemonstrationRecorder {
 
   constructor(
     readonly runId: string,
-    readonly options: { readonly incomplete?: boolean; readonly configurationId?: string } = {},
+    readonly options: { readonly incomplete?: boolean; readonly configurationId?: string; readonly finishGate?: Promise<void>; readonly claimGate?: Promise<void> } = {},
   ) {}
 
   finish(): Promise<SealedCapture> {
-    this.#sealed ??= Promise.resolve(this.#seal())
-    this.state = 'finished'
+    this.#sealed ??= (async () => {
+      await this.options.finishGate
+      const sealed = this.#seal()
+      if (this.state !== 'discarded') this.state = 'finished'
+      return sealed
+    })()
     return this.#sealed
   }
 
@@ -77,6 +81,7 @@ class TestRecorder implements DemonstrationRecorder {
   async detach(): Promise<void> {}
 
   async claim(): Promise<{ readonly sealed: SealedCapture; readonly registry: RedactedValueRegistry }> {
+    await this.options.claimGate
     if (this.state !== 'finished' || this.options.incomplete) throw new Error('CAPTURE_NOT_READY')
     this.claimed = true
     return { sealed: await this.finish(), registry: this.registry }
@@ -170,7 +175,19 @@ const payload = (document: unknown, extra: Json = {}): Json => ({
 })
 const reply = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
 
-function world(options: { answers?: Answer[]; gate?: Promise<void>; env?: Json; extra?: Json; recorder?: (runId: string) => TestRecorder } = {}) {
+type Sources = () => Promise<{ readonly sources: readonly { path: string; content: string }[]; readonly admitted: ReadonlySet<string> }>
+function world(
+  options: {
+    answers?: Answer[]
+    gate?: Promise<void>
+    env?: Json
+    extra?: Json
+    recorder?: (runId: string) => TestRecorder
+    startGate?: Promise<void>
+    sources?: Sources
+    wrapModel?: (model: ReturnType<typeof createProjectModelSession>) => ReturnType<typeof createProjectModelSession>
+  } = {},
+) {
   const run = newProjectUuid()
   const lifecycle = createProjectRun({ runId: run, projectCheckIds: ['unit'] })
   lifecycle.transition('configuration-required')
@@ -196,13 +213,14 @@ function world(options: { answers?: Answer[]; gate?: Promise<void>; env?: Json; 
   const service = createProjectDemonstration({
     lifecycle,
     configurationId: CONFIGURATION,
-    model,
+    model: options.wrapModel ? options.wrapModel(model) : model,
     startRecorder: async () => {
+      if (options.startGate) await options.startGate
       const recorder = (options.recorder ?? ((id) => new TestRecorder(id)))(run)
       recorders.push(recorder)
       return recorder
     },
-    loadSources: async () => ({ sources: SOURCES, admitted: new Set(['src/tasks.ts']) }),
+    loadSources: options.sources ?? (async () => ({ sources: SOURCES, admitted: new Set(['src/tasks.ts']) })),
   })
   return { run, lifecycle, model, calls, recorders, service }
 }
@@ -360,5 +378,117 @@ describe('T029 explicit analysis and the single clarification', () => {
     expect(codeOf(outcome)).toBe(expected)
     expect(w.service.view().interpretation).toBeNull()
     expect(w.lifecycle.state()).toBe('finalizing')
+  })
+})
+
+function deferred(): { readonly promise: Promise<void>; readonly release: () => void } {
+  let release: () => void = () => undefined
+  const promise = new Promise<void>((resolve) => (release = resolve))
+  return { promise, release }
+}
+
+describe('T029 ownership revocation across every service await', () => {
+  it('invalidating settings during a pending start revokes it: the produced recorder is discarded, never recording', async () => {
+    const gate = deferred()
+    const w = world({ startGate: gate.promise })
+    const pending = w.service.start()
+    const invalidated = w.service.invalidate()
+    gate.release()
+    expect(codeOf(await pending)).toBe('CAPTURE_INVALIDATED')
+    await invalidated
+    expect(w.recorders[0]!.state).toBe('discarded')
+    expect(w.lifecycle.state()).toBe('demonstration-ready')
+    expect(w.service.view()).toMatchObject({ capture_id: null, report: 'none' })
+    const next = await w.service.start()
+    expect(codeOf(next)).toBe('OK')
+    expect(next.ok && next.value.capture_id).not.toBe(w.recorders[0]!.captureId)
+  })
+
+  it('invalidating settings during a pending finish never yields a ready report and discards it', async () => {
+    const gate = deferred()
+    const w = world({ recorder: (runId) => new TestRecorder(runId, { finishGate: gate.promise }) })
+    const started = await w.service.start()
+    const id = started.ok ? started.value.capture_id : ''
+    const pending = w.service.finish(id)
+    const invalidated = w.service.invalidate()
+    gate.release()
+    expect(codeOf(await pending)).toBe('CAPTURE_INVALIDATED')
+    await invalidated
+    expect(w.recorders[0]!.state).toBe('discarded')
+    expect(w.lifecycle.state()).toBe('demonstration-ready')
+    expect(codeOf(await w.service.analyze(id, { description: null }))).toBe('CAPTURE_UNKNOWN')
+    expect(w.calls).toHaveLength(0)
+  })
+
+  it('cancelling during a pending finish reports the cancellation, not a capture failure', async () => {
+    const gate = deferred()
+    const w = world({ recorder: (runId) => new TestRecorder(runId, { finishGate: gate.promise }) })
+    const started = await w.service.start()
+    const pending = w.service.finish(started.ok ? started.value.capture_id : '')
+    w.service.cancel()
+    gate.release()
+    expect(codeOf(await pending)).toBe('RUN_NOT_ACCEPTING')
+    expect(w.lifecycle.state()).toBe('finalizing')
+    expect(w.recorders[0]!.state).toBe('discarded')
+  })
+
+  it('loads and validates sources before the irreversible claim: a failure leaves an unclaimed, discardable report', async () => {
+    const w = world({ sources: async () => Promise.reject(new Error('io')) })
+    const id = await captured(w)
+    expect(codeOf(await w.service.analyze(id, { description: null }))).toBe('SOURCES_UNAVAILABLE')
+    expect(w.recorders[0]!.claimed).toBe(false)
+    expect(w.lifecycle.state()).toBe('capture-ready')
+    expect(codeOf(await w.service.discard(id))).toBe('OK')
+    expect(w.recorders[0]!.state).toBe('discarded')
+    expect(w.calls).toHaveLength(0)
+  })
+
+  it.each(['sources', 'claim'] as const)('invalidating during a pending %s step revokes the report before anything is sent', async (step) => {
+    const gate = deferred()
+    const w = world({
+      ...(step === 'sources' ? { sources: async () => (await gate.promise, { sources: SOURCES, admitted: new Set(['src/tasks.ts']) }) } : {}),
+      recorder: (runId) => new TestRecorder(runId, step === 'claim' ? { claimGate: gate.promise } : {}),
+    })
+    const id = await captured(w)
+    const pending = w.service.analyze(id, { description: null })
+    const invalidated = w.service.invalidate()
+    gate.release()
+    expect(codeOf(await pending)).toBe('CAPTURE_INVALIDATED')
+    await invalidated
+    expect(w.recorders[0]).toMatchObject({ claimed: false, state: 'discarded' })
+    expect(w.lifecycle.state()).toBe('demonstration-ready')
+    expect(w.service.view()).toMatchObject({ interpretation: null, report: 'none' })
+    expect(w.calls).toHaveLength(0)
+  })
+
+  it('a prompt that cannot be built after the claim stops the run fail-closed, keeping the report claimed and unsent', async () => {
+    const w = world({ sources: async () => ({ sources: [{ path: 'src/tasks.ts', content: 'const bell = "\u0007"\n' }], admitted: new Set(['src/tasks.ts']) }) })
+    const id = await captured(w)
+    expect(codeOf(await w.service.analyze(id, { description: null }))).toBe('PROMPT_SOURCE_UNSAFE')
+    expect(w.lifecycle.state()).toBe('finalizing')
+    expect(w.service.view()).toMatchObject({ report: 'claimed', interpretation: null })
+    expect(codeOf(await w.service.discard(id))).toBe('RUN_NOT_ACCEPTING')
+    expect(w.recorders[0]).toMatchObject({ claimed: true, state: 'finished' })
+    expect(w.calls).toHaveLength(0)
+  })
+
+  it('an unexpected thrown model error settles the operation and stops the run without an interpretation', async () => {
+    const w = world({ wrapModel: (model) => ({ ...model, analyze: async () => Promise.reject(new Error('boom')) }) })
+    const id = await captured(w)
+    expect(codeOf(await w.service.analyze(id, { description: null }))).toBe('ANALYSIS_FAILED')
+    expect(w.lifecycle.state()).toBe('finalizing')
+    expect(w.service.view()).toMatchObject({ report: 'claimed', interpretation: null })
+  })
+
+  it('distinguishes a report actually sent to the provider from one only claimed', async () => {
+    const w = world()
+    const id = await captured(w)
+    expect(w.service.view().report).toBe('sealed')
+    expect(codeOf(await w.service.analyze(id, { description: null }))).toBe('OK')
+    expect(w.service.view().report).toBe('submitted')
+    const missing = world({ env: {} })
+    const unsent = await captured(missing)
+    expect(codeOf(await missing.service.analyze(unsent, { description: null }))).toBe('PROVIDER_CREDENTIAL_MISSING')
+    expect(missing.service.view().report).toBe('claimed')
   })
 })
