@@ -660,7 +660,30 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
         return true
       }
       const view = doc.defaultView
-      const urlImage = (style: any): boolean => [style.backgroundImage, style.listStyleImage, style.borderImageSource].some((image) => /url\(/i.test(String(image)))
+      // Every computed property that can paint or shape pixels from a URL resource. Their pixels
+      // are uninspectable as text, so any URL value fails closed.
+      const URL_IMAGE_PROPERTIES = [
+        'background-image',
+        'list-style-image',
+        'border-image-source',
+        'mask-image',
+        '-webkit-mask-image',
+        '-webkit-mask-box-image-source',
+        'filter',
+        'backdrop-filter',
+        '-webkit-box-reflect',
+        'clip-path',
+        'content',
+      ]
+      const urlImage = (style: any): boolean => URL_IMAGE_PROPERTIES.some((property) => /url\(/i.test(String(style.getPropertyValue(property))))
+      // A top-layer ::backdrop paints across the viewport, outside any mask over its element.
+      const backdropImage = (element: any): boolean => {
+        try {
+          return urlImage(view.getComputedStyle(element, '::backdrop'))
+        } catch {
+          return true
+        }
+      }
       // Flat-tree parent: text and elements directly in a shadow root paint inside its host.
       const parentOf = (node: any): any => node.parentElement ?? node.parentNode?.host ?? null
       const painting = new Map<any, boolean>()
@@ -705,7 +728,7 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
       // carries its own visibility and is assessed regardless.
       const appendElement = (element: any, ownBoxPaints: boolean): boolean => {
         if (ownBoxPaints && urlImage(view.getComputedStyle(element))) return false
-        for (const pseudo of ['::before', '::after', '::marker']) if (!appendPseudo(element, pseudo)) return false
+        for (const pseudo of ['::before', '::after', '::marker', '::first-line', '::first-letter']) if (!appendPseudo(element, pseudo)) return false
         return true
       }
       // A TreeWalker never yields its root. The document roots are assessed unconditionally:
@@ -717,6 +740,7 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
           if (node.nodeType === 1) {
             const element = node as any
             if (!roots.has(element)) {
+              if (backdropImage(element)) return false
               if (element.closest(masked) || !contentPaints(element)) continue
               const style = view.getComputedStyle(element)
               if (!appendElement(element, style.display !== 'contents' && style.visibility === 'visible')) return false
@@ -733,7 +757,7 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
         return true
       }
       if (!doc.documentElement) return ''
-      for (const root of roots) if (!appendElement(root, true)) return null
+      for (const root of roots) if (backdropImage(root) || !appendElement(root, true)) return null
       return visit(doc.documentElement) ? chunks.join('\n') : null
     },
     { selector, max: MAX_RENDERED_TEXT_CHARS },

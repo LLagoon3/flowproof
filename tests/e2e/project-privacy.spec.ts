@@ -200,6 +200,20 @@ const SURFACE_CASES = [
   { name: 'bare text directly in a shadow root', path: '/surface-shadow-text', css: `#host { display: block; color: ${GREEN}; }`, body: `<div id="host"></div><script>document.getElementById('host').attachShadow({ mode: 'open' }).append('${SURFACE_SEEDS.shadowText}')</script>`, reason: 'IMAGE_SENSITIVE_TEXT' },
 ] as const
 
+// Parent correction: every URL-bearing image property, on the element and on every pseudo surface.
+const IMAGE_SURFACE_CASES = [
+  { name: 'a ::first-letter url background', path: '/image-surface-first-letter', css: `#public::first-letter { background-image: url('/private.svg'); font-size: 60px; }`, body: '<p id="public">Public</p>', pixels: true },
+  { name: 'a ::first-line url background', path: '/image-surface-first-line', css: `#public::first-line { background-image: url('/private.svg'); }`, body: '<p id="public">Public line</p>', pixels: true },
+  { name: 'a modal ::backdrop url background', path: '/image-surface-backdrop', css: `dialog::backdrop { background: white url('/private.svg') no-repeat; }`, body: '<dialog>Public</dialog><script>document.querySelector("dialog").showModal()</script>', pixels: true },
+  { name: 'a masked modal ::backdrop url background', path: '/image-surface-masked-backdrop', css: `dialog::backdrop { background: white url('/private.svg') no-repeat; }`, body: '<dialog class="account-panel">Private</dialog><script>document.querySelector("dialog").showModal()</script>', pixels: true },
+  { name: 'a url mask-image', path: '/image-surface-mask', css: `#masked { width: 240px; height: 26px; background: ${GREEN}; mask-image: url('/private-text.svg'); -webkit-mask-image: url('/private-text.svg'); }`, body: '<div id="masked"></div>', pixels: true },
+  { name: 'element content url', path: '/image-surface-content', css: `#replaced { content: url('/private.svg'); }`, body: '<div id="replaced">Public</div>', pixels: true },
+  { name: 'a url filter', path: '/image-surface-filter', css: `#public { filter: url('/private.svg#private'); }`, body: '<p id="public">Public</p>', pixels: false },
+  { name: 'a url backdrop-filter', path: '/image-surface-backdrop-filter', css: `#public { backdrop-filter: url('/private.svg#private'); }`, body: '<p id="public">Public</p>', pixels: false },
+  { name: 'a url -webkit-box-reflect mask', path: '/image-surface-reflect', css: `#public { -webkit-box-reflect: below 0 url('/private.svg'); }`, body: '<p id="public">Public</p>', pixels: false },
+  { name: 'a url clip-path', path: '/image-surface-clip', css: `#public { clip-path: url('/private.svg#private'); }`, body: '<p id="public">Public</p>', pixels: false },
+] as const
+
 const HIDDEN_SURFACES_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   /* ${SURFACE_SEEDS.hidden} */
   html, body { margin: 0; } body { padding: 6px; background: white; font: 18px/1.2 sans-serif; color: rgb(0, 0, 200); }
@@ -244,6 +258,7 @@ const PAGES: Record<string, string> = {
   ...Object.fromEntries(ROOT_CASES.map((rootCase) => [rootCase.path, rootPage(rootCase.css)])),
   ...Object.fromEntries(SURFACE_CASES.map((surfaceCase) => [surfaceCase.path, surfacePage(surfaceCase.css, surfaceCase.body)])),
   '/surface-hidden': HIDDEN_SURFACES_HTML,
+  ...Object.fromEntries(IMAGE_SURFACE_CASES.map((imageCase) => [imageCase.path, surfacePage(imageCase.css, imageCase.body)])),
   '/surface-contents-reflect': CONTENTS_REFLECT_HTML,
 }
 
@@ -265,6 +280,13 @@ const targetRoute = (path: string) => {
       status: 200,
       contentType: 'image/svg+xml',
       body: `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="26"><rect width="240" height="26" fill="${GREEN}"/><text x="2" y="18" fill="${GREEN}">${SEEDS.linkedImage}</text></svg>`,
+    }
+  }
+  if (path === '/private-text.svg') {
+    return {
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="26"><text x="2" y="20" font-size="20" fill="black">${SEEDS.linkedImage}</text></svg>`,
     }
   }
   return PAGES[path] !== undefined ? { status: 200, body: PAGES[path] } : { status: 404, body: 'not found' }
@@ -810,3 +832,20 @@ test('S3 review 2: a refused value reflected as bare text in a display: contents
   for (const image of images(sealed)) expect(count(image.pixels, isGreen, echo).hits, `retained image ${image.id}`).toBe(0)
   expect(JSON.stringify(sealed.capture)).not.toContain(SURFACE_SEEDS.mirror)
 })
+
+for (const imageCase of IMAGE_SURFACE_CASES) {
+  test(`S3 parent correction: ${imageCase.name} fails closed before PNG retention`, async () => {
+    const frame = await targetFrame()
+    const recorder = await start(frame, imageCase.path)
+    await recorder.session.imagesSettled()
+    if (imageCase.pixels) {
+      const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+      expect(count(control, isGreen).hits, 'control: the URL image surface paints in Chromium').toBeGreaterThan(8)
+    }
+
+    const sealed = await recorder.finish()
+    expect(sealed.capture.state).toBe('unsupported')
+    expect(sealed.capture.completeness?.reasons).toContain('IMAGE_TEXT_UNVERIFIED')
+    expect(images(sealed).length).toBe(0)
+  })
+}
