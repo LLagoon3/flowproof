@@ -538,3 +538,41 @@ No non-Chromium, screen-reader or live-provider run is claimed. Runtime/reducer/
 dependencies, CSP and existing authoritative state/proof/captured acceptance assertions are
 unchanged. Optional Git auto-commit hooks were skipped; no mandatory implement hook is registered.
 No push, PR, review trigger, merge, deployment or preview republication occurred. Stop here.
+
+
+### Owner-requested QA follow-up (2026-11-04)
+
+The owner confirmed normal operation/UI in the actual captured-success session and requested
+remaining agent-executable QA. Runtime/test bytes match the previously verified `015d5ca`; the
+committed source used by browser harness clones was `11d62e25eb1f812b71463345c84dc8ecaa37fd9c`.
+Only this owner-feedback documentation was being edited during the run, so some manifests
+truthfully mark the invoking worktree dirty; each isolated clone snapshot still names `11d62e2`.
+
+- `xvfb-run -a pnpm exec playwright test`: **24 passed, 5 skipped**, exit 0. Skips are the separate
+  native-zoom case and four human-only owner reviews, not missing automatic passes.
+- `pnpm exec vitest run --project ui --project integration tests/ui
+  tests/integration/studio-security.test.ts tests/integration/studio-api.test.ts
+  --no-file-parallelism --maxWorkers=1`: **6 files, 484 cases passed**, exit 0.
+- Covered both modes' successful/unsuccessful results, invalid citations, bad candidates, build/load
+  failures, interruption, activity loss, secret-marker isolation, API authentication/origin
+  restrictions, exact evidence identities and unavailable states, keyboard/focus/reading-position
+  retention, guarded frame ownership, and cleanup/original integrity.
+- Audited **12 per-case manifests**, **49 retained screenshots**, and one complete six-state index.
+  All per-case audits report no temporary leftovers/processes/listener and unchanged clone snapshots.
+  Opened the current both-mode loading/unreadable captures directly; warnings do not change verdicts.
+- Reused the already-executed native-200% checks on identical product/test/CSS bytes; no new native
+  zoom, typecheck/build or full 1721-case Vitest run is claimed by this follow-up.
+
+QA setup finding: stopping the manual launcher's supervisor with simultaneous control-group
+termination reported Chromium temporary socket/process leftovers. The completed verification
+result itself had cleanup complete and the original unchanged. After supervisor exit, its
+process, target listener and temporary root were absent; the failed audit was nevertheless retained.
+A fresh launch with ordered main-first termination (`KillMode=mixed`) was started and stopped:
+its audit reported `cleanupComplete=true`, no temporary leftovers/processes/listener, and original
+snapshot unchanged. This fixes the optional QA supervisor procedure, not product source.
+
+Logs: `.flowproof/task-logs/slice4-qa-followup/`; new browser evidence:
+`.flowproof/review/005-studio-workspace-ux/11d62e25eb1f812b71463345c84dc8ecaa37fd9c/`.
+All owned QA sessions were closed. No new product defect was found in these checks.
+T033 remains partial: the owner's positive UI feedback is recorded in design-system.md, but no
+missing timed comprehension responses were invented. No push, PR, merge or deployment occurred.

@@ -161,6 +161,12 @@ node tests/manual/captured-verification.mjs --case pass
 Select the existing candidate-verification start action. This is an actual prepared run, not a
 recorded design preview. Close the session normally after review and inspect its cleanup output.
 The agent checks processes/worktrees/port/integrity; the owner checks comprehension and visual feel.
+If a process supervisor wraps this manual launcher, terminate the launcher first and let it close
+its own browser before the final resource audit. Sending the initial termination signal to the
+entire process group can interrupt browser cleanup. A systemd wrapper can use `KillMode=mixed`
+(initial signal to the main process, final forced termination of the group if needed). This is an
+optional operator setup, not a product dependency. Preserve any failed cleanup report and verify
+the final processes, temporary root and target port rather than relabelling the attempt successful.
 For legacy success use the existing recorded Hero browser harness rather than launch a live API call.
 
 ### Real-UI Owner Acceptance Material

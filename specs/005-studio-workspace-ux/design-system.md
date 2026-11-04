@@ -298,8 +298,21 @@ the browser's visible zoom indicator. Exact commands, logs and evidence roots ar
 | SC-001 | Identify/start each real mode without coaching; actual per-mode start time. | Pending; no owner timing recorded. |
 | SC-002 | Six real-UI state answers, next actions and response times from the capture index. | Pending; screenshots are not comprehension answers. |
 | SC-003 | Successful and unsuccessful/unevaluable examples in each mode: find verdict, failed checks and evidence; distinguish stored from live; actual walkthrough times. | Pending for all four interactive examples; no automatic timing is relabelled as owner performance. |
-| SC-007 | Owner decision on final real-UI hierarchy, density and canvas/work balance; record any revision. | Pending; prior minimalist preview-direction acceptance is retained but not extended to final UI acceptance. |
+| SC-007 | Owner decision on final real-UI hierarchy, density and canvas/work balance; record any revision. | Owner confirmed normal operation and UI for the final captured-success QA session on 2026-11-04; no revision requested. Other modes/states and detailed hierarchy/density/balance responses were not individually recorded. |
 
 Use the named bounded opt-in `owner-review` cases and the validation guide when the owner is
 present. No Inspector, unbounded wait or fabricated response is needed. Parent mechanical review
 does not close these items, and local implementation does not authorize publication or release.
+
+
+### Owner QA feedback (2026-11-04)
+
+The owner reviewed the real captured-success session from clean `11d62e2` and reported:
+“정상 작동 및 ui는 확인했어. 나머지 너가 확인할 수 있는 부분은 직접 qa해”.
+This is positive operation/UI feedback for the observed session; no UI correction was requested.
+The persisted run `e78e5388-7385-49c7-8028-b01c424da6b9` was `passed`, with complete
+verification cleanup, no remaining owned verification resources, and the original unchanged.
+
+No unobserved per-mode timing, six-state answer or unsuccessful-example walkthrough is inferred
+from this message. SC-001/SC-002/SC-003 measurements therefore remain pending, and T033 is
+partially satisfied rather than fully checked. Remaining agent-executable QA is recorded separately.
