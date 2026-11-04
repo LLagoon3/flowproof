@@ -11,7 +11,7 @@ calls or S2+. The parent session retains independent review and delivery.
 **Branch / baseline**: `feat/006-project-live-verification`, baseline
 `9b3b96210c0b3f8b1c7142c23b7404ec421ea476` (`origin/main` `878df7ead7767d9c084fc7a6717769140428f31b`, no
 upstream delta at start). Code SHA for the S1 evidence below:
-`cec6e273ab7cc62580d6c6887e83522b919358c0`. Logs live in the Git-ignored
+`6fdcbc493c7b18cea5f24980271629001b9284e6`. Logs live in the Git-ignored
 `.flowproof/task-logs/006-project-live-verification/`.
 
 ## Commits
@@ -25,6 +25,7 @@ upstream delta at start). Code SHA for the S1 evidence below:
 | `5c794e8` | T006, T007 | Outside-project owner-only project store and tests |
 | `826958e` | T008, T009 | Run-state helpers, lifecycle/ownership skeleton and tests |
 | `cec6e27` | T004, T005 | Parent-review fix: completed result invocation summaries require the observed requested model and response ID; a ready capture forbids dropped/unsupported counters |
+| `6fdcbc4` | T006, T007 | Parent-review fix: per-run store mutation boundary so discard, seal and submission revoke in-flight writes and concurrent writes respect the 512-artifact bound |
 
 T001–T005 were committed by the first S1 run; that run's output exceeded the CLI transcript limit, so
 the parent recovered HEAD `009dd21` and is reviewing those commits independently. T006–T009 were
@@ -38,14 +39,14 @@ completed in the recovery run. Both runs used this worktree as the only writer.
 | T002 | `tests/unit/project-runtime-preparation.test.ts` (7); actual image prepared and re-verified (below) | `t002-unit.log`, `t002-mutation.log`, `t002-prepare.out`, `t002-verify.out`, `s1-image-verify.out` |
 | T003 | `tests/integration/project-live-discovery.test.ts` (5): `pnpm test` listing, a bare run, negated project filters and default Playwright discovery never reach the live smoke or manual runner; only explicit `--project project-meta-smoke` can, and it fails rather than passing vacuously when its file is absent | `t003-red.log` → `t003-green.log` |
 | T004/T005 | `tests/contract/project-contracts.test.ts` (51) | `t004-red.log` → `t005-green.log`; review fix `t005-fix-red.log` (2 failed) → `t005-fix-green.log` (51 passed) |
-| T006/T007 | `tests/unit/project-store.test.ts` (18) | `t006-red.log` (18 failed on assertions against a stub) → `t007-green.log` (18 passed) |
+| T006/T007 | `tests/unit/project-store.test.ts` (21) | `t006-red.log` (18 failed on assertions against a stub) → `t007-green.log` (18 passed); race fix `t007-race-red.log` (3 new failed: discard removed 0 and the write registered, a write published after seal, 515/512 accepted) → `t007-race-green-{1,2,3}.log` (21 passed, three runs) |
 | T008/T009 | `tests/unit/project-lifecycle.test.ts` (15) | `t008-red.log` (15 failed on assertions against stubs) → `t009-green.log` (15 passed) |
 
 ## Runtime Manifest (actual inspection)
 
 Private manifest `.flowproof/task-logs/006-project-live-verification/vite-static-v1.manifest.json`
 (`manifest_sha256` `17a86078eb55e2169f40e90eb17a1caea4c361fcd085710b976a8655f8963139`), prepared
-2026-11-04T10:54:55Z with Docker 29.1.3, re-verified at `826958e` with `verify --manifest` (`cec6e27` does not touch runtime preparation):
+2026-11-04T10:54:55Z with Docker 29.1.3, re-verified at `826958e` with `verify --manifest` (later commits do not touch runtime preparation):
 
 - Image ID `sha256:7e0ba4db1a543d98c2591bc13c6bd1da14fd0a81c4aafa87eb948b4d9c1cdb43`, linux/amd64, user
   `65532:65532`; base `node:24.16.0-bookworm-slim@sha256:2c87ef9bd3c6a3bd4b472b4bec2ce9d16354b0c574f736c476489d09f560a203`.
@@ -58,16 +59,16 @@ Private manifest `.flowproof/task-logs/006-project-live-verification/vite-static
 - Preparation self-check (`--network=none`): sample build passed and `node --test` project check passed
   (3 tests). This is an operator preparation smoke, not selected-project execution.
 
-## S1 Validation (code SHA `cec6e27`)
+## S1 Validation (code SHA `6fdcbc4`)
 
 | Check | Result | Log |
 | --- | --- | --- |
-| `pnpm typecheck` | passed | `t005-fix-typecheck.log` |
-| `pnpm build` | passed | `s1-build-cec6e27.log` |
+| `pnpm typecheck` | passed | `t007-race-typecheck.log` |
+| `pnpm build` | passed | `s1-build-6fdcbc4.log` |
 | `git diff --check 9b3b962..HEAD` | clean | — |
-| S1 focused set, serial (6 files) | 101/101 passed | `s1-focused-cec6e27.log` |
+| S1 focused set, serial (6 files) | 104/104 passed (101/101 at `cec6e27`, 99/99 at `826958e`) | `s1-focused-6fdcbc4.log` |
 | Image `verify --manifest` (at `826958e`) | `verified`, IDs above | `s1-image-verify.out` |
-| Default Vitest suite, serial (`unit`, `contract`, `integration`, `ui`), at `826958e` | 55 files / 1820 tests passed (236 s); `cec6e27` changes only the project contracts, imported solely by S1 modules/tests | `s1-default-suite.log` |
+| Default Vitest suite, serial (`unit`, `contract`, `integration`, `ui`), at `826958e` | 55 files / 1820 tests passed (236 s); `cec6e27` and `6fdcbc4` change only the project contracts and project store, imported solely by S1 modules/tests | `s1-default-suite.log` |
 
 Not run in S1: headed Playwright/browser suites (no UI change), the explicit `project-meta-smoke`
 gate, any model call, any full project-live flow or owner walkthrough.
@@ -86,6 +87,11 @@ gate, any model call, any full project-live flow or owner walkthrough.
 - **Store reads**: a closed lookup by registered run-owned UUID plus exact SHA-256, re-checking root,
   run-directory and file identity (dev/inode) through `O_NOFOLLOW`. The registry is per process, which
   matches "reviewable until the user closes Studio"; no arbitrary path route exists.
+- **Store concurrency**: writes reserve against the artifact bound synchronously and are tracked until
+  settled. Seal, capture submission and discard revoke in-flight writes; revocation is re-checked before
+  staging, before publication and synchronously before registration, and a revoked write removes its
+  files before rejecting. Discard joins in-flight writes, so no discarded artifact is registered,
+  readable or on disk after it resolves. Seal stays synchronous; already registered artifacts stay readable.
 - **Lifecycle authority**: only `finalize` reaches `terminal`. It joins producers within the 5-second
   stop grace, releases owned resources once (newest first, one retry, verified), then reduces with
   `reduceProjectOutcome`. A pass also needs the uninterrupted path through `candidate-checking`.
