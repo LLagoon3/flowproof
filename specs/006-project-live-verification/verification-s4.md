@@ -93,6 +93,23 @@ collector's drain is still running (1.5 s).
 
 ## Decisions for parent review
 
+### Independent parent validation of the correction
+
+At clean `14086cfdb35324fec76fd831388c695a68e05490` (implementation `ffc785b`), the parent inspected the
+correction diff and independently ran `pnpm typecheck`, `pnpm build`, and
+`FLOWPROOF_REPLAY_CHROMIUM=1 pnpm exec vitest run --project unit tests/unit/project-replay.test.ts`
+under `/tmp/flowproof-spec006-heavy.lock`. All passed; the focused suite ran 85 tests with no skips.
+The actual Chromium cases still use the explicitly labelled fake image collector, not S3 evidence.
+
+The parent's direct built-module probe independently confirmed an unchanged valid control, refusal of
+a popup and foreign-origin change during the final drain, and rejection of a successful primitive
+returned at 21 ms in a declared 20 ms wait (`WAIT_TIMEOUT`). These checks exercise a separate driver
+and assertions, reusing only schema-valid synthetic fixture data from the test file. Logs and results
+are under `.flowproof/task-logs/006-project-live-verification/s4-parent/`: `typecheck.log`, `build.log`,
+`chromium.log`, and `probe-fixed-result.json`. `git diff --check 2b1155f..HEAD` passed and the tree was
+clean before this evidence-only update. No model call, S3 integration, full-feature acceptance,
+publication, or deployment was performed.
+
 - Replay actions must reuse recorded locator candidates and values in recorded order (waits excepted);
   S5 prompts/validation must target this, and S6 must supply the run-bound masked image collector.
 - Absent elements are legitimate for visibility/count conditions; text/value conditions on a missing
