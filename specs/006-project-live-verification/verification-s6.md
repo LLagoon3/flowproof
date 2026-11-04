@@ -101,3 +101,33 @@ sample, profile validation and guard. Not yet done (marks unchanged): the launch
 frame via `demonstrationRecorderOf`, `CaptureBinding` from configuration/output digest, frozen admitted
 `src/` sources from an admission snapshot, host `MODEL_API_KEY` session), then A4 real Chromium T026.
 Source selection beyond the builder's 32-file/256-KiB bound is not defined; such projects fail closed.
+
+## Unit A3 correction — configuration revocation of the demonstration
+
+Base `91844e1`. Parent reproduced (labelled fakes, no provider; `.flowproof/task-logs/006-project-live-verification/s6-parent-a3/invalid-settings-probe.log`):
+after start+finish, an authenticated settings request with invalid settings returned 400 and made the
+configuration rejected/null, yet the old capture's Analyze still returned 200 and reached the fake
+transport. A valid change also cleared the demonstration and then awaited invalidation/release while
+the old configuration and prepared output stayed usable, so a concurrent capture could recreate a service.
+
+Fix (`studio/server.ts`): every branch that rejects or replaces the configuration (settings schema
+failure, profile `configure` failure, checked-configuration failure, valid replacement) first runs
+`revokeForConfigurationChange` synchronously: configuration null, demonstration removed, service
+invalidated (A2 generation) and cancelled, `configurationChanging` set. While it is set, configuration,
+prepare and capture requests are `409 CONFIGURATION_CHANGING`; the valid branch also resets the
+preparation view before awaiting. Revocation settles before the 400/200 response and always before the
+target release. After every awaited demonstration call the route rechecks ownership; a revoked one is
+`409 CAPTURE_INVALIDATED`, never a stale success. A malformed closed-schema request (extra key, invalid
+JSON) changes nothing and does not revoke. Revocation errors are caught for resource settlement only;
+refusal of old routes does not depend on them.
+
+| Step | Tested SHA | Result |
+| --- | --- | --- |
+| Red-first (5 new route cases) | `5c4ebd9` | 4 failed (rejected-config analyze 200; capture admitted during pending discard; pending start/finish not revoked server-side), malformed case passed as specified |
+| Green routes | `73aa5c7` | `project-studio.test.ts` 22 passed |
+| Service / `tests/unit/project-lifecycle.test.ts` (lock) | `73aa5c7` | 23 / 15 passed |
+| Contract project (lock) | `73aa5c7` | 488 passed, 0 skipped; no unhandled rejection |
+| Typecheck + build (lock) | `73aa5c7` | passed |
+
+Zero provider calls; labelled `test_recorder`/`test_transport` only. Marks unchanged (T026/T029 open).
+Remaining: A3b launcher `openDemonstration`, A4 real Chromium T026.
