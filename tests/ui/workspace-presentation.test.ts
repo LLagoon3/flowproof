@@ -368,7 +368,9 @@ describe('Workspace presentation: compact status from authoritative state only',
 describe('Workspace presentation: layout holds still while the target is measured', () => {
   // The engine reads the Canvas box and then clips the page screenshot to it, so a layout change in
   // between would move the frame under the clip. While a measured phase is observed, layout requests
-  // are kept and applied once it ends; preparation, diagnosis and finalization never hold them.
+  // are kept and applied once it ends; preparation, diagnosis and finalization observed through
+  // connected live activity never hold them. Lost or rejected activity ends only what the page can
+  // see: the engine measures on, unseen, so the hold lasts until the bound result decides the run.
 
   it('holds a legacy run from its start through reproduction and again through replay while live activity is connected', () => {
     // Reproduction begins as soon as the run is admitted, often before the page's live stream is
@@ -404,13 +406,13 @@ describe('Workspace presentation: layout holds still while the target is measure
     expect(selectMeasuringTarget(reduce([...LEGACY_RUNNING, ...eventActions(late.slice(0, 1), LEGACY_RUN_ID)]))).toBe(false)
   })
 
-  it('never holds the legacy layout without a live stream, a running run or once a result decided it', () => {
+  it('releases the legacy layout once its bound result or observed final event decided the run, and holds nothing before a run', () => {
     const measuring = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, 2), LEGACY_RUN_ID), LEGACY_RUN_ID)])
     expect(selectMeasuringTarget(measuring)).toBe(true)
-    expect(selectMeasuringTarget(reduce([{ type: 'stream/disconnected', runId: LEGACY_RUN_ID }], measuring))).toBe(false)
-    expect(selectMeasuringTarget(reduce([{ type: 'stream/failed', runId: LEGACY_RUN_ID, error: { code: 'EVENT_INVALID', message: 'x' } }], reduce(LEGACY_RUNNING)))).toBe(false)
-    expect(selectMeasuringTarget(reduce([{ type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }], measuring))).toBe(false)
     expect(selectMeasuringTarget(reduce([legacyResult(UNVERIFIED)], measuring))).toBe(false)
+    const ended = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW, LEGACY_RUN_ID), LEGACY_RUN_ID)])
+    expect(ended.run?.stream.status).toBe('ended')
+    expect(selectMeasuringTarget(ended)).toBe(false)
     for (const state of [initialStudioState, reduce([{ type: 'catalog/loaded', scenarios: LEGACY_SCENARIOS }]), reduce([...LEGACY_RUNNING.slice(0, 2), { type: 'run/rejected', error: { code: 'RUN_ALREADY_ACTIVE', message: 'x' } }])]) {
       expect(selectMeasuringTarget(state)).toBe(false)
     }
@@ -427,9 +429,106 @@ describe('Workspace presentation: layout holds still while the target is measure
     }
     for (const [label, held] of holds) expect(held, String(label)).toBe(label === 'baseline-live' || label === 'candidate-live')
     expect(holds.filter(([, held]) => held).length).toBe(4)
+    expect(state.capturedRun?.stream.status).toBe('ended')
     expect(selectMeasuringTarget(reduce([capturedResult(PASSED)], state))).toBe(false)
-    const lost = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, 2), CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
-    expect(selectMeasuringTarget(lost)).toBe(true)
-    expect(selectMeasuringTarget(reduce([{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }], lost))).toBe(false)
+  })
+
+  // Each way live activity stops before the result: the EventSource errors, the client rejects a
+  // record, or the reducer rejects an event of another run. None of them stops the engine.
+  const lostActivity = (runId: string, observed: number): ReadonlyArray<[string, StudioAction]> => [
+    ['disconnected', { type: 'stream/disconnected', runId }],
+    ['rejected', { type: 'stream/failed', runId, error: { code: 'EVENT_INVALID', message: 'x' } }],
+    ['foreign event', { type: 'stream/event', runId, event: studioEvent(observed + 1, { type: 'agent_message', phase: null }, OTHER_RUN_ID) }],
+  ]
+  const NOTICES: Readonly<Record<string, string>> = { disconnected: 'Live activity disconnected', rejected: 'Live activity stopped', 'foreign event': 'Live activity stopped' }
+
+  it('keeps holding a legacy run whose live activity was lost or rejected, wherever it stopped, until its bound result', () => {
+    // Admission (reproduction already under way), reproduction, diagnosis before the unseen replay,
+    // and the replay itself.
+    for (const observed of [0, 2, 6, 9]) {
+      const before = reduce([...LEGACY_RUNNING, ...eventActions(events(LEGACY_FLOW.slice(0, observed), LEGACY_RUN_ID), LEGACY_RUN_ID)])
+      for (const [mode, stop] of lostActivity(LEGACY_RUN_ID, observed)) {
+        const lost = reduce([stop], before)
+        const where = `${mode} after ${observed} events`
+        expect(lost.run?.status, where).toBe('running')
+        expect(lost.run?.stream.status, where).toBe(mode === 'disconnected' ? 'disconnected' : 'rejected')
+        expect(selectMeasuringTarget(lost), where).toBe(true)
+        const status = selectCompactStatus(lost)
+        expect(status, where).toEqual({ label: 'Run in progress', tone: 'progress', hasResult: false, activityNotice: NOTICES[mode] })
+        expect(showsNoVerdict(status), where).toBe(true)
+        // An unreadable result says nothing about the engine either, so the hold stays.
+        const unreadable = reduce([{ type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }], lost)
+        expect(selectMeasuringTarget(unreadable), where).toBe(true)
+        expect(showsNoVerdict(selectCompactStatus(unreadable)), where).toBe(true)
+        // Only the bound authoritative result releases it, with its exact verdict.
+        const decided = reduce([legacyResult(VERIFIED)], lost)
+        expect(selectMeasuringTarget(decided), where).toBe(false)
+        expect(selectCompactStatus(decided).label, where).toBe('Verified Fix')
+      }
+    }
+  })
+
+  it('keeps holding a captured run whose live activity was lost or rejected in preparation, measurement or between measurements, without a live label or verdict, until its bound result', () => {
+    // Preparation (nothing yet, then the baseline build), baseline measurement, the gap before the
+    // unseen candidate measurement, and the candidate measurement.
+    for (const observed of [0, 1, 2, 3, 5, 6]) {
+      const before = reduce([...CAPTURED_RUNNING, ...eventActions(events(CAPTURED_FLOW.slice(0, observed), CAPTURED_RUN_ID), CAPTURED_RUN_ID)])
+      for (const [mode, stop] of lostActivity(CAPTURED_RUN_ID, observed)) {
+        const lost = reduce([stop], before)
+        const where = `${mode} after ${observed} events`
+        expect(lost.capturedRun?.status, where).toBe('running')
+        expect(lost.capturedRun?.stream.status, where).toBe(mode === 'disconnected' ? 'disconnected' : 'rejected')
+        expect(selectMeasuringTarget(lost), where).toBe(true)
+        // The frame is never presented as live, and no verdict appears, while the layout holds.
+        expect(selectCapturedTarget(lost.capturedRun), where).toBe('not-live')
+        const status = selectCompactStatus(lost)
+        expect(status, where).toEqual({ label: 'Verification in progress', tone: 'progress', hasResult: false, activityNotice: NOTICES[mode] })
+        expect(showsNoVerdict(status), where).toBe(true)
+        const unreadable = reduce([{ type: 'result/failed', runId: CAPTURED_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }], lost)
+        expect(selectMeasuringTarget(unreadable), where).toBe(true)
+        expect(selectCapturedTarget(unreadable.capturedRun), where).toBe('not-live')
+        expect(showsNoVerdict(selectCompactStatus(unreadable)), where).toBe(true)
+        const decided = reduce([capturedResult(PASSED)], lost)
+        expect(selectMeasuringTarget(decided), where).toBe(false)
+        expect(selectCapturedTarget(decided.capturedRun), where).toBe('completed-evidence')
+        expect(selectCompactStatus(decided).label, where).toBe('Candidate verification passed')
+      }
+    }
+  })
+
+  it('lets connected activity, not an unreadable result, decide the hold after the result could not be read', () => {
+    const unreadable: StudioAction = { type: 'result/failed', runId: LEGACY_RUN_ID, error: { code: 'RESULT_INVALID', message: 'x' } }
+    const legacy = events(LEGACY_FLOW, LEGACY_RUN_ID)
+    let state = reduce([...LEGACY_RUNNING, ...eventActions(legacy.slice(0, 2), LEGACY_RUN_ID), unreadable])
+    expect(state.run?.status).toBe('failed')
+    expect(selectMeasuringTarget(state)).toBe(true)
+    const legacyHolds: boolean[] = []
+    for (const action of eventActions(legacy.slice(2), LEGACY_RUN_ID)) {
+      state = reduce([action], state)
+      legacyHolds.push(selectMeasuringTarget(state))
+      expect(showsNoVerdict(selectCompactStatus(state))).toBe(true)
+    }
+    // Reproduction, diagnosis, replay, then the final event: the same holds as a running run.
+    expect(legacyHolds).toEqual([true, true, false, false, false, true, true, true, false])
+
+    const captured = events(CAPTURED_FLOW, CAPTURED_RUN_ID)
+    const capturedUnreadable: StudioAction = { ...unreadable, runId: CAPTURED_RUN_ID }
+    let run = reduce([...CAPTURED_RUNNING, ...eventActions(captured.slice(0, 4), CAPTURED_RUN_ID), capturedUnreadable])
+    expect(run.capturedRun?.status).toBe('failed')
+    expect(selectMeasuringTarget(run)).toBe(false)
+    const capturedHolds: boolean[] = []
+    for (const action of eventActions(captured.slice(4), CAPTURED_RUN_ID)) {
+      run = reduce([action], run)
+      capturedHolds.push(selectMeasuringTarget(run))
+      // Late activity holds the layout but never presents the frame as live without a running run.
+      expect(selectCapturedTarget(run.capturedRun)).toBe('not-live')
+      expect(showsNoVerdict(selectCompactStatus(run))).toBe(true)
+    }
+    // Applying, then the late candidate measurement and its evidence, then scan, release and the final event.
+    expect(capturedHolds).toEqual([false, true, true, false, false, false])
+    // Activity lost after the result could not be read leaves nothing to decide the hold.
+    const lostLate = reduce([{ type: 'stream/disconnected', runId: CAPTURED_RUN_ID }], reduce([...CAPTURED_RUNNING, ...eventActions(captured.slice(0, 4), CAPTURED_RUN_ID), capturedUnreadable]))
+    expect(selectMeasuringTarget(lostLate)).toBe(true)
+    expect(selectCapturedTarget(lostLate.capturedRun)).toBe('not-live')
   })
 })

@@ -1,5 +1,5 @@
 import { selectCapturedOutcome, selectCapturedTarget, selectStudioMode } from './state.js'
-import type { CapturedOutcomeView, StreamStatus, StudioState } from './state.js'
+import type { CapturedOutcomeView, CapturedRunView, StreamStatus, StudioState } from './state.js'
 
 // The local presentation of the Studio workspace (Spec 005). It holds only layout choices of this
 // page: the work panel's width and whether it is collapsed. They never reach the run reducer, the
@@ -7,8 +7,10 @@ import type { CapturedOutcomeView, StreamStatus, StudioState } from './state.js'
 // start, cancel, reload or refetch anything.
 //
 // While the target is being measured, a layout change would move the frame between the engine's
-// reading of the Canvas box and its clipped page screenshot. `selectMeasuringTarget` names those
-// phases from the observed run, and the shell keeps layout requests until the phase ends.
+// reading of the Canvas box and its clipped page screenshot. `selectMeasuringTarget` names the
+// phases in which the engine may be measuring, from the observed run, and the shell keeps layout
+// requests until such a phase ends. Lost live activity ends only what the page can see, not the
+// engine's work, so it never ends a phase by itself.
 //
 // The compact status shown outside a collapsed work panel is derived from the existing
 // authoritative state and selectors only. Live activity is advisory: a stream that ended,
@@ -164,21 +166,45 @@ const LEGACY_MEASURED_PHASES: ReadonlySet<string> = new Set(['initialized', 'rep
 const isLiveStream = (status: StreamStatus): boolean => status === 'connecting' || status === 'open'
 
 /**
+ * Live activity that stopped before the final event: the stream disconnected or was rejected. The
+ * engine runs independently of the page's stream, so its later measurements go unseen.
+ */
+const isLostStream = (status: StreamStatus): boolean => status === 'disconnected' || status === 'rejected'
+
+/** Whether connected captured activity shows a measured phase, read as for a running run. */
+function capturedActivityMeasures(run: CapturedRunView): boolean {
+  // The live label needs a running run; an unreadable result says nothing about the engine, so the
+  // activity of a run whose result could not be read is read the same way. The label is unchanged.
+  const target = selectCapturedTarget(run.status === 'running' ? run : { ...run, status: 'running', result: null, error: null })
+  return target === 'baseline-live' || target === 'candidate-live'
+}
+
+/**
  * Whether the target frame may be being measured now, so the workspace keeps layout requests until
- * the measurement ends. A captured run is measured while its target is presented as live, which the
- * existing selector derives from the observed measured phase; its first measurement follows the
- * baseline build, long after its activity is attached. A legacy run reproduces the defect as soon
- * as it is admitted, often before its live activity is attached, so it holds from the start request
- * until a later phase is observed, and again during replay. Without live activity, or once a result
- * decided the run, nothing holds.
+ * the measurement ends. Only the bound result, or the run's final event on its connected live
+ * activity, proves the run will measure nothing more. Until then:
+ *
+ * - With connected live activity, a captured run holds while its activity shows a measured phase,
+ *   which the existing target selector derives; its first measurement follows the baseline build,
+ *   long after its activity is attached. A legacy run reproduces the defect as soon as it is
+ *   admitted, often before its live activity is attached, so it holds from the start request until
+ *   a later phase is observed, and again during replay.
+ * - Once live activity disconnected or was rejected, the engine measures on unseen, in either mode
+ *   and wherever the activity stopped, so the run holds until its bound result. An unreadable
+ *   result does not end the run either: connected activity still decides the hold, and without it
+ *   the hold stays. None of this presents the frame as live or states a verdict.
  */
 export function selectMeasuringTarget(state: StudioState): boolean {
   if (selectStudioMode(state) === 'captured') {
-    const target = selectCapturedTarget(state.capturedRun)
-    return target === 'baseline-live' || target === 'candidate-live'
+    const run = state.capturedRun
+    if (run === undefined || run.status === 'finalized') return false
+    if (isLostStream(run.stream.status)) return true
+    return isLiveStream(run.stream.status) && capturedActivityMeasures(run)
   }
   if (state.pendingStart !== null) return true
   const { run } = state
-  if (run === null || run.status !== 'running' || !isLiveStream(run.stream.status)) return false
+  if (run === null || run.status === 'finalized') return false
+  if (isLostStream(run.stream.status)) return true
+  if (!isLiveStream(run.stream.status)) return false
   return run.phase === null || LEGACY_MEASURED_PHASES.has(run.phase)
 }

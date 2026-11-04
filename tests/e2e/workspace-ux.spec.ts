@@ -30,7 +30,11 @@ import type { CapturedStudioHarness, CleanupReport, StudioHarness } from '../sup
 // measured, and compares the run with a matched unresized control: the same outcome and checks,
 // 640 x 360 screenshots, and screenshot evidence bound to each run's own manifests, with the guard
 // intact and the same frame until release. Result reads are held by a test-local route, so the
-// collapsed status is observed before and after the bound result reaches the page.
+// collapsed status is observed before and after the bound result reaches the page. A third run
+// loses its live activity through a test-local route at once: the engine measures both phases
+// unseen, the layout requests made meanwhile stay pending with no live label or verdict, and only
+// the bound result applies them, with the same outcome and persisted evidence as the control. Its
+// evidence pane names the screenshots the page never received rather than guessing their IDs.
 //
 // Screenshots, layout, contrast and focus measurements are kept for review under the ignored
 // `.flowproof/review/005-studio-workspace-ux/<tested-sha>/slice2/<case>/<stamp>/` of this checkout,
@@ -41,6 +45,8 @@ import type { CapturedStudioHarness, CleanupReport, StudioHarness } from '../sup
 const HERO = 'canvas-filter-hero'
 const RUN_BUDGET_MS = 300_000
 const PANEL_WIDTHS = [20, 22, 24, 26, 28, 30, 32] as const
+/** The applied width choice of the default 24rem panel. */
+const DEFAULT_STEP = PANEL_WIDTHS.indexOf(24)
 const scenario = await loadScenario(HERO, { repoRoot: REPO_ROOT })
 const TARGET_DOCUMENT = scenario.scenario.app.url
 const CANVAS = scenario.scenario.app.canvas
@@ -969,10 +975,14 @@ async function recordCapturedRun(harness: CapturedStudioHarness, runId: string, 
   return { result, runId, manifestScreenshots, shown, screenshotSizes, screenshotHashes, evidenceTypes, navigationUrls }
 }
 
-/** Within one run: each shown side is exactly its own phase's manifest screenshot, at the Canvas size. */
-function expectBoundEvidence(record: CapturedRunRecord): void {
-  expect(record.shown.before).toEqual({ state: 'shown', evidenceId: record.manifestScreenshots.failure })
-  expect(record.shown.after).toEqual({ state: 'shown', evidenceId: record.manifestScreenshots.replay })
+/**
+ * Within one run: each shown side is exactly its own phase's manifest screenshot, at the Canvas size.
+ * A page that received none of the run's evidence events shows each side as not received instead.
+ */
+function expectBoundEvidence(record: CapturedRunRecord, received = true): void {
+  const side = (evidenceId: string | null): unknown => (received ? { state: 'shown', evidenceId } : { state: 'not-received', evidenceId: null })
+  expect(record.shown.before).toEqual(side(record.manifestScreenshots.failure))
+  expect(record.shown.after).toEqual(side(record.manifestScreenshots.replay))
   expect(record.manifestScreenshots.failure).toMatch(/^ev_failure_screenshot_[0-9]{3}$/)
   expect(record.manifestScreenshots.replay).toMatch(/^ev_replay_screenshot_[0-9]{3}$/)
   expect(record.screenshotSizes).toEqual({ failure: CANVAS, replay: CANVAS })
@@ -990,9 +1000,13 @@ const outcomeOf = (result: CapturedVerificationResult): unknown => ({
 interface CapturedCase {
   readonly name: string
   readonly resize: boolean
+  /** Abort the run's live activity stream and request layout changes while the engine runs unseen. */
+  readonly loseActivity?: boolean
 }
 
-async function runCapturedCase({ name, resize }: CapturedCase): Promise<CapturedRunRecord> {
+const isEventStream = (url: URL): boolean => /^\/api\/runs\/[^/]+\/events$/.test(url.pathname)
+
+async function runCapturedCase({ name, resize, loseActivity = false }: CapturedCase): Promise<CapturedRunRecord> {
   const review = await reviewCase(name)
   let harness: CapturedStudioHarness | undefined
   let cleanup: CleanupReport | undefined
@@ -1024,8 +1038,19 @@ async function runCapturedCase({ name, resize }: CapturedCase): Promise<Captured
     await review.shot(page, 'ready.png')
     if (resize) await expectAccessible(page, review, 'captured-ready-1280x800')
 
-    // The control keeps the default layout throughout; only the resized run holds its result reads.
-    const results = resize ? await holdRequests(page, isResultRead) : null
+    // The control keeps the default layout throughout; the other runs hold their result reads.
+    const results = resize || loseActivity ? await holdRequests(page, isResultRead) : null
+    // A controlled disconnection: the page's live activity fails, the engine and result poll do not.
+    let abortedStreams = 0
+    if (loseActivity) {
+      await page.route(
+        (url) => isEventStream(url),
+        async (route: Route) => {
+          abortedStreams += 1
+          await route.abort('connectionreset')
+        },
+      )
+    }
     if (resize) {
       // Trusted layout changes before the start, then the in-page driver during each measured phase.
       await workspace.separator.focus()
@@ -1053,11 +1078,57 @@ async function runCapturedCase({ name, resize }: CapturedCase): Promise<Captured
         await sleep(150)
       }
     }
+    if (loseActivity) {
+      // The activity is lost before any measurement is seen, so the layout holds from here on.
+      await expect(page.locator('[data-stream]')).toHaveAttribute('data-stream', 'disconnected')
+      await expect(workspace.root).toHaveAttribute('data-layout-held', 'true')
+      // Trusted width and collapse requests while the engine prepares and measures, unseen.
+      const deadline = Date.now() + RUN_BUDGET_MS
+      for (let attempt = 0; !tracker.detached() && Date.now() < deadline; attempt += 1) {
+        if (attempt % 4 === 3) {
+          if (await workspace.collapse.isVisible()) await workspace.collapse.click({ timeout: 2_000 }).then(() => (trusted += 1), () => undefined)
+        } else {
+          await workspace.separator.focus({ timeout: 2_000 })
+          await page.keyboard.press(attempt % 2 === 0 ? 'ArrowRight' : 'ArrowLeft')
+          trusted += 1
+        }
+        await sleep(150)
+      }
+    }
     const { runId, result } = await harness.waitForCapturedResult(RUN_BUDGET_MS)
     expect(tracker.detached()).toBe(true)
     expect(requests.starts()).toBe(1)
 
-    if (results !== null) {
+    if (results !== null && loseActivity) {
+      // The engine finished both measurements and released the frame; the page still has no result.
+      expect(tracker.navigationUrls()).toEqual([TARGET_DOCUMENT, TARGET_DOCUMENT])
+      await workspace.separator.focus()
+      await page.keyboard.press('End')
+      await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
+      await expect(workspace.separator).toHaveAttribute('aria-valuenow', '32')
+      // Requested, not applied: the layout the run started with, held, without a verdict or live label.
+      await expect(workspace.root).toHaveAttribute('data-layout-held', 'true')
+      await expect(workspace.root).toHaveAttribute('data-panel-step', String(DEFAULT_STEP))
+      await expect(workspace.root).toHaveAttribute('data-collapsed', 'false')
+      await expect(workspace.panel).toBeVisible()
+      await expect(workspace.status.locator('.workspace__status-label')).toHaveText('Verification in progress')
+      await expect(workspace.status.locator('.workspace__status-notice')).toHaveText('Live activity disconnected')
+      await expect(workspace.viewResult).toHaveCount(0)
+      await expect(page.locator('.captured-status__final')).toHaveAttribute('data-captured-status', 'pending')
+      await review.shot(page, 'result-pending-activity-lost.png')
+      results.release()
+      // The bound result decides the run, and only then is the pending layout applied.
+      await expect(workspace.status.locator('.workspace__status-label')).toHaveText('Candidate verification passed')
+      await expect(workspace.root).not.toHaveAttribute('data-layout-held', 'true')
+      await expect(workspace.root).toHaveAttribute('data-panel-step', String(PANEL_WIDTHS.indexOf(32)))
+      await expect(workspace.root).toHaveAttribute('data-collapsed', 'true')
+      await expect(workspace.panel).toBeHidden()
+      await review.shot(page, 'final-collapsed.png')
+      await workspace.viewResult.focus()
+      await page.keyboard.press('Enter')
+      await expect(workspace.panel).toBeVisible()
+      await expect(page.locator('.captured-status__final')).toBeFocused()
+    } else if (results !== null) {
       // Before the page reads the bound result, the collapsed status still shows no verdict.
       if ((await workspace.root.getAttribute('data-collapsed', { timeout: ELEMENT_TIMEOUT_MS })) !== 'true') await workspace.collapse.click({ timeout: ELEMENT_TIMEOUT_MS })
       await expect(workspace.panel).toBeHidden()
@@ -1089,7 +1160,26 @@ async function runCapturedCase({ name, resize }: CapturedCase): Promise<Captured
 
     const samples = await recordedSamples(page)
     review.record('paneSamples', samples)
-    if (!resize) expectHeldDuringMeasurement(samples, 2)
+    if (!resize && !loseActivity) expectHeldDuringMeasurement(samples, 2)
+    if (loseActivity) {
+      review.record('abortedStreams', abortedStreams)
+      expect(abortedStreams).toBeGreaterThan(0)
+      expect(trusted).toBeGreaterThan(0)
+      // Nothing presented the frame as live once its activity was lost.
+      expect(samples.filter((sample) => sample.label === 'baseline-live' || sample.label === 'candidate-live')).toEqual([])
+      const guarded = samples.filter((sample) => sample.frameAttached && sample.label !== 'preview' && sample.label !== 'none')
+      expect(guarded.length).toBeGreaterThan(0)
+      for (const sample of guarded) expect(sample).toMatchObject({ cover: true, coverHit: true, frameTabIndex: '-1', focusInFrame: false })
+      // One hold, opened by the lost activity before any request and closed by the bound result.
+      const holds = samples.filter((sample) => sample.cause === 'hold')
+      expect(holds.map((sample) => sample.held)).toEqual(['true', null])
+      expect(holds[0]).toMatchObject({ stream: 'disconnected', step: String(DEFAULT_STEP), collapsed: 'false' })
+      expectHeldDuringMeasurement(samples, 1)
+      // No intermediate width or collapse was applied: only the final pending request, after the hold.
+      const applied = samples.filter((sample) => sample.cause === 'layout')
+      expect(applied.length).toBeGreaterThan(0)
+      for (const sample of applied) expect(sample).toMatchObject({ held: null, step: String(PANEL_WIDTHS.indexOf(32)) })
+    }
     if (resize) {
       // The guard held through every recorded state while the frame existed.
       const guarded = samples.filter((sample) => sample.frameAttached && sample.label !== 'preview' && sample.label !== 'none')
@@ -1123,12 +1213,13 @@ async function runCapturedCase({ name, resize }: CapturedCase): Promise<Captured
 }
 
 test('captured verification keeps its guarded frame, outcome and evidence bindings through resizing and collapse during measurement, like an unresized control', async () => {
-  test.setTimeout(RUN_BUDGET_MS * 3)
+  test.setTimeout(RUN_BUDGET_MS * 4)
   const control = await runCapturedCase({ name: 'captured-control', resize: false })
   const resized = await runCapturedCase({ name: 'captured-resized-during-measurement', resize: true })
-  for (const record of [control, resized]) {
+  const lost = await runCapturedCase({ name: 'captured-activity-lost-during-run', resize: false, loseActivity: true })
+  for (const record of [control, resized, lost]) {
     expect(record.result).toMatchObject({ status: 'passed', reason_code: null })
-    expectBoundEvidence(record)
+    expectBoundEvidence(record, record !== lost)
     // Exactly the baseline and the candidate reconnect of the same frame; no layout reload.
     expect(record.navigationUrls).toEqual([TARGET_DOCUMENT, TARGET_DOCUMENT])
   }
@@ -1138,6 +1229,12 @@ test('captured verification keeps its guarded frame, outcome and evidence bindin
   // The same baseline and candidate were captured at the same Canvas position: identical images.
   expect(resized.screenshotHashes).toEqual(control.screenshotHashes)
   expect(resized.runId).not.toBe(control.runId)
+  // Activity lost while the engine ran: the same outcome, evidence and Canvas position as the control.
+  expect(outcomeOf(lost.result)).toEqual(outcomeOf(control.result))
+  expect(lost.evidenceTypes).toEqual(control.evidenceTypes)
+  expect(lost.screenshotSizes).toEqual(control.screenshotSizes)
+  expect(lost.screenshotHashes).toEqual(control.screenshotHashes)
+  expect(new Set([control.runId, resized.runId, lost.runId]).size).toBe(3)
 })
 
 // ---------------------------------------------------------------------------------------
