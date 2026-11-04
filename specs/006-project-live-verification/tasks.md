@@ -5,14 +5,13 @@
 
 **Branch**: `feat/006-project-live-verification` | **Created**: 2026-11-04
 
-**Authorization**: The owner requested Tasks after the Plan report, then requested an explicit slice
-scope and parallel-ready breakdown. That scheduling revision changed documents only; it did not
-execute source edits, image provisioning, product tests, model calls, push, PR, merge or deployment.
-On 2026-11-04 the owner authorized local S1 implementation only (message 25437: start from slice 1
-following the workflow skill); this excludes push, PR, merge, deployment, model calls and S2+.
-S1 (T001–T009) is implemented locally and marked from its evidence in [verification.md](verification.md);
-T010–T055 are unexecuted. Each later slice must be authorized separately; actual live acceptance
-requires available permitted credentials, fixtures and runtime resources.
+**Authorization**: The owner authorized implementation, publication, review-loop corrections and
+conditional merge of all remaining S2–S7 slices on 2026-11-04 (message 25501), using Opus with parent
+independent verification. S1 and S4 have merged through PRs #27 and #29. Each later slice still follows
+its predecessor merges and its own verification/PR gates. Checked tasks describe implemented work
+present in this branch; unchecked sibling tasks do not revoke the authorization or describe another
+worktree's status. Actual provider acceptance remains T053 after final regression; T054 requires real
+owner feedback and is never self-approved. Deployment remains canceled and outside scope.
 
 **Tests**: Required acceptance coverage comes from the Spec's independent tests/SC-001–SC-010 and the
 Plan's explicit risk-based verification/TDD strategy. Write focused parser/authority/path/privacy/race
@@ -97,14 +96,14 @@ US3 baseline gate, never a caller-controlled browser boolean (FR-004/FR-006/FR-0
 
 ### Tests First
 
-- [ ] T021 [P] [US2] Write `tests/contract/project-capture.test.ts` for target/frame/epoch/sequence binding, `idle -> recording -> finishing -> ready`, pre-analysis `recording|finishing|ready -> discarded`, complete/incomplete/unsupported states, caps and stable Finish digests; capture alone must not call a model.
-- [ ] T022 [P] [US2] Write `tests/unit/project-privacy.test.ts` for excluded input/locator/source/URL/error content, target-only screenshots and pre-persistence masks, safe synthetic values and unknown-sensitive-surface rejection. Add pixel-level seeded rendered-secret coverage to `tests/e2e/project-privacy.spec.ts`; PNG marker-byte scans alone do not prove masking.
+- [X] T021 [P] [US2] Write `tests/contract/project-capture.test.ts` for target/frame/epoch/sequence binding, `idle -> recording -> finishing -> ready`, pre-analysis `recording|finishing|ready -> discarded`, complete/incomplete/unsupported states, caps and stable Finish digests; capture alone must not call a model.
+- [X] T022 [P] [US2] Write `tests/unit/project-privacy.test.ts` for excluded input/locator/source/URL/error content, target-only screenshots and pre-persistence masks, safe synthetic values and unknown-sensitive-surface rejection. Add pixel-level seeded rendered-secret coverage to `tests/e2e/project-privacy.spec.ts`; PNG marker-byte scans alone do not prove masking.
 - [ ] T023 [P] [US2] Write `tests/contract/project-model.test.ts` for real image block construction, closed `ready|clarify|unsupported` analysis and correction schemas, evidence references, actual requested/observed model+response ID, auth/error redaction, request/call budgets and explicit clarification re-analysis. Test no fixture/provider/text-only-image fallback and no automatic retries/tools.
 
 ### Implementation
 
-- [ ] T024 [US2] Implement `packages/flowproof/src/capture/projectPrivacy.ts` after T022: sanitize before staging/hashing/persistence, mask input/contenteditable/private regions while producing the target PNG, admit safe synthetic fill values separately, mark missing necessary values/unknown sensitive visual surfaces unsupported, and never collect Studio/desktop/raw trace/HAR/video/headers/bodies/cookies.
-- [ ] T025 [US2] Implement `packages/flowproof/src/capture/projectRecorder.ts` after T021/T024: attach only to the actual target frame, validate source/epoch and host-assign sequence, record click/fill/native-select/coalesced-scroll/same-origin navigation plus associated safe images/errors; flush on navigation/Finish, make gaps/unsupported actions/caps explicit and support discard/re-record without human deadlines.
+- [X] T024 [US2] Implement `packages/flowproof/src/capture/projectPrivacy.ts` after T022: sanitize before staging/hashing/persistence, mask input/contenteditable/private regions while producing the target PNG, admit safe synthetic fill values separately, mark missing necessary values/unknown sensitive visual surfaces unsupported, and never collect Studio/desktop/raw trace/HAR/video/headers/bodies/cookies.
+- [X] T025 [US2] Implement `packages/flowproof/src/capture/projectRecorder.ts` after T021/T024: attach only to the actual target frame, validate source/epoch and host-assign sequence, record click/fill/native-select/coalesced-scroll/same-origin navigation plus associated safe images/errors; flush on navigation/Finish, make gaps/unsupported actions/caps explicit and support discard/re-record without human deadlines.
 - [ ] T026 [US2] Validate recorder navigation/input/scroll ordering and Finish/Discard/cancel races in `tests/e2e/project-recording.spec.ts` after T025; assert no unrelated frame data, no model request before Analyze, no report reuse after discard and no silent complete status after overflow or unsupported actions.
 - [ ] T027 [US2] Implement `packages/flowproof/src/model/projectPrompt.ts` after T023/T024: admitted code/actions/errors plus actual safe PNG image content, deterministic disclosed image/source selection, existing evidence citations and the exact 32-file/256-KiB/eight-image/8-MiB request bounds; reject essential omissions rather than silently truncate context.
 - [ ] T028 [US2] Implement `packages/flowproof/src/model/projectClient.ts` after T023/T027: existing host-only Meta endpoint/`muse-spark-1.3`/`MODEL_API_KEY`, stateless `store:false`, strict phase output, no retries/tools/redirects or implicit environment overrides, sticky cancellation, safe invocation records and response identity validation. Keep legacy `diagnose()` and one-file output unchanged.
