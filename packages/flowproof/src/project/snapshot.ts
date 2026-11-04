@@ -40,8 +40,12 @@ export interface ProjectSnapshot {
   readonly baselineCommit: string
   /** The files the workspace held when it was exported. */
   readonly files: readonly AdmittedFile[]
-  /** Registers a runtime-owned workspace entry (`node_modules` link or output mount point). */
+  /** Registers only the runtime dependency link. */
   allowRuntimeEntry(relative: string): void
+  /** Registers one exact non-overlapping runtime output subtree; siblings remain integrity-checked. */
+  allowRuntimeOutput(relative: string): void
+  /** Returns an immutable candidate-copy view with an exact host-computed expected tree. */
+  withExpectedCandidate(files: readonly AdmittedFile[]): ProjectSnapshot
   /** Re-reads the workspace through no-follow paths against `expected` (the exported files by default). */
   verify(expected?: readonly AdmittedFile[]): Promise<SnapshotVerification>
   /** Idempotent removal of exactly this owned directory. */
@@ -97,20 +101,70 @@ export async function exportProjectSnapshot(options: { readonly project: Admitte
   }
 
   const runtimeEntries = new Set<string>()
-  const files = Object.freeze([...project.files])
-  return Object.freeze({
-    root: owned.path,
-    workspace,
-    privateDir,
-    purpose,
-    baselineCommit: project.context.baseline_commit,
-    files,
+  let runtimeOutput: string | null = null
+  const baselineFiles = Object.freeze([...project.files])
+  const overlaps = (left: string, right: string): boolean => left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`)
+  const safeRuntimePath = (relative: string): boolean =>
+    relative.length > 0 &&
+    relative.length <= 512 &&
+    !relative.startsWith('/') &&
+    !relative.includes('\\') &&
+    !/[\u0000-\u001f\u007f]/.test(relative) &&
+    relative.split('/').every((part) => part !== '' && part !== '.' && part !== '..' && /^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,254}$/.test(part))
 
-    allowRuntimeEntry(relative: string): void {
-      runtimeEntries.add(relative)
-    },
+  const makeView = (expectedFiles: readonly AdmittedFile[]): ProjectSnapshot => {
+    const immutableFiles = Object.freeze([...expectedFiles])
+    return Object.freeze({
+      root: owned.path,
+      workspace,
+      privateDir,
+      purpose,
+      baselineCommit: project.context.baseline_commit,
+      files: immutableFiles,
 
-    async verify(expected: readonly AdmittedFile[] = files): Promise<SnapshotVerification> {
+      allowRuntimeEntry(relative: string): void {
+        if (relative !== 'node_modules') throw new Error('only the prepared dependency link is a runtime entry')
+        runtimeEntries.add(relative)
+      },
+
+      allowRuntimeOutput(relative: string): void {
+        if (!safeRuntimePath(relative) || overlaps(relative, 'node_modules') || overlaps(relative, '.git') || overlaps(relative, 'src')) {
+          throw new Error('runtime output path is not safe')
+        }
+        if (baselineFiles.some((file) => overlaps(file.path, relative))) throw new Error('runtime output overlaps an admitted file')
+        if (runtimeOutput !== null && runtimeOutput !== relative) throw new Error('runtime output path is already fixed')
+        runtimeOutput = relative
+        runtimeEntries.add(relative)
+      },
+
+      withExpectedCandidate(candidateFiles: readonly AdmittedFile[]): ProjectSnapshot {
+        if (purpose !== 'candidate-copy' || runtimeEntries.size !== 0 || candidateFiles.length !== baselineFiles.length) {
+          throw new Error('only a pristine candidate copy can receive an expected candidate tree')
+        }
+        const baselineByPath = new Map(baselineFiles.map((file) => [file.path, file]))
+        const candidateByPath = new Map(candidateFiles.map((file) => [file.path, file]))
+        if (candidateByPath.size !== baselineByPath.size) throw new Error('candidate tree paths differ from the baseline')
+        for (const baseline of baselineFiles) {
+          const candidate = candidateByPath.get(baseline.path)
+          if (
+            candidate === undefined ||
+            candidate.mode !== baseline.mode ||
+            !/^[a-f0-9]{40,64}$/.test(candidate.oid) ||
+            !/^[a-f0-9]{64}$/.test(candidate.sha256) ||
+            !Number.isSafeInteger(candidate.size) ||
+            candidate.size < 0 ||
+            (candidate.sha256 !== baseline.sha256 &&
+              (!project.context.allowed_source_paths.includes(candidate.path) ||
+                project.context.protected_inputs.some((input) => input.path === candidate.path) ||
+                candidate.text !== true))
+          ) {
+            throw new Error('candidate tree changes are outside admitted source text')
+          }
+        }
+        return makeView(candidateFiles)
+      },
+
+      async verify(expected: readonly AdmittedFile[] = immutableFiles): Promise<SnapshotVerification> {
       const changed: string[] = []
       const missing: string[] = []
       const unexpected: string[] = []
@@ -145,8 +199,10 @@ export async function exportProjectSnapshot(options: { readonly project: Admitte
       await walk('')
       for (const file of expected) if (!seen.has(file.path)) missing.push(file.path)
       return Object.freeze({ ok: changed.length + missing.length + unexpected.length === 0, changed, missing, unexpected })
-    },
+      },
 
-    remove: () => owned.remove(),
-  })
+      remove: () => owned.remove(),
+    })
+  }
+  return makeView(baselineFiles)
 }

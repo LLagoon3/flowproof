@@ -541,8 +541,10 @@ export async function applyProjectPatch(project: AdmittedProject, admission: Pat
 
     const treeSha256 = admittedTreeDigest(files)
     await writeFile(path.join(copy.privateDir, 'candidate.json'), `${JSON.stringify({ candidate_id: candidate.candidate_id, tree_sha256: treeSha256, files })}\n`, { flag: 'wx', mode: 0o600 })
+    const candidateCopy = copy.withExpectedCandidate(files)
+    if (!(await candidateCopy.verify()).ok) return await fail('PATCH_FIDELITY_MISMATCH')
     const applied = CandidateSchema.parse({ ...candidate, state: 'applied-to-copy', expected_tree_sha256: treeSha256, build_sha256: null, rejection_reasons: [] })
-    return Object.freeze({ state: 'applied-to-copy', candidate: Object.freeze(applied), copy, treeSha256, files: Object.freeze(files) })
+    return Object.freeze({ state: 'applied-to-copy', candidate: Object.freeze(applied), copy: candidateCopy, treeSha256, files: Object.freeze(files) })
   } catch (error) {
     await copy.remove()
     throw error

@@ -274,11 +274,10 @@ export function createProjectRuntime(options: { readonly profile: RuntimeProfile
     else if (!existing.isSymbolicLink()) return false
     snapshot.allowRuntimeEntry('node_modules')
     const mountPoint = path.join(snapshot.workspace, outputDirectory)
-    const top = outputDirectory.split('/')[0] ?? outputDirectory
     const info = await lstat(mountPoint).catch(() => null)
     if (info === null) await mkdir(mountPoint, { recursive: true, mode: 0o755 })
     else if (!info.isDirectory() || (await readdir(mountPoint)).length > 0) return false
-    snapshot.allowRuntimeEntry(top)
+    snapshot.allowRuntimeOutput(outputDirectory)
     return true
   }
 

@@ -1,13 +1,15 @@
 import { execFile } from 'node:child_process'
-import { lstat, readFile, readdir, stat } from 'node:fs/promises'
+import { lstat, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { canonicalJson, sha256Hex } from '../../packages/flowproof/src/evidence/store.js'
+import { admitProjectPatch, applyProjectPatch } from '../../packages/flowproof/src/patch/projectDiff.js'
 import { admitProject } from '../../packages/flowproof/src/project/admission.js'
 import type { AdmittedProject } from '../../packages/flowproof/src/project/admission.js'
+import { newProjectUuid } from '../../packages/flowproof/src/project/contracts.js'
 import type { ExecutionConfiguration } from '../../packages/flowproof/src/project/contracts.js'
 import { ProfileError, admissionProfileOf, createExecutionConfiguration, parseRuntimeManifest, readRuntimeManifest, verifyRuntimeImage } from '../../packages/flowproof/src/project/profile.js'
 import type { RuntimeProfile } from '../../packages/flowproof/src/project/profile.js'
@@ -359,5 +361,71 @@ describe('stop and join before accepting output', () => {
     expect((await snapshot.verify()).ok).toBe(true)
     expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
     await expectOriginalUnchanged(prepared)
+  }, DOCKER_TIMEOUT)
+})
+
+describe('candidate copy to offline runtime compatibility', () => {
+  it('builds an exactly patched candidate snapshot using its frozen expected tree', async () => {
+    const prepared = await prepare()
+    const source = await readFile(path.join(prepared.repository.root, 'src/App.jsx'), 'utf8')
+    const lines = source.replace(/\n$/, '').split('\n')
+    const index = lines.findIndex((line) => line.includes("if (filter === 'open') return task.done"))
+    expect(index).toBeGreaterThanOrEqual(0)
+    const replacement = lines[index]!.replace('return task.done', 'return !task.done')
+    const start = Math.max(0, index - 3)
+    const end = Math.min(lines.length, index + 4)
+    const before = lines.slice(start, index)
+    const after = lines.slice(index + 1, end)
+    const patch = [
+      'diff --git a/src/App.jsx b/src/App.jsx',
+      '--- a/src/App.jsx',
+      '+++ b/src/App.jsx',
+      `@@ -${start + 1},${before.length + 1 + after.length} +${start + 1},${before.length + 1 + after.length} @@`,
+      ...before.map((line) => ` ${line}`),
+      `-${lines[index]}`,
+      `+${replacement}`,
+      ...after.map((line) => ` ${line}`),
+      '',
+    ].join('\n')
+    const admission = admitProjectPatch(prepared.project, {
+      runId: newProjectUuid(),
+      definitionId: newProjectUuid(),
+      definitionDigest: 'e'.repeat(64),
+      invocationId: newProjectUuid(),
+      baselineCommit: prepared.project.context.baseline_commit,
+      targetPaths: ['src/App.jsx'],
+      patch,
+    })
+    expect(admission.state).toBe('proposed')
+    if (admission.state !== 'proposed') return
+    const application = await applyProjectPatch(prepared.project, admission)
+    expect(application.state).toBe('applied-to-copy')
+    if (application.state !== 'applied-to-copy') return
+    owned.push(() => application.copy.remove())
+    const result = await runtime.build({ snapshot: application.copy, configuration: await configure(prepared.project) })
+    expect(result).toMatchObject({ status: 'passed', output: expect.any(Object) })
+    keep(result.output)
+    expect(changedSnapshotFacets(prepared.before, await snapshotOriginalProject(prepared.repository.root))).toEqual([])
+    expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
+  }, DOCKER_TIMEOUT)
+})
+
+describe('nested output integrity boundaries', () => {
+  it('keeps committed siblings visible when a nested build output is runtime-owned', async () => {
+    const prepared = await prepare({
+      'tests/build-output.mjs':
+        "import { mkdirSync, writeFileSync } from 'node:fs'\nmkdirSync('tests/build', { recursive: true })\nwriteFileSync('tests/build/index.html', '<!doctype html><title>ok</title>')\n",
+    })
+    const snapshot = await snapshotOf(prepared.project)
+    const configuration = await configure(prepared.project, {
+      build: { argv: ['node', 'tests/build-output.mjs'], output_directory: 'tests/build' },
+    })
+    await writeFile(path.join(snapshot.workspace, 'tests/tasks.test.mjs'), 'tampered test input\n')
+
+    const result = await runtime.build({ snapshot, configuration })
+    expect(result).toMatchObject({ status: 'failed', reason: 'RUNTIME_INPUT_CHANGED', output: null })
+    expect((await snapshot.verify()).changed).toContain('tests/tasks.test.mjs')
+    expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
+    expect(changedSnapshotFacets(prepared.before, await snapshotOriginalProject(prepared.repository.root))).toEqual([])
   }, DOCKER_TIMEOUT)
 })

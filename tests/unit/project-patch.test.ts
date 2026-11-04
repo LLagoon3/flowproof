@@ -130,6 +130,7 @@ describe('a valid bounded candidate', () => {
     const changed = application.files.find((file) => file.path === 'src/App.jsx')
     expect(changed?.sha256).toBe(sha256(expected))
     expect((await application.copy.verify(application.files)).ok).toBe(true)
+    expect((await application.copy.verify()).ok).toBe(true)
 
     // Private metadata lives outside the workspace that a runtime mounts.
     expect(application.copy.privateDir.startsWith(application.copy.root)).toBe(true)
