@@ -405,6 +405,32 @@ describe('supported actions and ordering', () => {
     expect(capture.interactions[1]?.action).toEqual({ type: 'click', locators: [{ kind: 'css', selector: 'button.greet' }] })
     expect(JSON.stringify(capture)).not.toContain(secret)
   })
+
+  it('does not retain short sensitive values reflected into names, errors or URLs', async () => {
+    const h = recording()
+    const secret = '317'
+    h.session.ingest(TARGET, env(TOKEN_A, 1, {
+      k: 'input',
+      el: el({ tag: 'input', role: 'textbox', name: 'PIN', css: 'input#pin' }),
+      field: field({ type: 'password', name: 'pin', label: 'PIN' }),
+      value: secret,
+      commit: true,
+    }))
+    h.session.ingest(TARGET, env(TOKEN_A, 2, { k: 'click', el: el({ testId: null, role: 'button', name: `Current value ${secret}`, css: 'button.current' }) }))
+    h.session.ingest(TARGET, env(TOKEN_A, 3, { k: 'console', level: 'error', message: `Current value ${secret}` }))
+    expect(h.session.ingest(TARGET, env(TOKEN_A, 4, { k: 'url', href: `${ORIGIN}/app?q=${secret}` }))).toBe('unsupported')
+
+    const { capture } = await h.session.finish()
+    expect(capture.state).toBe('unsupported')
+    expect(capture.completeness?.reasons).toContain('PRIVACY_REGISTRY_LIMIT')
+    expect(capture.interactions).toEqual([])
+    expect(capture.observations.find((observation) => observation.type === 'console')?.payload).toMatchObject({ message: '[REDACTED]' })
+    expect(capture.interactions.some((interaction) => interaction.action.type === 'navigate')).toBe(false)
+    expect(JSON.stringify({
+      actions: capture.interactions.map((interaction) => interaction.action),
+      messages: capture.observations.filter((observation) => observation.type === 'console').map((observation) => observation.payload),
+    })).not.toContain(secret)
+  })
 })
 
 describe('observations, collectors and limits', () => {

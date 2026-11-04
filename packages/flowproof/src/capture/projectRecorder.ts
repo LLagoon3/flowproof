@@ -213,12 +213,9 @@ function deepFreeze<T>(value: T): T {
   return value
 }
 
-function urlDigest(value: string): string | null {
-  try {
-    return projectDigest(new URL(value).href)
-  } catch {
-    return null
-  }
+/** Hashes only a path already accepted by the privacy sanitizer, never an untrusted raw URL. */
+function navigationDigest(targetOrigin: string, safePath: string): string {
+  return projectDigest({ target_origin: targetOrigin, path: safePath })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -313,7 +310,7 @@ export class ProjectCaptureSession {
     this.#startedAt = this.#clock()
     this.#documents.set(parsed.data.token, { epoch: 0, lastN: parsed.data.n })
     this.#currentToken = parsed.data.token
-    this.#lastUrlDigest = urlDigest(parsed.data.e.href)
+    this.#lastUrlDigest = navigationDigest(this.#binding.target_origin, entry.path)
     this.#lastPath = entry.path
     this.#accepting = true
     const absent: Array<SafeObservation['type']> = []
@@ -458,11 +455,12 @@ export class ProjectCaptureSession {
     return 'unsupported'
   }
 
-  #checkRegistry(): void {
+  #checkRegistry(): boolean {
     if (this.#registry.overflowed && !this.#registryOverflowReported) {
       this.#registryOverflowReported = true
-      this.#drop('PRIVACY_REGISTRY_LIMIT')
+      this.#unsupported('PRIVACY_REGISTRY_LIMIT')
     }
+    return this.#registry.overflowed
   }
 
   #newDocument(token: string, n: number, documentHref: string): IngestOutcome {
@@ -471,18 +469,18 @@ export class ProjectCaptureSession {
     this.#epoch += 1
     this.#documents.set(token, { epoch: this.#epoch, lastN: n })
     this.#currentToken = token
-    this.#lastUrlDigest = urlDigest(documentHref)
     return this.#navigate(documentHref, this.#epoch, true)
   }
 
   #navigate(target: string, epoch: number, newDocument: boolean): IngestOutcome {
     const navigation = sanitizeNavigation(target, this.#binding.target_origin, this.#registry)
-    this.#lastUrlDigest = urlDigest(target)
     if (!navigation.ok) {
+      this.#lastUrlDigest = null
       this.#flushPending()
       this.#lastPath = null
       return this.#unsupported(navigation.reason)
     }
+    this.#lastUrlDigest = navigationDigest(this.#binding.target_origin, navigation.path)
     if (!newDocument && navigation.path === this.#lastPath) return 'coalesced'
     this.#flushPending()
     this.#lastPath = navigation.path
@@ -509,7 +507,10 @@ export class ProjectCaptureSession {
         if (event.multiple) return this.#unsupported('SELECT_MULTIPLE_UNSUPPORTED')
         if (classifyField(field).kind !== 'select') return this.#unsupported('INPUT_TYPE_UNSUPPORTED')
         const value = admitSelectValue(this.#policy, field, event.value, this.#registry)
-        this.#checkRegistry()
+        if (this.#checkRegistry()) {
+          this.#flushPending()
+          return 'unsupported'
+        }
         const locators = locatorCandidates(event.el as ElementDescriptor, this.#registry)
         if (locators.length === 0) return this.#unsupported('ACTION_LOCATOR_UNSAFE')
         return this.#stage({ type: 'select', locators, value }, this.#offset(), epoch, true)
@@ -540,7 +541,10 @@ export class ProjectCaptureSession {
       return this.#unsupported(kind.kind === 'unsupported' ? kind.reason : 'INPUT_TYPE_UNSUPPORTED')
     }
     const value = admitFillValue(this.#policy, field, event.value, this.#registry)
-    this.#checkRegistry()
+    if (this.#checkRegistry()) {
+      this.#flushPending()
+      return 'unsupported'
+    }
     const locators = locatorCandidates(event.el as ElementDescriptor, this.#registry)
     if (locators.length === 0) {
       this.#flushPending()
@@ -777,6 +781,10 @@ export class ProjectCaptureSession {
 
   #registerImage(outcome: TargetImageOutcome, kind: 'start' | 'action' | 'end', trigger: number): void {
     const range = kind === 'start' ? null : kind === 'end' ? this.#currentRange() : { first: trigger, last: Math.max(trigger, this.#sequence) }
+    if (outcome.ok && this.#registry.overflowed) {
+      outcome.image.png.fill(0)
+      outcome = { ok: false, availability: 'omitted', reason: 'IMAGE_TEXT_UNVERIFIED', effect: 'unsupported' }
+    }
     if (!outcome.ok) {
       if (outcome.effect === 'unsupported') this.#unsupported(outcome.reason)
       else if (outcome.effect === 'dropped') this.#drop(outcome.reason)
@@ -849,7 +857,11 @@ export class ProjectCaptureSession {
         origin = null
       }
       if (origin !== this.#binding.target_origin) this.#unsupported('NAVIGATION_CROSS_ORIGIN')
-      else if (urlDigest(drained.hostUrl) !== this.#lastUrlDigest) this.#drop('NAVIGATION_UNATTRIBUTED')
+      else {
+        const navigation = sanitizeNavigation(drained.hostUrl, this.#binding.target_origin, this.#registry)
+        if (!navigation.ok) this.#unsupported(navigation.reason)
+        else if (navigationDigest(this.#binding.target_origin, navigation.path) !== this.#lastUrlDigest) this.#drop('NAVIGATION_UNATTRIBUTED')
+      }
     }
     this.#flushPending()
     await this.#imageQueue

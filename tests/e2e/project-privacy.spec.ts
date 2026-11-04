@@ -37,6 +37,9 @@ const SEEDS = {
   privateRegion: 'fpseedprivate7741',
   overflow: 'fpseedoverflow8851',
   marked: 'fpseedmarked9961',
+  linkedImage: 'fpseedlinkedimage3344',
+  inlineSvg: 'fpseedinlinesvg4488',
+  pseudo: 'Zq8-CssGenerated-5599',
   option: 'fpseedoption1071',
   nested: 'fpseednested2281',
   decoy: 'fpseeddecoy5512',
@@ -54,22 +57,25 @@ const STUDIO_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   #target { position: absolute; left: 40px; top: 60px; width: 800px; height: 600px; border: 4px solid rgb(255, 0, 0); }
   #decoy { position: absolute; left: 900px; top: 60px; width: 300px; height: 120px; border: 0; }
   #overlay { position: absolute; left: 120px; top: 120px; width: 200px; height: 40px; background: white; color: ${GREEN}; display: none; z-index: 5; }
+  #tiny-overlay { position: absolute; left: 55px; top: 75px; width: 2px; height: 2px; overflow: hidden; background: ${GREEN}; display: none; pointer-events: none; z-index: 6; }
 </style></head><body>
   <div id="studio-secret">STUDIO ${SEEDS.studio}</div>
   <iframe id="target" src="${TARGET_ORIGIN}/blank"></iframe>
   <iframe id="decoy" src="${TARGET_ORIGIN}/decoy"></iframe>
   <div id="overlay">${SEEDS.overlay}</div>
+  <div id="tiny-overlay"></div>
 </body></html>`
 
 const TARGET_STYLE = `<style>
   body { margin: 0; padding: 6px; background: white; font: 15px/1.2 sans-serif; color: rgb(0, 0, 200); }
   h1 { margin: 0 0 4px; font-size: 22px; }
   .secret { color: ${GREEN}; }
-  input, textarea, select, #editor, .account-panel, section, iframe, canvas, button, ul, a { display: block; margin: 0 0 4px; }
+  input, textarea, select, #editor, .account-panel, section, iframe, canvas, button, ul, a, img, svg, .generated { display: block; margin: 0 0 4px; }
   input, textarea, select { color: ${GREEN}; font: 15px sans-serif; }
   #list { height: 48px; overflow: auto; margin-top: 0; }
   .account-panel { position: relative; height: 22px; width: 200px; }
   .account-panel .overflow { position: absolute; left: 320px; top: 0; }
+  .generated::after { content: attr(data-secret); color: ${GREEN}; }
 </style>`
 
 const APP_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYLE}</head><body>
@@ -81,6 +87,8 @@ const APP_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYL
   <div id="editor" contenteditable="true" class="secret">${SEEDS.editable}</div>
   <div class="account-panel"><span class="secret">${SEEDS.privateRegion}</span><span class="secret overflow">${SEEDS.overflow}</span></div>
   <section data-flowproof-private><span class="secret">${SEEDS.marked}</span></section>
+  <img id="linked-image" src="/private.svg" alt="Synthetic private image">
+  <svg id="inline-svg" width="240" height="26"><rect width="240" height="26" fill="${GREEN}"></rect><text x="2" y="18" fill="${GREEN}">${SEEDS.inlineSvg}</text></svg>
   <select id="filter" aria-label="Filter"><option value="all">${SEEDS.option} all</option><option value="done">done</option></select>
   <iframe id="nested" src="/nested" style="width: 240px; height: 26px; border: 0"></iframe>
   <canvas id="chart" width="240" height="26"></canvas>
@@ -113,6 +121,10 @@ const REFLECT_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_
   <h1>Reflection page</h1>
   <button id="ping" data-testid="ping">Ping</button>
   <input id="secret" type="password" aria-label="Secret">
+  <input id="pin" type="password" name="pin" aria-label="PIN">
+  <input id="pseudo-secret" type="password" aria-label="Pseudo secret">
+  <p id="pin-echo"></p>
+  <p id="generated" class="generated"></p>
   <p id="echo"></p>
   <button id="greet" class="greet">Greet</button>
   <canvas id="pad" width="300" height="80" style="background: rgb(230, 230, 230)"></canvas>
@@ -123,7 +135,18 @@ const REFLECT_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_
       document.getElementById('echo').textContent = 'Hello ' + secret.value;
       document.getElementById('greet').textContent = 'Greet ' + secret.value;
     });
+    document.getElementById('pin').addEventListener('input', (event) => {
+      document.getElementById('pin-echo').textContent = 'Current value ' + event.target.value;
+    });
+    document.getElementById('pseudo-secret').addEventListener('input', (event) => {
+      document.getElementById('generated').setAttribute('data-secret', event.target.value);
+    });
   </script>
+</body></html>`
+
+const BACKGROUND_HTML = `<!doctype html><html><head><meta charset="utf-8">${TARGET_STYLE}</head><body>
+  <h1>Background image</h1>
+  <div id="background-private" style="width: 240px; height: 26px; background-image: url('/private.svg')"></div>
 </body></html>`
 
 const PAGES: Record<string, string> = {
@@ -133,12 +156,13 @@ const PAGES: Record<string, string> = {
   '/app': APP_HTML,
   '/next': NEXT_HTML,
   '/reflect': REFLECT_HTML,
+  '/background': BACKGROUND_HTML,
 }
 
-function serve(host: string, port: number, route: (path: string) => { status: number; body: string }): Promise<Server> {
+function serve(host: string, port: number, route: (path: string) => { status: number; body: string; contentType?: string }): Promise<Server> {
   const server = createServer((request, response) => {
-    const { status, body } = route(new URL(request.url ?? '/', 'http://local').pathname)
-    response.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+    const { status, body, contentType } = route(new URL(request.url ?? '/', 'http://local').pathname)
+    response.writeHead(status, { 'content-type': contentType ?? 'text/html; charset=utf-8', 'cache-control': 'no-store' })
     response.end(body)
   })
   return new Promise((resolve, reject) => {
@@ -147,7 +171,16 @@ function serve(host: string, port: number, route: (path: string) => { status: nu
   })
 }
 
-const targetRoute = (path: string) => (PAGES[path] !== undefined ? { status: 200, body: PAGES[path] } : { status: 404, body: 'not found' })
+const targetRoute = (path: string) => {
+  if (path === '/private.svg') {
+    return {
+      status: 200,
+      contentType: 'image/svg+xml',
+      body: `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="26"><rect width="240" height="26" fill="${GREEN}"/><text x="2" y="18" fill="${GREEN}">${SEEDS.linkedImage}</text></svg>`,
+    }
+  }
+  return PAGES[path] !== undefined ? { status: 200, body: PAGES[path] } : { status: 404, body: 'not found' }
+}
 
 // ---------------------------------------------------------------------------------------
 // Minimal PNG decoding (8-bit RGB/RGBA, non-interlaced) for pixel assertions
@@ -348,7 +381,7 @@ test('retained target images mask every seeded secret surface before retention, 
   await pointer(recorder, () => frame.click('#title'))
   await page.keyboard.type('Buy milk')
   await pointer(recorder, () => frame.click('#pw'))
-  await page.keyboard.type(SEEDS.password)
+  await page.keyboard.insertText(SEEDS.password)
   await pointer(recorder, () => frame.click('#add'))
 
   // Positive control, kept in memory only: without masks, every seeded surface really renders green.
@@ -365,6 +398,8 @@ test('retained target images mask every seeded secret surface before retention, 
     privateRegion: '.account-panel',
     overflow: '.account-panel .overflow',
     marked: 'section[data-flowproof-private]',
+    linkedImage: '#linked-image',
+    inlineSvg: '#inline-svg',
     option: '#filter',
     nested: '#nested',
     canvas: '#chart',
@@ -464,7 +499,7 @@ test('rendered reflections, occluding Studio content and unsupported gestures ar
 
   // A redacted typed value reflected into rendered text and an accessible name.
   await pointer(recorder, () => frame.click('#secret'))
-  await page.keyboard.type(SEEDS.mirror)
+  await page.keyboard.insertText(SEEDS.mirror)
   await pointer(recorder, () => frame.click('#greet'))
 
   await recorder.session.imagesSettled()
@@ -488,6 +523,72 @@ test('rendered reflections, occluding Studio content and unsupported gestures ar
   const greet = capture.interactions.find((interaction) => interaction.action.type === 'click' && JSON.stringify(interaction.action).includes('greet'))
   expect(greet?.action).toEqual({ type: 'click', locators: [{ kind: 'css', selector: 'button#greet' }] })
   expectNoSeedLeak(capture, sealed.artifacts)
+  for (const image of images(sealed)) expect(count(image.pixels, isGreen).hits).toBe(0)
+})
+
+test('a short refused input reflected into rendered text omits every affected PNG', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/reflect')
+  await recorder.session.imagesSettled()
+  await pointer(recorder, () => frame.click('#pin'))
+  await page.keyboard.type('317')
+  await pointer(recorder, () => frame.click('#ping'))
+  const sealed = await recorder.finish()
+
+  expect(sealed.capture.state).toBe('unsupported')
+  expect(sealed.capture.completeness?.reasons).toContain('PRIVACY_REGISTRY_LIMIT')
+  expect(sealed.capture.observations.filter((observation) => observation.type === 'image' && observation.availability === 'omitted').map((observation) => observation.reason)).toContain('IMAGE_TEXT_UNVERIFIED')
+  expect(JSON.stringify({
+    actions: sealed.capture.interactions.map((interaction) => interaction.action),
+    errors: sealed.capture.observations.filter((observation) => observation.type !== 'image').map((observation) => observation.payload),
+  })).not.toContain('317')
+  expect(images(sealed).length).toBe(1) // Only the pre-input start image is retainable.
+})
+
+test('CSS-generated reflected private text is assessed before any screenshot is retained', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/reflect')
+  await recorder.session.imagesSettled()
+  await frame.locator('#pseudo-secret').focus()
+  await page.keyboard.insertText(SEEDS.pseudo)
+
+  const generated = await boxIn(frame, '#generated')
+  const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+  expect(count(control, isGreen, generated).hits, 'control: CSS pseudo secret renders').toBeGreaterThan(8)
+  const sealed = await recorder.finish()
+  expect(sealed.capture.state).toBe('unsupported')
+  expect(sealed.capture.completeness?.reasons).toContain('IMAGE_SENSITIVE_TEXT')
+  expect(JSON.stringify({
+    actions: sealed.capture.interactions.map((interaction) => interaction.action),
+    observations: sealed.capture.observations.filter((observation) => observation.type !== 'image').map((observation) => observation.payload),
+  })).not.toContain(SEEDS.pseudo)
+  expect(images(sealed).length).toBe(1) // The pre-input image only.
+})
+
+test('uninspectable CSS background images make image evidence unavailable', async () => {
+  const frame = await targetFrame()
+  const recorder = await start(frame, '/background')
+  await recorder.session.imagesSettled()
+
+  const background = await boxIn(frame, '#background-private')
+  const control = decodePng(await page.screenshot({ clip: FRAME_BOX }))
+  expect(count(control, isGreen, background).hits, 'control: CSS background image renders').toBeGreaterThan(8)
+
+  const sealed = await recorder.finish()
+  expect(sealed.capture.state).toBe('unsupported')
+  expect(sealed.capture.completeness?.reasons).toContain('IMAGE_TEXT_UNVERIFIED')
+  expect(images(sealed).length).toBe(0)
+})
+
+test('a small Studio overlay between geometry samples cannot enter retained target PNGs', async () => {
+  const frame = await targetFrame()
+  await page.evaluate(() => void (document.getElementById('tiny-overlay')!.style.display = 'block'))
+  const recorder = await start(frame, '/app')
+  await recorder.session.imagesSettled()
+  await pointer(recorder, () => frame.click('#add'))
+  const sealed = await recorder.finish()
+
+  expect(sealed.capture.observations.filter((observation) => observation.type === 'image').map((observation) => observation.reason)).toContain('IMAGE_TARGET_OCCLUDED')
   for (const image of images(sealed)) expect(count(image.pixels, isGreen).hits).toBe(0)
 })
 

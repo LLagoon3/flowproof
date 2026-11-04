@@ -39,7 +39,7 @@ export interface ProjectPrivacyPolicy {
   readonly privateSelectors: readonly string[]
   /** Admit non-sensitive synthetic fill/select values. Off by default: no value is kept. */
   readonly admitSafeValues: boolean
-  /** Canvas/video/data-image surfaces cannot be inspected; mask them unless the host admits them. */
+  /** Image/vector/canvas/video surfaces cannot be inspected; mask them unless the host admits them. */
   readonly opaqueSurfaces: OpaqueSurfacePolicy
 }
 
@@ -115,9 +115,13 @@ export class RedactedValueRegistry {
     return this.#overflowed
   }
 
-  /** Remembers `value`; false when it is too short to locate safely. */
+  /** Remembers every non-empty refused value; false only when it is empty. */
   remember(value: string): boolean {
-    if (value.length < MIN_REFLECTED_VALUE_LENGTH) return false
+    if (value.length === 0) return false
+    if (value.length < MIN_REFLECTED_VALUE_LENGTH || this.#overflowed) {
+      this.#overflowed = true
+      return false
+    }
     const fingerprint = this.#fingerprint(value, 0, value.length)
     const set = this.#byLength.get(value.length)
     if (set?.has(fingerprint)) return true
@@ -132,11 +136,17 @@ export class RedactedValueRegistry {
   }
 
   contains(text: string): boolean {
-    return this.#matches(text).length > 0
+    if (this.#overflowed) return true
+    return this.#reflectionForms(text).some((form) => this.#matches(form).length > 0)
   }
 
   /** Replaces every remembered value inside `text`. */
   redact(text: string): { readonly text: string; readonly count: number } {
+    if (this.#overflowed) return text === '' ? { text, count: 0 } : { text: REDACTED, count: 1 }
+    const forms = this.#reflectionForms(text)
+    // Encoded reflections cannot be safely spliced back into their original representation.
+    // Drop the whole metadata field rather than risk retaining a partially encoded secret.
+    if (forms.slice(1).some((form) => this.#matches(form).length > 0)) return { text: REDACTED, count: 1 }
     const matches = this.#matches(text)
     if (matches.length === 0) return { text, count: 0 }
     // Merge overlapping windows, then rebuild the text around them.
@@ -159,6 +169,7 @@ export class RedactedValueRegistry {
   clear(): void {
     this.#byLength.clear()
     this.#size = 0
+    this.#overflowed = false
   }
 
   toJSON(): { readonly size: number } {
@@ -169,7 +180,8 @@ export class RedactedValueRegistry {
     let a = 0
     let b = 0
     for (let index = start; index < end; index += 1) {
-      const code = text.charCodeAt(index)
+      const rawCode = text.charCodeAt(index)
+      const code = rawCode >= 0x41 && rawCode <= 0x5a ? rawCode + 0x20 : rawCode
       a = (a * this.#baseA + code) % MOD_A
       b = (b * this.#baseB + code) % MOD_B
     }
@@ -185,19 +197,50 @@ export class RedactedValueRegistry {
       let a = 0
       let b = 0
       for (let index = 0; index < length; index += 1) {
-        a = (a * this.#baseA + text.charCodeAt(index)) % MOD_A
-        b = (b * this.#baseB + text.charCodeAt(index)) % MOD_B
+        const rawCode = text.charCodeAt(index)
+        const code = rawCode >= 0x41 && rawCode <= 0x5a ? rawCode + 0x20 : rawCode
+        a = (a * this.#baseA + code) % MOD_A
+        b = (b * this.#baseB + code) % MOD_B
       }
       for (let start = 0; ; start += 1) {
         if (fingerprints.has(`${a}:${b}`)) found.push([start, start + length])
         const next = start + length
         if (next >= text.length) break
-        const outgoing = text.charCodeAt(start)
-        a = (((a - ((outgoing * powA) % MOD_A) + MOD_A) % MOD_A) * this.#baseA + text.charCodeAt(next)) % MOD_A
-        b = (((b - ((outgoing * powB) % MOD_B) + MOD_B) % MOD_B) * this.#baseB + text.charCodeAt(next)) % MOD_B
+        const rawOutgoing = text.charCodeAt(start)
+        const outgoing = rawOutgoing >= 0x41 && rawOutgoing <= 0x5a ? rawOutgoing + 0x20 : rawOutgoing
+        const rawIncoming = text.charCodeAt(next)
+        const incoming = rawIncoming >= 0x41 && rawIncoming <= 0x5a ? rawIncoming + 0x20 : rawIncoming
+        a = (((a - ((outgoing * powA) % MOD_A) + MOD_A) % MOD_A) * this.#baseA + incoming) % MOD_A
+        b = (((b - ((outgoing * powB) % MOD_B) + MOD_B) % MOD_B) * this.#baseB + incoming) % MOD_B
       }
     }
     return found
+  }
+
+  #decodePercentEncoding(text: string): string {
+    let decoded = text
+    // Two rounds catch both ordinary percent-encoding and a common double-encoded reflection.
+    for (let round = 0; round < 2; round += 1) {
+      const next = decoded.replace(/(?:%[0-9a-f]{2})+/gi, (sequence) => {
+        try {
+          return decodeURIComponent(sequence)
+        } catch {
+          return sequence
+        }
+      })
+      if (next === decoded) break
+      decoded = next
+    }
+    return decoded
+  }
+
+  #reflectionForms(text: string): string[] {
+    const forms = [text]
+    const decoded = this.#decodePercentEncoding(text)
+    if (decoded !== text) forms.push(decoded)
+    const formEncoded = decoded.replace(/\+/g, ' ')
+    if (formEncoded !== decoded && !forms.includes(formEncoded)) forms.push(formEncoded)
+    return forms
   }
 
   #power(base: number, exponent: number, modulus: number): number {
@@ -252,9 +295,29 @@ function sensitiveField(field: FieldDescriptor): boolean {
   return [field.name, field.label, field.placeholder].some((value) => value !== null && (SENSITIVE_FIELD_TEXT.test(value) || isSecretKeyName(value)))
 }
 
+function containsSensitiveValueShape(value: string): boolean {
+  return containsSecretPattern(value) || EMAIL_SHAPE.test(value) || LONG_NUMBER_SHAPE.test(value.replace(/[\s-]/g, '')) || /\bbearer\s+\S{8,}/i.test(value)
+}
+
+function isSensitiveUrlKey(key: string): boolean {
+  return sensitiveField({ tag: 'input', type: null, autocomplete: null, name: key, label: null, placeholder: null, private: false })
+}
+
+function containsSensitivePathParameter(path: string): boolean {
+  for (const segment of path.split('/')) {
+    for (const parameter of segment.split(';').slice(1)) {
+      const [rawKey, ...rawValue] = parameter.split('=')
+      const key = decodeURIComponentSafe(rawKey ?? '')
+      const value = decodeURIComponentSafe(rawValue.join('=').replace(/\+/g, ' '))
+      if (key === null || value === null || isSensitiveUrlKey(key) || containsSensitiveValueShape(value)) return true
+    }
+  }
+  return false
+}
+
 function valueRejection(value: string): string | null {
   if (!safeTextSchema(MAX_FILL_TEXT, { min: 0 }).safeParse(value).success) return containsSecretPattern(value) ? 'VALUE_SENSITIVE_SHAPE' : 'VALUE_UNSAFE'
-  if (EMAIL_SHAPE.test(value) || LONG_NUMBER_SHAPE.test(value.replace(/[\s-]/g, '')) || /\bbearer\s+\S{8,}/i.test(value)) return 'VALUE_SENSITIVE_SHAPE'
+  if (containsSensitiveValueShape(value)) return 'VALUE_SENSITIVE_SHAPE'
   return null
 }
 
@@ -352,13 +415,18 @@ export function sanitizeNavigation(href: string, targetOrigin: string, registry:
   if (url.origin !== targetOrigin) return { ok: false, reason: 'NAVIGATION_CROSS_ORIGIN' }
   if (url.username !== '' || url.password !== '') return { ok: false, reason: 'NAVIGATION_CREDENTIALS' }
   const path = url.pathname
-  if (registry.contains(path) || containsSecretPattern(path)) return { ok: false, reason: 'NAVIGATION_PATH_SENSITIVE' }
+  if (registry.contains(path) || containsSensitiveValueShape(path) || containsSensitivePathParameter(path)) return { ok: false, reason: 'NAVIGATION_PATH_SENSITIVE' }
   for (const extra of [url.search.slice(1), url.hash.slice(1)]) {
     if (extra === '') continue
-    if (registry.contains(extra) || containsSecretPattern(extra)) return { ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' }
-    for (const pair of extra.split('&')) {
-      const key = decodeURIComponentSafe(pair.split('=')[0] ?? '')
-      if (key === null || isSecretKeyName(key)) return { ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' }
+    if (registry.contains(extra) || containsSensitiveValueShape(extra)) return { ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' }
+    for (const pair of extra.split(/[&;]/)) {
+      const [rawKey, ...rawValue] = pair.split('=')
+      const key = decodeURIComponentSafe(rawKey ?? '')
+      const value = decodeURIComponentSafe(rawValue.join('=').replace(/\+/g, ' '))
+      if (key === null || value === null || isSensitiveUrlKey(key)) {
+        return { ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' }
+      }
+      if (containsSensitiveValueShape(value)) return { ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' }
     }
     if (!QUERY_OR_FRAGMENT.test(extra)) return { ok: false, reason: 'NAVIGATION_QUERY_UNSUPPORTED' }
   }
@@ -405,6 +473,7 @@ export function sanitizeSourceText(
   content: string,
   registry: RedactedValueRegistry,
 ): { readonly ok: true; readonly text: string; readonly redactions: number } | { readonly ok: false; readonly reason: string } {
+  if (registry.overflowed) return { ok: false, reason: 'SOURCE_PRIVACY_UNVERIFIED' }
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069]/.test(content)) return { ok: false, reason: 'SOURCE_CONTROL_CHARACTER' }
   const sanitized = sanitizeSourceContent(content)
   const scrubbed = registry.redact(sanitized.value)
@@ -421,7 +490,7 @@ const EDITABLE = '[contenteditable]:not([contenteditable="false"])'
 /** Every surface masked while Chromium renders the retained PNG. */
 export function maskSelector(policy: ProjectPrivacyPolicy): string {
   const regions = ['[data-flowproof-private]', ...policy.privateSelectors].flatMap((selector) => [selector, `${selector} *`])
-  const opaque = policy.opaqueSurfaces === 'mask' ? ['canvas', 'video', 'img[src^="data:"]', 'img[src^="blob:"]'] : []
+  const opaque = policy.opaqueSurfaces === 'mask' ? ['canvas', 'video', 'img', 'svg'] : []
   return ['input:not([type="hidden"])', 'textarea', 'select', EDITABLE, `${EDITABLE} *`, 'iframe', 'frame', 'object', 'embed', ...regions, ...opaque].join(', ')
 }
 
@@ -443,6 +512,7 @@ export type RenderedTextAssessment = { readonly ok: true } | { readonly ok: fals
 
 /** Rejects an image whose unmasked rendered text shows a secret shape or a redacted value. */
 export function assessRenderedText(text: string | null, registry: RedactedValueRegistry): RenderedTextAssessment {
+  if (registry.overflowed) return { ok: false, reason: 'IMAGE_TEXT_UNVERIFIED' }
   if (text === null || text.length > MAX_RENDERED_TEXT_CHARS) return { ok: false, reason: 'IMAGE_TEXT_UNVERIFIED' }
   if (containsSecretPattern(text) || registry.contains(text)) return { ok: false, reason: 'IMAGE_SENSITIVE_TEXT' }
   return { ok: true }
@@ -498,7 +568,18 @@ async function iframeGeometry(frame: Frame): Promise<TargetGeometry | null> {
         clientTop: number
         clientWidth: number
         clientHeight: number
-        ownerDocument: { elementFromPoint(x: number, y: number): unknown; defaultView: { innerWidth: number; innerHeight: number } | null }
+        ownerDocument: {
+          elementFromPoint(x: number, y: number): unknown
+          querySelectorAll(selector: string): ArrayLike<{
+            contains(target: unknown): boolean
+            getBoundingClientRect(): { left: number; top: number; right: number; bottom: number }
+          }>
+          defaultView: {
+            innerWidth: number
+            innerHeight: number
+            getComputedStyle(element: unknown): { display: string; visibility: string; opacity: string }
+          } | null
+        }
       }
       const rect = iframe.getBoundingClientRect()
       const left = rect.left + iframe.clientLeft
@@ -507,9 +588,24 @@ async function iframeGeometry(frame: Frame): Promise<TargetGeometry | null> {
       const y = Math.ceil(top)
       const width = Math.floor(left + iframe.clientWidth) - x
       const height = Math.floor(top + iframe.clientHeight) - y
-      const view = iframe.ownerDocument.defaultView
+      const doc = iframe.ownerDocument
+      const view = doc.defaultView
       const inside = view !== null && x >= 0 && y >= 0 && x + width <= view.innerWidth && y + height <= view.innerHeight
       let occluded = !inside
+      if (!occluded && view !== null) {
+        // Hit-testing samples can skip small or pointer-transparent overlays. Conservatively
+        // reject any visible Studio element whose painted box overlaps the target content.
+        for (const candidate of Array.from(doc.querySelectorAll('*'))) {
+          if (candidate.contains(iframe)) continue
+          const style = view.getComputedStyle(candidate)
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue
+          const rect = candidate.getBoundingClientRect()
+          if (rect.right > x && rect.left < x + width && rect.bottom > y && rect.top < y + height) {
+            occluded = true
+            break
+          }
+        }
+      }
       const xs: number[] = []
       const ys: number[] = []
       for (let px = x + 0.5; px < x + width; px += step) xs.push(px)
@@ -537,20 +633,50 @@ async function renderedText(frame: Frame, selector: string): Promise<string | nu
       const doc = (globalThis as unknown as { document: any }).document
       const chunks: string[] = []
       let total = 0
+      const append = (value: string): boolean => {
+        if (value.trim() === '') return true
+        total += value.length + 1
+        if (total > max) return false
+        chunks.push(value)
+        return true
+      }
+      const appendPseudo = (element: any, pseudo: string): boolean => {
+        let style: any
+        try {
+          style = doc.defaultView.getComputedStyle(element, pseudo)
+        } catch {
+          return false
+        }
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return true
+        const content = String(style.content || '')
+        if (content === '' || content === 'none' || content === 'normal' || content === '""' || content === "''") return true
+        const attributes = [...content.matchAll(/attr\(\s*([A-Za-z_][A-Za-z0-9_.:-]*)\s*(?:,[^)]*)?\)/gi)]
+        const remainder = content.replace(/attr\(\s*([A-Za-z_][A-Za-z0-9_.:-]*)\s*(?:,[^)]*)?\)/gi, '')
+        // Counters, URLs and other computed functions are not safely inspectable as text.
+        if (/[A-Za-z_-][A-Za-z0-9_-]*\(/.test(remainder)) return false
+        if (!append(content)) return false
+        for (const match of attributes) {
+          const value = element.getAttribute(match[1])
+          if (value !== null && !append(String(value))) return false
+        }
+        return true
+      }
       const visit = (root: any): boolean => {
         const walker = doc.createTreeWalker(root, 0x5 /* SHOW_ELEMENT | SHOW_TEXT */)
         for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
           if (node.nodeType === 1) {
+            const element = node as any
+            if (element.closest(masked) || (element.checkVisibility && !element.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
+            const background = doc.defaultView.getComputedStyle(element).backgroundImage
+            if (/url\(/i.test(background)) return false
+            for (const pseudo of ['::before', '::after', '::marker']) if (!appendPseudo(element, pseudo)) return false
             if (node.shadowRoot && !visit(node.shadowRoot)) return false
             continue
           }
           const parent = node.parentElement
           if (!parent || parent.closest(masked) || (parent.checkVisibility && !parent.checkVisibility({ visibilityProperty: true, opacityProperty: true }))) continue
           const value = String(node.data)
-          if (value.trim() === '') continue
-          total += value.length + 1
-          if (total > max) return false
-          chunks.push(value)
+          if (!append(value)) return false
         }
         return true
       }

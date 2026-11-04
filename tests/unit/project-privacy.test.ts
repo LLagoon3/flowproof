@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_PRIVACY_POLICY,
-  MIN_REFLECTED_VALUE_LENGTH,
   ProjectPrivacyError,
   RedactedValueRegistry,
   admitFillValue,
@@ -88,11 +87,15 @@ describe('privacy policy', () => {
       '#ledger *',
       'canvas',
       'video',
+      'img',
+      'svg',
     ]) {
       expect(selector, required).toContain(required)
     }
     const admitted = maskSelector(createPrivacyPolicy({ opaqueSurfaces: 'admit' })).split(', ')
     expect(admitted).not.toContain('canvas')
+    expect(admitted).not.toContain('img')
+    expect(admitted).not.toContain('svg')
     expect(admitted).toContain('iframe')
     expect(maskStyle(ADMIT)).toMatch(/color: transparent !important/)
     expect(maskStyle(ADMIT)).toMatch(/-webkit-text-fill-color: transparent !important/)
@@ -175,9 +178,16 @@ describe('redacted value registry', () => {
     expect(registry.contains(secret)).toBe(false)
   })
 
-  it('ignores values too short to locate safely and reports overflow explicitly', () => {
+  it('ignores empty values and reports registry overflow explicitly', () => {
     const registry = new RedactedValueRegistry({ maxValues: 3 })
-    expect(registry.remember('a'.repeat(MIN_REFLECTED_VALUE_LENGTH - 1))).toBe(false)
+    expect(registry.remember('')).toBe(false)
+    expect(registry.remember('317')).toBe(false)
+    expect(registry.overflowed).toBe(true)
+    expect(registry.contains('ordinary text')).toBe(true)
+    expect(registry.redact('ordinary text')).toEqual({ text: '[REDACTED]', count: 1 })
+    expect(sanitizeSourceText('const title = "private"', registry)).toEqual({ ok: false, reason: 'SOURCE_PRIVACY_UNVERIFIED' })
+    registry.clear()
+    expect(registry.overflowed).toBe(false)
     expect(registry.remember('alpha-1')).toBe(true)
     expect(registry.remember('alpha-1')).toBe(true)
     registry.remember('bravo-2')
@@ -185,6 +195,47 @@ describe('redacted value registry', () => {
     expect(registry.overflowed).toBe(false)
     registry.remember('delta-4')
     expect(registry.overflowed).toBe(true)
+  })
+
+  it('redacts short refused values from locator, error, URL and rendered-text metadata', () => {
+    const registry = new RedactedValueRegistry()
+    const shortSecret = '317'
+    expect(admitFillValue(DEFAULT_PRIVACY_POLICY, text({ type: 'password', name: 'pin' }), shortSecret, registry)).toEqual({
+      kind: 'redacted',
+      reason: 'FIELD_SENSITIVE',
+    })
+    expect(registry.overflowed).toBe(true)
+    expect(registry.contains(`Current value ${shortSecret}`)).toBe(true)
+    expect(locatorCandidates(element({ testId: null, id: null, css: null, name: `Current value ${shortSecret}` }), registry)).toEqual([])
+    expect(sanitizeErrorText(`Current value ${shortSecret}`, registry).message).toBe('[REDACTED]')
+    expect(sanitizeNavigation(`${ORIGIN}/${shortSecret}`, ORIGIN, registry)).toEqual({ ok: false, reason: 'NAVIGATION_PATH_SENSITIVE' })
+    expect(assessRenderedText(`Current value ${shortSecret}`, registry)).toEqual({ ok: false, reason: 'IMAGE_TEXT_UNVERIFIED' })
+  })
+
+  it('redacts URL-encoded reflections of refused values from free-text metadata', () => {
+    const registry = new RedactedValueRegistry()
+    const secret = 'private+handle/42'
+    const encoded = encodeURIComponent(secret)
+    registry.remember(secret)
+    expect(locatorCandidates(element({ testId: null, id: null, css: null, name: `Current value ${secret.toUpperCase()}` }), registry)).toEqual([])
+    expect(locatorCandidates(element({ testId: null, id: null, css: null, name: `Current value ${encoded}` }), registry)).toEqual([])
+    expect(sanitizeErrorText(`Current value ${secret.toUpperCase()}`, registry).message).not.toContain(secret.toUpperCase())
+    expect(sanitizeErrorText(`Current value ${encoded}`, registry).message).not.toContain(encoded)
+    const source = sanitizeSourceText(`const user = "${encoded}"`, registry)
+    expect(source.ok && source.text).not.toContain(encoded)
+    const navigation = sanitizeNavigation(`${ORIGIN}/?q=${encoded}`, ORIGIN, registry)
+    expect(navigation.ok).toBe(false)
+  })
+
+  it('redacts form-encoded reflections that use plus for spaces', () => {
+    const registry = new RedactedValueRegistry()
+    registry.remember('private handle')
+    const reflected = 'private+handle'
+    expect(locatorCandidates(element({ testId: null, id: null, css: null, name: `Current value ${reflected}` }), registry)).toEqual([])
+    expect(sanitizeErrorText(`Current value ${reflected}`, registry).message).not.toContain(reflected)
+    const source = sanitizeSourceText(`const handle = "${reflected}"`, registry)
+    expect(source.ok && source.text).not.toContain(reflected)
+    expect(sanitizeNavigation(`${ORIGIN}/?q=${reflected}`, ORIGIN, registry)).toEqual({ ok: false, reason: 'NAVIGATION_QUERY_SENSITIVE' })
   })
 })
 
@@ -231,6 +282,22 @@ describe('navigation and URL sanitization', () => {
   it('keeps an admitted relative same-origin path with a safe query and fragment', () => {
     expect(sanitizeNavigation(`${ORIGIN}/board/done?view=compact#top`, ORIGIN, registry)).toEqual({ ok: true, path: '/board/done?view=compact#top' })
     expect(sanitizeNavigation(`${ORIGIN}/`, ORIGIN, registry)).toEqual({ ok: true, path: '/' })
+  })
+
+  it('refuses private query keys and recognizable sensitive values in URL paths or queries', () => {
+    const cases: Array<[string, string]> = [
+      [`${ORIGIN}/profile?email=alice@example.test`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/verify?pin=317`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/contact?phone=5551234567`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/account?username=alice`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/billing?card_number=demo-card-value`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/search?q=alice@example.test`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/search?view=compact;pin=317`, 'NAVIGATION_QUERY_SENSITIVE'],
+      [`${ORIGIN}/users/alice@example.test`, 'NAVIGATION_PATH_SENSITIVE'],
+      [`${ORIGIN}/records/123456789`, 'NAVIGATION_PATH_SENSITIVE'],
+      [`${ORIGIN}/profile;pin=317`, 'NAVIGATION_PATH_SENSITIVE'],
+    ]
+    for (const [href, reason] of cases) expect(sanitizeNavigation(href, ORIGIN, registry), href).toEqual({ ok: false, reason })
   })
 
   it('makes cross-origin, credentialed, secret-query, reflected or encoded navigation unsupported', () => {
