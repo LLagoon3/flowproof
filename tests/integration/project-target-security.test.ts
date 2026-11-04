@@ -123,7 +123,10 @@ async function decoy(port: number, host: string): Promise<void> {
 
 function targetRequest(method: string, rawPath: string, host = `localhost:${TARGET_PORT}`): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: Buffer }> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port: TARGET_PORT, method, path: rawPath, headers: { Host: host } }, (res) => {
+    // The target listens on `localhost`, which resolves to ::1 first where /etc/hosts maps
+    // `::1 localhost` (the hosted runner) and to 127.0.0.1 elsewhere; connect the way its
+    // `http://localhost:<port>` origin names it, never through one hard-coded address family.
+    const req = request({ host: 'localhost', port: TARGET_PORT, method, path: rawPath, headers: { Host: host } }, (res) => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
       res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }))

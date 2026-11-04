@@ -52,6 +52,10 @@ const worktreeModule = (): Promise<WorktreeModule> =>
 
 const SOURCE = 'apps/demo-chart/src/filterData.ts'
 const BUILD_TIMEOUT = 120_000
+// The first tests each clone the whole repository with two linked worktrees and run complete
+// session lifecycles while the full suite is starting every other worker; measured 1.3 s / 0.5 s
+// alone, 4.0 s / 2.5 s on one contended CPU and 6.2 s / 4.7 s on the hosted runner.
+const GIT_SESSION_TIMEOUT = 30_000
 const KNOWN_SAFE_DIFF = (loadRecordedHeroResponse() as { candidate: { unified_diff: string } }).candidate.unified_diff
 
 // A diff that applies cleanly but leaves the app unbuildable.
@@ -155,7 +159,7 @@ describe('detached worktree session', () => {
     expect(fromLinked.gitCommonDir).toBe(commonDir)
     expect(fromLinked.gitCommonDir).not.toContain(`${path.sep}worktrees${path.sep}`)
     expect((await fromLinked.dispose()).unchanged).toBe(true)
-  })
+  }, GIT_SESSION_TIMEOUT)
 
   it('snapshots the complete pre-run worktree list and creates a detached worktree at the original HEAD', async () => {
     const mod = await worktreeModule()
@@ -186,7 +190,7 @@ describe('detached worktree session', () => {
     await expect(readFile(path.join(session.path, SOURCE), 'utf8')).resolves.toBe(
       await readFile(path.join(fx.repo, SOURCE), 'utf8'),
     )
-  })
+  }, GIT_SESSION_TIMEOUT)
 
   it(
     'runs the committed build command inside the worktree only',
