@@ -609,19 +609,30 @@ export type DemonstrationErrorCode =
   | 'CAPTURE_NOT_READY'
   | 'CAPTURE_BINDING_MISMATCH'
   | 'CAPTURE_FAILED'
+  | 'CAPTURE_INVALIDATED'
+  | 'CAPTURE_DISCARD_REFUSED'
   | 'CLARIFICATION_STATE'
   | 'CLARIFICATION_STALE'
   | 'RUN_NOT_ACCEPTING'
   | 'SOURCES_UNAVAILABLE'
+  | 'ANALYSIS_FAILED'
   | 'INTERPRETATION_REDACTED_VALUE'
   | 'INTERPRETATION_INVALID'
   | ProjectPromptErrorCode
   | ProjectModelErrorCode
 export type DemonstrationOutcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly code: DemonstrationErrorCode }
 
+/**
+ * Where the current report is: `claimed` was handed to analysis and is locked but no provider request
+ * carried it; `submitted` means a provider request with its bytes left the host. Neither is ever
+ * reported as deleted.
+ */
+export type DemonstrationReportState = 'none' | 'recording' | 'sealed' | 'claimed' | 'submitted'
+
 export interface DemonstrationView {
   readonly state: RunState
   readonly capture_id: string | null
+  readonly report: DemonstrationReportState
   readonly report_sha256: string | null
   readonly interpretation: Interpretation | null
   readonly question_id: string | null
@@ -635,7 +646,10 @@ export interface ProjectDemonstration {
   analyze(captureId: string, input: { readonly description: string | null }): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>>
   /** The single explicit clarification answer to the current question. */
   clarify(questionId: string, answer: string): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>>
-  /** Settings/reset change: discards unsubmitted evidence; cancels the run once a report was sent. */
+  /**
+   * Settings/reset change: revokes every pending operation at once, deletes unclaimed evidence, waits
+   * for revoked work to settle and discard what it produced; once a report was claimed it cancels.
+   */
   invalidate(): Promise<void>
   /** Sticky run cancellation; a response arriving later is discarded. */
   cancel(): void
@@ -681,7 +695,12 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
   let sealed: SealedCapture | null = null
   let claimed: ClaimedReport | null = null
   let interpretation: Interpretation | null = null
+  let report: DemonstrationReportState = 'none'
   let busy = false
+  // Every invalidation or cancellation bumps the generation; work started under an older one is
+  // revoked after each await, discards what it produced and never publishes a success.
+  let generation = 0
+  let inflight: Promise<unknown> = Promise.resolve()
 
   const refuse = (code: DemonstrationErrorCode): { readonly ok: false; readonly code: DemonstrationErrorCode } => ({ ok: false, code })
   const accepting = (): boolean => {
@@ -689,84 +708,131 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
     return state !== 'finalizing' && state !== 'terminal'
   }
   const owned = (captureId: string): boolean => recorder !== null && recorder.captureId === captureId
+  const revoked = (gen: number): boolean => gen !== generation || !accepting()
+  const stopped = (): DemonstrationErrorCode => (accepting() ? 'CAPTURE_INVALIDATED' : 'RUN_NOT_ACCEPTING')
+  const exclusive = <T>(work: (gen: number) => Promise<T>): Promise<T> => {
+    busy = true
+    const task = work(generation).finally(() => {
+      busy = false
+    })
+    inflight = task.catch(() => undefined)
+    return task
+  }
 
-  /** Deletes unsubmitted staged/sealed evidence and returns the run to demonstration. */
-  const drop = async (): Promise<void> => {
+  /** True only when the recorder itself confirmed the discard; otherwise it is only detached. */
+  const retire = async (target: DemonstrationRecorder): Promise<boolean> => {
+    try {
+      await target.discard()
+      return true
+    } catch {
+      await target.detach().catch(() => undefined)
+      return false
+    }
+  }
+
+  /** Revokes the current unclaimed recorder: deletes its evidence and returns the run to demonstration. */
+  const drop = async (): Promise<boolean> => {
     const current = recorder
     recorder = null
     sealed = null
-    if (current !== null) await current.discard().catch(() => current.detach().catch(() => undefined))
+    report = 'none'
+    const discarded = current === null ? true : await retire(current)
     const state = lifecycle.state()
     if (state === 'recording' || state === 'capture-ready') lifecycle.transition('demonstration-ready')
+    return discarded
   }
 
-  async function analyzeOnce(clarification: { readonly prior: Interpretation; readonly answer: string } | null): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>> {
-    const report = claimed!
-    const answerId = newProjectUuid()
-    const built = buildProjectAnalysisPrompt({
-      run_id: runId,
-      invocation_id: newProjectUuid(),
-      question_id: newProjectUuid(),
-      capture: report.sealed.capture,
-      description: report.description,
-      sources: report.sources,
-      admitted_source_paths: report.admitted,
-      images: report.sealed.artifacts,
-      registry: report.registry,
-      clarification: clarification === null ? null : { prior: clarification.prior, answer_id: answerId, answer: clarification.answer },
-    })
-    if (!built.ok) return refuse(built.error.code)
+  function cancel(): void {
+    generation += 1
+    lifecycle.requestCancel()
+    model.cancel()
+    const current = recorder
+    if (current !== null && claimed === null) void retire(current)
+    else if (current !== null) void current.detach().catch(() => undefined)
+  }
+
+  async function analyzeOnce(gen: number, clarification: { readonly prior: Interpretation; readonly answer: string } | null): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>> {
+    const claim = claimed!
+    // The analysis state and its provider operation start before the prompt is built, so a prompt
+    // that cannot be built is an explicit fail-closed stop of this claimed, unsent report.
+    let operation: RunOperation
     try {
       lifecycle.transition('analyzing')
+      operation = lifecycle.beginOperation('provider')
     } catch {
-      return refuse('CLARIFICATION_STATE')
+      if (accepting()) cancel()
+      return refuse('RUN_NOT_ACCEPTING')
     }
-    const operation = lifecycle.beginOperation('provider')
     const onAbort = (): void => model.cancel()
     operation.signal.addEventListener('abort', onAbort, { once: true })
-    let result: Awaited<ReturnType<ProjectModelSession['analyze']>>
     try {
-      result = await model.analyze(built.value)
+      const answerId = newProjectUuid()
+      const built = buildProjectAnalysisPrompt({
+        run_id: runId,
+        invocation_id: newProjectUuid(),
+        question_id: newProjectUuid(),
+        capture: claim.sealed.capture,
+        description: claim.description,
+        sources: claim.sources,
+        admitted_source_paths: claim.admitted,
+        images: claim.sealed.artifacts,
+        registry: claim.registry,
+        clarification: clarification === null ? null : { prior: clarification.prior, answer_id: answerId, answer: clarification.answer },
+      })
+      if (!built.ok) {
+        operation.fail(built.error.code)
+        return refuse(built.error.code)
+      }
+      let result: Awaited<ReturnType<ProjectModelSession['analyze']>>
+      try {
+        result = await model.analyze(built.value)
+      } catch {
+        const cancelled = operation.signal.aborted
+        operation.fail('ANALYSIS_FAILED')
+        return refuse(cancelled ? 'RUN_NOT_ACCEPTING' : 'ANALYSIS_FAILED')
+      }
+      if ((result.invocation?.request_bytes ?? 0) > 0) report = 'submitted'
+      if (!result.ok) {
+        operation.fail(result.error.code)
+        return refuse(result.error.code)
+      }
+      if (replaysRedacted(result.output, claim.registry)) {
+        operation.fail('INTERPRETATION_REDACTED_VALUE')
+        return refuse('INTERPRETATION_REDACTED_VALUE')
+      }
+      const record = InterpretationSchema.safeParse({
+        schema_version: PROJECT_SCHEMA_VERSION,
+        interpretation_id: newProjectUuid(),
+        run_id: runId,
+        invocation_id: result.invocation.invocation_id,
+        capture_id: claim.sealed.capture.capture_id,
+        report_sha256: claim.sealed.report_sha256,
+        input_sha256: result.invocation.input_sha256,
+        analysis_attempt: clarification === null ? 1 : 2,
+        clarification:
+          clarification === null || clarification.prior.result.status !== 'clarify'
+            ? null
+            : { question_id: clarification.prior.result.question.question_id, answer_id: answerId, answer_sha256: createHash('sha256').update(clarification.answer).digest('hex') },
+        result: result.output,
+      })
+      if (!record.success) {
+        operation.fail('INTERPRETATION_INVALID')
+        return refuse('INTERPRETATION_INVALID')
+      }
+      if (record.data.result.status === 'unsupported') {
+        // An explicit unsupported interpretation stops the run; it is shown, never replayed.
+        if (!operation.fail('INTERPRETATION_UNSUPPORTED') || gen !== generation) return refuse('RUN_NOT_ACCEPTING')
+        interpretation = record.data
+        return { ok: true, value: { interpretation: record.data } }
+      }
+      // A late completion after cancellation or revocation is never accepted.
+      if (operation.signal.aborted || gen !== generation || !operation.complete() || !accepting()) return refuse('RUN_NOT_ACCEPTING')
+      interpretation = record.data
+      lifecycle.transition(record.data.result.status === 'clarify' ? 'clarification-required' : 'interpretation-ready')
+      return { ok: true, value: { interpretation: record.data } }
     } finally {
       operation.signal.removeEventListener('abort', onAbort)
     }
-    if (!result.ok) {
-      operation.fail(result.error.code)
-      return refuse(result.error.code)
-    }
-    if (replaysRedacted(result.output, report.registry)) {
-      operation.fail('INTERPRETATION_REDACTED_VALUE')
-      return refuse('INTERPRETATION_REDACTED_VALUE')
-    }
-    const record = InterpretationSchema.safeParse({
-      schema_version: PROJECT_SCHEMA_VERSION,
-      interpretation_id: newProjectUuid(),
-      run_id: runId,
-      invocation_id: result.invocation.invocation_id,
-      capture_id: report.sealed.capture.capture_id,
-      report_sha256: report.sealed.report_sha256,
-      input_sha256: result.invocation.input_sha256,
-      analysis_attempt: clarification === null ? 1 : 2,
-      clarification:
-        clarification === null || clarification.prior.result.status !== 'clarify'
-          ? null
-          : { question_id: clarification.prior.result.question.question_id, answer_id: answerId, answer_sha256: createHash('sha256').update(clarification.answer).digest('hex') },
-      result: result.output,
-    })
-    if (!record.success) {
-      operation.fail('INTERPRETATION_INVALID')
-      return refuse('INTERPRETATION_INVALID')
-    }
-    if (record.data.result.status === 'unsupported') {
-      // An explicit unsupported interpretation stops the run; it is shown, never replayed.
-      if (operation.fail('INTERPRETATION_UNSUPPORTED')) interpretation = record.data
-      return interpretation === record.data ? { ok: true, value: { interpretation: record.data } } : refuse('RUN_NOT_ACCEPTING')
-    }
-    // A late completion after cancellation is never accepted.
-    if (!operation.complete() || operation.signal.aborted || !accepting()) return refuse('RUN_NOT_ACCEPTING')
-    interpretation = record.data
-    lifecycle.transition(record.data.result.status === 'clarify' ? 'clarification-required' : 'interpretation-ready')
-    return { ok: true, value: { interpretation: record.data } }
   }
 
   return Object.freeze({
@@ -774,21 +840,22 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
       if (busy || recorder !== null) return refuse('CAPTURE_ACTIVE')
       if (lifecycle.state() !== 'demonstration-ready') return refuse('CAPTURE_STATE')
-      busy = true
-      try {
-        const next = await startRecorder()
-        if (!accepting()) {
-          await next.discard().catch(() => undefined)
-          return refuse('RUN_NOT_ACCEPTING')
+      return exclusive(async (gen) => {
+        let next: DemonstrationRecorder
+        try {
+          next = await startRecorder()
+        } catch {
+          return refuse(revoked(gen) ? stopped() : 'CAPTURE_FAILED')
+        }
+        if (revoked(gen)) {
+          await retire(next)
+          return refuse(stopped())
         }
         recorder = next
+        report = 'recording'
         lifecycle.transition('recording')
         return { ok: true as const, value: { capture_id: next.captureId } }
-      } catch {
-        return refuse('CAPTURE_FAILED')
-      } finally {
-        busy = false
-      }
+      })
     },
 
     async finish(captureId: string) {
@@ -796,11 +863,23 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
       if (sealed !== null) return { ok: true as const, value: { capture_id: captureId, report_sha256: sealed.report_sha256, state: 'ready' as CaptureState } }
       if (busy) return refuse('CAPTURE_ACTIVE')
-      busy = true
-      try {
-        const current = recorder!
-        const result = await current.finish()
-        if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
+      const current = recorder!
+      return exclusive(async (gen) => {
+        let result: SealedCapture
+        try {
+          result = await current.finish()
+        } catch {
+          if (revoked(gen)) {
+            await retire(current)
+            return refuse(stopped())
+          }
+          await drop()
+          return refuse('CAPTURE_FAILED')
+        }
+        if (revoked(gen) || recorder !== current) {
+          await retire(current)
+          return refuse(stopped())
+        }
         const capture = result.capture
         const bound =
           capture.capture_id === captureId &&
@@ -817,14 +896,10 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
           return { ok: true as const, value: { capture_id: captureId, report_sha256: null, state: capture.state } }
         }
         sealed = result
+        report = 'sealed'
         lifecycle.transition('capture-ready')
         return { ok: true as const, value: { capture_id: captureId, report_sha256: result.report_sha256, state: capture.state } }
-      } catch {
-        await drop()
-        return refuse('CAPTURE_FAILED')
-      } finally {
-        busy = false
-      }
+      })
     },
 
     async discard(captureId: string) {
@@ -832,7 +907,11 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
       if (claimed !== null) return refuse('CAPTURE_STATE')
       if (busy) return refuse('CAPTURE_ACTIVE')
-      await drop()
+      if (!(await drop())) {
+        // Not confirmed deleted: never reported as discarded; the run stops instead.
+        cancel()
+        return refuse('CAPTURE_DISCARD_REFUSED')
+      }
       return { ok: true as const, value: { capture_id: captureId } }
     },
 
@@ -841,27 +920,37 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
       if (claimed !== null || sealed === null || lifecycle.state() !== 'capture-ready') return refuse('CAPTURE_STATE')
       if (busy) return refuse('CAPTURE_ACTIVE')
-      busy = true
-      try {
-        let claim: Awaited<ReturnType<DemonstrationRecorder['claim']>>
-        try {
-          claim = await recorder!.claim()
-        } catch {
-          return refuse('CAPTURE_NOT_READY')
-        }
-        if (claim.sealed.report_sha256 !== sealed.report_sha256) return refuse('CAPTURE_BINDING_MISMATCH')
+      const current = recorder!
+      const expected = sealed
+      const description = input?.description ?? null
+      return exclusive(async (gen) => {
+        // Sources are loaded before the irreversible claim, so their failure leaves an unclaimed report.
         let loaded: Awaited<ReturnType<ProjectDemonstrationOptions['loadSources']>>
         try {
           loaded = await loadSources()
         } catch {
-          return refuse('SOURCES_UNAVAILABLE')
+          return refuse(revoked(gen) ? stopped() : 'SOURCES_UNAVAILABLE')
         }
-        if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
-        claimed = Object.freeze({ sealed: claim.sealed, registry: claim.registry, sources: loaded.sources, admitted: loaded.admitted, description: input?.description ?? null })
-        return await analyzeOnce(null)
-      } finally {
-        busy = false
-      }
+        if (revoked(gen) || recorder !== current) return refuse(stopped())
+        let claim: Awaited<ReturnType<DemonstrationRecorder['claim']>>
+        try {
+          claim = await current.claim()
+        } catch {
+          return refuse(revoked(gen) ? stopped() : 'CAPTURE_NOT_READY')
+        }
+        // From here the report is claimed: it is never deleted as if unsent, and any stop is fail-closed.
+        claimed = Object.freeze({ sealed: claim.sealed, registry: claim.registry, sources: loaded.sources, admitted: loaded.admitted, description })
+        report = 'claimed'
+        if (revoked(gen)) {
+          if (accepting()) cancel()
+          return refuse('RUN_NOT_ACCEPTING')
+        }
+        if (claim.sealed.report_sha256 !== expected.report_sha256) {
+          cancel()
+          return refuse('CAPTURE_BINDING_MISMATCH')
+        }
+        return analyzeOnce(gen, null)
+      })
     },
 
     async clarify(questionId: string, answer: string) {
@@ -870,18 +959,16 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       if (lifecycle.state() !== 'clarification-required' || claimed === null || prior === null || prior.result.status !== 'clarify') return refuse('CLARIFICATION_STATE')
       if (questionId !== prior.result.question.question_id) return refuse('CLARIFICATION_STALE')
       if (busy) return refuse('CAPTURE_ACTIVE')
-      busy = true
-      try {
-        return await analyzeOnce({ prior, answer })
-      } finally {
-        busy = false
-      }
+      return exclusive((gen) => analyzeOnce(gen, { prior, answer }))
     },
 
     async invalidate() {
       if (!accepting()) return
-      if (claimed !== null) return void cancel()
-      if (recorder !== null && !busy) await drop()
+      generation += 1
+      if (claimed !== null) cancel()
+      else if (recorder !== null && !(await drop())) cancel()
+      // Revoked work settles and discards whatever it produced before anything is reused.
+      await inflight
     },
 
     cancel: () => cancel(),
@@ -891,18 +978,11 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       return Object.freeze({
         state: lifecycle.state(),
         capture_id: recorder?.captureId ?? null,
-        report_sha256: sealed?.report_sha256 ?? null,
+        report,
+        report_sha256: sealed?.report_sha256 ?? claimed?.sealed.report_sha256 ?? null,
         interpretation: current,
         question_id: current?.result.status === 'clarify' ? current.result.question.question_id : null,
       })
     },
   })
-
-  function cancel(): void {
-    lifecycle.requestCancel()
-    model.cancel()
-    const current = recorder
-    if (current !== null && claimed === null) void current.discard().catch(() => current.detach().catch(() => undefined))
-    else if (current !== null) void current.detach().catch(() => undefined)
-  }
 }
