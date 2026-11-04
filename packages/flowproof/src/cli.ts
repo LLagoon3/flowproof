@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
+import path from 'node:path'
 import { realpath } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { Command, CommanderError } from 'commander'
 import type { Page } from 'playwright'
@@ -12,6 +14,11 @@ import { SCENARIO_REGISTRY } from './scenario/registry.js'
 import { StudioLaunchError, startStudio } from './studio/launch.js'
 import type { StudioClosure, StudioInstance } from './studio/launch.js'
 import { WorktreeError } from './worktree/session.js'
+import { admitProject } from './project/admission.js'
+import type { AdmittedProject } from './project/admission.js'
+import { ConfigurationFileError, ProfileError, admissionProfileOf, defaultRuntimeManifestPath, readProjectConfigFile, readRuntimeManifest, verifyRuntimeImage } from './project/profile.js'
+import type { ProjectSettings, RuntimeProfile } from './project/profile.js'
+import { startProjectStudio } from './studio/launch.js'
 
 // `flowproof studio [--scenario <scenario-id>]`, the only MVP command (contracts/cli.md). Every
 // precondition runs read-only before the Studio starts: the canonical Git checkout, its HEAD and
@@ -31,6 +38,7 @@ import { WorktreeError } from './worktree/session.js'
 export type ExitCode = 0 | 2 | 3 | 4
 
 const USAGE_INVALID = 'CLI_USAGE_INVALID: Usage: flowproof studio [--scenario <scenario-id>].'
+const PROJECT_USAGE_INVALID = 'CLI_USAGE_INVALID: Usage: flowproof studio [--scenario <scenario-id>] | --project <path> [--project-config <path>].'
 const PRECONDITION_CHECK_FAILED = 'PRECONDITION_CHECK_FAILED: The launch preconditions could not be checked.'
 const STUDIO_START_FAILED = 'STUDIO_START_FAILED: The Studio could not be started.'
 const STUDIO_CLOSE_FAILED = 'STUDIO_CLEANUP_INCOMPLETE: Some Studio resources could not be released.'
@@ -237,6 +245,88 @@ async function runStudio(scenarioId: string | null): Promise<ExitCode> {
   }
 }
 
+function projectProfileDiagnostic(error: unknown): string {
+  if (!(error instanceof ProfileError)) return 'PROFILE_MANIFEST_INVALID: The vite-static-v1 runtime profile is not available.'
+  switch (error.code) {
+    case 'PROFILE_MANIFEST_MISSING':
+      return 'PROFILE_MANIFEST_MISSING: The vite-static-v1 runtime profile manifest is not available.'
+    case 'PROFILE_MANIFEST_INVALID':
+      return 'PROFILE_MANIFEST_INVALID: The vite-static-v1 runtime profile manifest is invalid.'
+    case 'PROFILE_IMAGE_MISSING':
+      return 'PROFILE_IMAGE_MISSING: The immutable vite-static-v1 runtime image is not available locally.'
+    case 'PROFILE_DOCKER_UNAVAILABLE':
+      return 'PROFILE_DOCKER_UNAVAILABLE: The local container runtime is not available.'
+    default:
+      return 'PROFILE_IMAGE_MISMATCH: The local runtime image does not match the recorded immutable profile.'
+  }
+}
+
+async function runProjectStudio(projectPath: string, configPath: string | undefined): Promise<ExitCode> {
+  let profile: RuntimeProfile
+  try {
+    const manifestPath = process.env.FLOWPROOF_PROJECT_PROFILE_MANIFEST ?? defaultRuntimeManifestPath()
+    profile = await readRuntimeManifest(manifestPath)
+  } catch (error) {
+    diagnose(projectProfileDiagnostic(error))
+    return 3
+  }
+
+  let project: AdmittedProject
+  try {
+    const admission = await admitProject({ root: projectPath, profile: admissionProfileOf(profile) })
+    if (admission.state !== 'ready') {
+      const reason = admission.reasons[0] ?? 'PROJECT_PATH_UNSUPPORTED'
+      diagnose(`PROJECT_ADMISSION_BLOCKED: The selected project cannot be admitted (${reason}).`)
+      return 3
+    }
+    project = admission.project
+  } catch {
+    diagnose('PROJECT_ADMISSION_BLOCKED: The selected project cannot be admitted (PROJECT_PATH_INVALID).')
+    return 3
+  }
+
+  let initialSettings: ProjectSettings | null = null
+  if (configPath !== undefined) {
+    try {
+      initialSettings = await readProjectConfigFile(configPath)
+    } catch (error) {
+      if (error instanceof ConfigurationFileError) {
+        if (error.code === 'PROJECT_CONFIG_INVALID') diagnose('PROJECT_CONFIG_INVALID: The project configuration file is not a valid vite-static-v1 configuration.')
+        else diagnose('PROJECT_CONFIG_UNREADABLE: The project configuration file cannot be read.')
+      } else diagnose('PROJECT_CONFIG_INVALID: The project configuration file is not a valid vite-static-v1 configuration.')
+      return 3
+    }
+  }
+
+  try {
+    await verifyRuntimeImage(profile)
+  } catch (error) {
+    diagnose(projectProfileDiagnostic(error))
+    return 3
+  }
+
+  const signals = watchShutdownSignals()
+  try {
+    const flowproofRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+    let instance: StudioInstance
+    try {
+      instance = await startProjectStudio({
+        repoRoot: flowproofRoot,
+        project,
+        profile,
+        initialSettings,
+        modelConfigured: typeof process.env.MODEL_API_KEY === 'string' && process.env.MODEL_API_KEY.trim() !== '',
+      })
+    } catch (error) {
+      diagnose(error instanceof StudioLaunchError ? error.message : STUDIO_START_FAILED)
+      return 4
+    }
+    return await superviseStudio(instance, signals)
+  } finally {
+    signals.dispose()
+  }
+}
+
 // ---------------------------------------------------------------------------------------
 // Command line
 // ---------------------------------------------------------------------------------------
@@ -256,8 +346,17 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
     .command('studio')
     .description('Open the local split-view FlowProof Studio')
     .option('--scenario <scenario-id>', 'committed scenario identifier')
-    .action(async (options: { readonly scenario?: string }) => {
-      exitCode = await runStudio(options.scenario ?? null)
+    .option('--project <path>', 'admit a committed local project read-only')
+    .option('--project-config <path>', 'review a strict vite-static-v1 settings file')
+    .action(async (options: { readonly scenario?: string; readonly project?: string; readonly projectConfig?: string }) => {
+      if ((options.project !== undefined && options.scenario !== undefined) || (options.projectConfig !== undefined && options.project === undefined)) {
+        diagnose(PROJECT_USAGE_INVALID)
+        exitCode = 3
+      } else if (options.project !== undefined) {
+        exitCode = await runProjectStudio(options.project, options.projectConfig)
+      } else {
+        exitCode = await runStudio(options.scenario ?? null)
+      }
     })
 
   try {

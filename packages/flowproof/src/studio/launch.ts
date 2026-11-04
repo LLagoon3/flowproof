@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { chromium } from 'playwright'
-import type { Frame, Page } from 'playwright'
+import type { BrowserContext, Frame, Page } from 'playwright'
 
 import { createBrowserCapture } from '../capture/browserCapture.js'
 import type { BrowserCapture } from '../capture/browserCapture.js'
@@ -26,10 +26,19 @@ import { CAPTURED_ADMISSION_ERRORS, PREPARED_FUNCTIONAL_CHECKS, admitCapturedCan
 import type { AdmittedCandidate, CapturedAdmission, CapturedRunPorts, PreparedBaseline, PreparedCandidatePorts } from '../verify/capturedRun.js'
 import { createWorktreeSession } from '../worktree/session.js'
 import type { WorktreeSession } from '../worktree/session.js'
+import { checkProjectBaseline } from '../project/admission.js'
+import type { AdmittedProject } from '../project/admission.js'
+import type { ExecutionConfiguration } from '../project/contracts.js'
+import { admissionProfileOf, createExecutionConfiguration, suggestProjectSettings, verifyRuntimeImage } from '../project/profile.js'
+import type { ProjectSettings, RuntimeProfile } from '../project/profile.js'
+import { createProjectRuntime } from '../project/runtime.js'
+import type { ImmutableOutput, ProjectRuntime } from '../project/runtime.js'
+import { exportProjectSnapshot } from '../project/snapshot.js'
+import type { ProjectSnapshot } from '../project/snapshot.js'
 import { createRunEventStream } from './events.js'
-import { startStudioServer } from './server.js'
-import type { CapturedStudioRunStart, StudioRunHandle, StudioRunStart } from './server.js'
-import { DEFAULT_RECONNECT_TIMEOUT_MS, TargetAppError, startTargetApp, trustedProbeReady } from './targetApp.js'
+import { ProjectPreparationError, startStudioServer } from './server.js'
+import type { CapturedStudioRunStart, ProjectPreparation, StudioRunHandle, StudioRunStart } from './server.js'
+import { DEFAULT_RECONNECT_TIMEOUT_MS, TargetAppError, startProjectTargetApp, startTargetApp, trustedProbeReady } from './targetApp.js'
 import type { TargetApp, TargetAppErrorCode, TargetBuilder } from './targetApp.js'
 
 // The in-process Studio launcher behind `flowproof studio` and the end-to-end harness. It loads the
@@ -116,6 +125,80 @@ const BUILD_TIMEOUT_MS = 120_000
 const PROBE_POLLING_MS = 50
 // The same allowlist as the worktree build: no credential reaches a build.
 const BUILD_ENVIRONMENT_KEYS = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'COREPACK_HOME', 'PNPM_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME'] as const
+
+/** Browser defaults for project mode: no downloads, workers, permissions, or CSP bypass. */
+export const PROJECT_BROWSER_CONTEXT_OPTIONS = Object.freeze({
+  acceptDownloads: false,
+  bypassCSP: false,
+  serviceWorkers: 'block' as const,
+  permissions: [] as string[],
+  javaScriptEnabled: true,
+})
+
+export interface ProjectBrowserPolicy {
+  blocked(): readonly { readonly kind: 'request' | 'navigation'; readonly origin: string; readonly url: string }[]
+}
+
+/** Allows only the Studio document and its direct target frame at their exact origins. */
+export async function installProjectBrowserPolicy(
+  context: BrowserContext,
+  options: { readonly studioOrigin: string; readonly targetOrigin: string; readonly studioPage: () => Page | null },
+): Promise<ProjectBrowserPolicy> {
+  const blocked: Array<{ readonly kind: 'request' | 'navigation'; readonly origin: string; readonly url: string }> = []
+  const studioOrigin = options.studioOrigin
+  const targetOrigin = options.targetOrigin
+  const recordBlocked = (raw: string, kind: 'request' | 'navigation'): void => {
+    let origin = 'null'
+    try {
+      origin = new URL(raw).origin
+    } catch {
+      // Keep opaque and malformed origins as an explicit blocked entry.
+    }
+    blocked.push(Object.freeze({ kind, origin, url: raw.slice(0, 2_048) }))
+  }
+  await context.route('**/*', async (route) => {
+    const raw = route.request().url()
+    let url: URL
+    try {
+      url = new URL(raw)
+    } catch {
+      recordBlocked(raw, route.request().isNavigationRequest() ? 'navigation' : 'request')
+      await route.abort('blockedbyclient')
+      return
+    }
+    const page = options.studioPage()
+    let frame: Frame | null = null
+    try {
+      frame = route.request().frame()
+    } catch {
+      frame = null
+    }
+    let allowed = false
+    if (page !== null && frame !== null && frame.page() === page) {
+      const mainFrame = page.mainFrame()
+      if (frame === mainFrame) allowed = url.origin === studioOrigin
+      else if (frame.parentFrame() === mainFrame) {
+        allowed = url.origin === targetOrigin || (!route.request().isNavigationRequest() && url.protocol === 'data:')
+      }
+    }
+    if (allowed) {
+      await route.continue()
+      return
+    }
+    recordBlocked(raw, route.request().isNavigationRequest() ? 'navigation' : 'request')
+    await route.abort('blockedbyclient')
+  })
+  // The static project profile has no socket authority. BrowserContext.route() does not cover
+  // WebSocket handshakes, so close them through Playwright's dedicated route before they connect.
+  await context.routeWebSocket(() => true, async (socket) => {
+    recordBlocked(socket.url(), 'request')
+    await socket.close({ code: 1008, reason: 'WebSockets are disabled for project targets.' })
+  })
+  context.on('page', (page) => {
+    if (page !== options.studioPage()) void page.close().catch(() => undefined)
+  })
+  return Object.freeze({ blocked: () => Object.freeze([...blocked]) })
+}
 
 interface LaunchOptions {
   readonly repoRoot: string
@@ -908,5 +991,198 @@ export async function startCapturedVerificationStudio(options: StartCapturedVeri
     closingController.abort()
     await release()
     throw launchError(error, 'STUDIO_START_FAILED', 'The Studio could not be started.')
+  }
+}
+
+export interface StartProjectStudioOptions {
+  readonly repoRoot: string
+  readonly project: AdmittedProject
+  readonly profile: RuntimeProfile
+  readonly initialSettings: ProjectSettings | null
+  readonly modelConfigured: boolean
+}
+
+/** Opens the isolated, project-only setup journey. It has no run, capture, or model capability. */
+export async function startProjectStudio(options: StartProjectStudioOptions): Promise<StudioInstance> {
+  const { repoRoot, project, profile, initialSettings, modelConfigured } = options
+  if (
+    project.context.profile.image_id !== profile.imageId ||
+    project.context.profile.lock_sha256 !== profile.lockSha256 ||
+    project.context.profile.manifest_sha256 !== profile.manifestSha256
+  ) {
+    throw new StudioLaunchError('STUDIO_OPTIONS_INVALID', 'The admitted project does not match the runtime profile.')
+  }
+  const initialBaseline = await checkProjectBaseline(project, admissionProfileOf(profile))
+  if (initialBaseline.state !== 'ready') {
+    throw new ProjectPreparationError('PROJECT_BASELINE_STALE', initialBaseline.reasons)
+  }
+  await verifyRuntimeImage(profile)
+
+  let target: Awaited<ReturnType<typeof startProjectTargetApp>> | null = null
+  for (let port = 43_150; port <= 43_159; port += 1) {
+    try {
+      target = await startProjectTargetApp({ port })
+      break
+    } catch (error) {
+      if (!(error instanceof TargetAppError) || error.code !== 'TARGET_PORT_UNAVAILABLE') throw error
+    }
+  }
+  if (target === null) throw new StudioLaunchError('TARGET_APP_FAILED', 'No reserved project target port is available.')
+
+  const runtime: ProjectRuntime = createProjectRuntime({ profile })
+  let studioBuild: TempOutput | null = null
+  let server: Awaited<ReturnType<typeof startStudioServer>> | null = null
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null
+  let browserContext: BrowserContext | null = null
+  let page: Page | null = null
+  let activeOutput: ImmutableOutput | null = null
+  let releaseOutputWork: Promise<void> | null = null
+  const preparationJobs = new Set<Promise<ProjectPreparation>>()
+
+  const releaseProjectOutput = async (): Promise<void> => {
+    if (releaseOutputWork !== null) return releaseOutputWork
+    releaseOutputWork = (async () => {
+      target?.unserve()
+      const output = activeOutput
+      activeOutput = null
+      await output?.remove()
+    })()
+    try {
+      await releaseOutputWork
+    } finally {
+      releaseOutputWork = null
+    }
+  }
+
+  const prepare = async (configuration: ExecutionConfiguration, signal: AbortSignal): Promise<ProjectPreparation> => {
+    const job = (async (): Promise<ProjectPreparation> => {
+      // Defense in depth behind the server guard: a retained output is released before any new
+      // preparation, so a later success never overwrites (and orphans) the previous output.
+      if (activeOutput !== null || releaseOutputWork !== null) await releaseProjectOutput()
+      const current = await checkProjectBaseline(project, admissionProfileOf(profile))
+      if (current.state !== 'ready') throw new ProjectPreparationError('PROJECT_BASELINE_STALE', current.reasons)
+      if (signal.aborted) throw new ProjectPreparationError('RUNTIME_CANCELLED')
+      const snapshot: ProjectSnapshot = await exportProjectSnapshot({ project, purpose: 'admission-snapshot' })
+      let output: ImmutableOutput | null = null
+      let retained = false
+      try {
+        const build = await runtime.build({ snapshot, configuration, signal })
+        if (build.status !== 'passed' || build.output === null) {
+          throw new ProjectPreparationError(build.status === 'failed' ? build.reason : 'RUNTIME_BUILD_FAILED')
+        }
+        output = build.output
+        const checks: Array<{ readonly id: string; readonly status: 'passed' | 'failed' | 'not_evaluated' }> = []
+        for (const check of configuration.required_project_checks) {
+          if (signal.aborted) throw new ProjectPreparationError('RUNTIME_CANCELLED')
+          const result = await runtime.check({ snapshot, configuration, signal, checkId: check.id, output })
+          checks.push({ id: check.id, status: result.status })
+          if (result.status !== 'passed') {
+            throw new ProjectPreparationError(result.status === 'failed' ? result.reason : 'RUNTIME_CHECK_FAILED')
+          }
+        }
+        const finalBaseline = await checkProjectBaseline(project, admissionProfileOf(profile))
+        if (finalBaseline.state !== 'ready') throw new ProjectPreparationError('PROJECT_BASELINE_STALE', finalBaseline.reasons)
+        if (signal.aborted) throw new ProjectPreparationError('RUNTIME_CANCELLED')
+        const app = target
+        if (app === null) throw new ProjectPreparationError('PROJECT_PREPARE_FAILED')
+        await app.serve(output, { entryPath: configuration.entry_path })
+        activeOutput = output
+        retained = true
+        return Object.freeze({
+          target_url: `${app.origin}${configuration.entry_path}`,
+          output_sha256: output.sha256,
+          checks: Object.freeze(checks.map((check) => Object.freeze(check))),
+        })
+      } finally {
+        await snapshot.remove()
+        if (!retained) await output?.remove()
+      }
+    })()
+    preparationJobs.add(job)
+    try {
+      return await job
+    } finally {
+      preparationJobs.delete(job)
+    }
+  }
+
+  const release = async (): Promise<void> => releaseProjectOutput()
+
+  try {
+    studioBuild = await tempBuild(repoRoot, 'studio-build', [])
+    server = await startStudioServer({
+      targetOrigin: target.origin,
+      studioRoot: studioBuild.path,
+      project: {
+        context: project.context,
+        modelConfigured,
+        suggestion: suggestProjectSettings(project),
+        initialSettings,
+        configure: (settings, confirmedAt) =>
+          createExecutionConfiguration({
+            project,
+            profile,
+            settings,
+            targetOrigin: target!.origin,
+            confirmedAt,
+          }),
+        prepare,
+        release,
+      },
+    })
+    // The policy requires the actual ephemeral Studio origin; install it after the guarded server binds.
+    target.setFrameAncestor(server.origin)
+    browser = await chromium.launch({ headless: false, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false })
+    browserContext = await browser.newContext(PROJECT_BROWSER_CONTEXT_OPTIONS)
+    await browserContext.addCookies([server.session.launchCookie()])
+    page = await browserContext.newPage()
+    await installProjectBrowserPolicy(browserContext, {
+      studioOrigin: server.origin,
+      targetOrigin: target.origin,
+      studioPage: () => page,
+    })
+    const response = await page.goto(`${server.origin}/?mode=project`, { waitUntil: 'load', timeout: READY_TIMEOUT_MS })
+    if (response?.status() !== 200) throw new StudioLaunchError('STUDIO_PAGE_FAILED', 'The project setup page did not load.')
+    await page.getByTestId('project-setup').waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
+
+    let closed: Promise<StudioClosure> | null = null
+    const close = (): Promise<StudioClosure> => {
+      closed ??= (async () => {
+        let complete = true
+        if (server !== null) await server.close().catch(() => { complete = false })
+        await Promise.allSettled([...preparationJobs])
+        await releaseProjectOutput().catch(() => { complete = false })
+        await browser?.close().catch(() => { complete = false })
+        await target?.close().catch(() => { complete = false })
+        if (!(await runtime.dispose().catch(() => false))) complete = false
+        await studioBuild?.remove().catch(() => { complete = false })
+        if (!complete) throw new StudioLaunchError('STUDIO_CLEANUP_INCOMPLETE', 'Some project Studio resources could not be released.')
+        return Object.freeze({ interruptedRun: false })
+      })()
+      return closed
+    }
+    const closeQuietly = (): void => { close().catch(() => undefined) }
+    page.once('close', closeQuietly)
+    page.once('crash', closeQuietly)
+    browser.once('disconnected', closeQuietly)
+    if (page.isClosed() || !browser.isConnected()) closeQuietly()
+    const origin = server.origin
+    const sessionId = server.session.sessionId
+    return Object.freeze({
+      origin,
+      sessionId,
+      page,
+      close,
+      toJSON: (): StudioLaunchJson => ({ mode: 'studio', origin, session_id: sessionId }),
+    })
+  } catch (error) {
+    await server?.close().catch(() => undefined)
+    await Promise.allSettled([...preparationJobs])
+    await releaseProjectOutput().catch(() => undefined)
+    await browser?.close().catch(() => undefined)
+    await target?.close().catch(() => undefined)
+    await runtime.dispose().catch(() => false)
+    await studioBuild?.remove().catch(() => undefined)
+    throw launchError(error, 'STUDIO_START_FAILED', 'The project Studio could not be started.')
   }
 }

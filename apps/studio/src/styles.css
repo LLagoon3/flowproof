@@ -1352,3 +1352,92 @@ code {
     min-height: max(26rem, 60vh);
   }
 }
+
+/* The project-only setup screen shares the built Studio bundle but not its prepared-case workspace. */
+.project-setup {
+  box-sizing: border-box;
+  display: grid;
+  gap: 1rem;
+  max-width: 72rem;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 2rem clamp(1rem, 4vw, 3rem);
+  color: #18212f;
+  background: #f7f8fb;
+  font-family: system-ui, sans-serif;
+}
+.project-setup h1,
+.project-setup h2,
+.project-setup p {
+  margin-top: 0;
+}
+.project-setup__header,
+.project-setup__identity,
+.project-setup__settings,
+.project-setup__checks,
+.project-setup__confirm,
+.project-setup__target {
+  border: 1px solid #dce1e8;
+  border-radius: 0.8rem;
+  background: #fff;
+  padding: 1.25rem;
+}
+.project-setup__eyebrow {
+  margin-bottom: 0.35rem;
+  color: #51617a;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.project-setup dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.75rem 1.5rem;
+  margin: 0;
+}
+.project-setup dt {
+  color: #536176;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.project-setup dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+.project-setup code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.88em;
+}
+.project-setup__confirm {
+  display: grid;
+  gap: 1rem;
+}
+.project-setup__confirm label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.project-setup__confirm button {
+  justify-self: start;
+  border: 0;
+  border-radius: 0.45rem;
+  background: #1956a6;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.7rem 1rem;
+}
+.project-setup__confirm button:disabled {
+  background: #7b8da7;
+  cursor: not-allowed;
+}
+.project-setup__target iframe {
+  display: block;
+  width: 100%;
+  min-height: min(68vh, 52rem);
+  border: 1px solid #dce1e8;
+  border-radius: 0.5rem;
+  background: #fff;
+}
