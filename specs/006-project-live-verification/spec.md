@@ -28,6 +28,11 @@ slice rather than delivering another prepared-candidate-only demonstration. Depl
   the user is not required to author a step list, executable test, or formal assertion.
 - After this correction, the owner requested the next stage on 2026-11-04; Plan is authorized.
   Tasks, implementation, model execution, publication, and deployment are not authorized by that request.
+- On 2026-11-04 the owner corrected the PR scheduling interpretation: use separate PR-sized
+  implementation slices with independent module branches where dependencies allow. The first usable
+  full-feature acceptance must still include real AI and independent verification; this does not mean
+  that all foundation/module/integration tasks belong in one PR. Intermediate modules do not claim
+  completed product acceptance.
 - Capture starts/ends under user control. AI analysis may precede automatic baseline reproduction;
   editing still requires an established defect and frozen verification obligations. An ambiguous
   intended outcome is clarified with the user rather than invented by the model.
@@ -381,6 +386,6 @@ the verification target alive. Check the original checkout remains unchanged.
   deployment, cloud/multi-user accounts, and broad multi-project management are out of scope.
 - **Phase boundary**: This feature defines the user journey and acceptance obligations only.
   Clarify addresses owner feedback; Plan and Tasks follow explicit agreement on the detailed scope.
-  The first usable implementation slice must include user-operated capture, real AI interpretation,
+  The first usable full-feature acceptance must include user-operated capture, real AI interpretation,
   live correction and independent verification, not stop at an onboarding mockup or another
   deterministic prepared-patch demo.

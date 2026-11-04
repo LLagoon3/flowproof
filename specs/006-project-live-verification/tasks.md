@@ -22,7 +22,7 @@ prerequisites, not permission to run port/resource-heavy tests concurrently. Sou
 planned files, not a claim they exist. Reuse existing modules without weakening old contracts.
 
 **Parallel dispatch**: [parallel-execution.md](parallel-execution.md) assigns every task exactly once
-to four active lanes, records exact predecessor IDs, shared-file handoffs and resource ownership.
+to seven PR-sized slices, records exact predecessor IDs, separate worktrees and resource ownership.
 Story phases describe integration order, not a blanket barrier on independent module work.
 
 ## Phase 1: Setup (Shared Infrastructure)
@@ -79,7 +79,7 @@ cases before model calls; original state is unchanged (FR-001–FR-003, SC-002/S
 - [ ] T020 [US1] Verify the independent project-setup journey in `tests/e2e/project-setup.spec.ts` after T019, including actual interactive target, unchanged original, no call on selection/preparation, blocked/stale settings and existing-mode CLI compatibility; preserve observed output/cleanup identities under the ignored review root.
 
 **Checkpoint I2**: US1 is independently testable without a model. Do not deliver it as the Spec 006
-MVP: direct capture, real AI and independent correction verification are still required in slice 1.
+MVP: direct capture, real AI and independent correction verification are still required for final feature acceptance in S7.
 
 ## Phase 4: User Story 2 — Ask a Real AI to Correct My Reproducible Problem (Priority: P1)
 
@@ -174,7 +174,7 @@ owner walkthrough on the same final implementation. No speculative new feature o
 - [ ] T052 Run final `pnpm typecheck`, `pnpm build`, serial default Vitest and headed Playwright commands from Validation V1 on the implementation HEAD; record results, exact HEAD, fixtures/profile digests, safe screenshots and resource/original checks in `specs/006-project-live-verification/verification.md`, keeping raw local logs under ignored `.flowproof/task-logs/006-project-live-verification/` outside the selected sample.
 - [ ] T053 During authorized implementation with available permitted model access, execute the explicit full-live harness in `tests/manual/project-live-acceptance.mjs` from T043 and run Validation V2 against the separate T001 repository on the final HEAD: actual target manipulation/capture -> real image analysis/derived definition -> intended baseline failure -> newly generated real patch -> same replay/project checks pass -> exact evidence/diff/identity/integrity/cleanup. Record actual calls and driver type; do not count fixtures, a preset patch, a skipped credential gate or an automated driver as owner usability approval.
 - [ ] T054 Conduct or collect the untimed owner walkthrough for the implemented project-live flow and record actual findings in `specs/006-project-live-verification/verification.md` per SC-007; user directly manipulates the target and reviews interpretation/result/evidence/diff without writing a test. The same human live session may satisfy both the full-flow proof and owner review; no duplicate run or stopwatch is required. If owner feedback is unavailable, leave this task open and report the owner dependency honestly.
-- [ ] T055 Finalize per-FR/per-SC evidence and Constitution review in `specs/006-project-live-verification/verification.md`, check exact patch/original/resource outcomes, inspect `git diff --check` and the complete implementation diff, and update only supported completion marks in `specs/006-project-live-verification/tasks.md`. Record unexecuted/unmet items as gaps; stop at slice 1 without implicit push/PR/merge/deploy authority.
+- [ ] T055 Finalize per-FR/per-SC evidence and Constitution review in `specs/006-project-live-verification/verification.md`, check exact patch/original/resource outcomes, inspect `git diff --check` and the complete implementation diff, and update only supported completion marks in `specs/006-project-live-verification/tasks.md`. Record unexecuted/unmet items as gaps; stop at the authorized slice boundary without implicit push/PR/merge/deploy authority.
 
 **Named Delivery Checkpoint I6 — First complete project-live workflow**: All required obligations are
 proved, including the real model path and actual owner review, or the slice is explicitly blocked with
@@ -182,20 +182,31 @@ open tasks/evidence gaps. A foundation-only, capture-only or fake-provider demon
 
 ## Delivery Slices
 
-The **first and only planned delivery slice** is the named I6 checkpoint below. Its internal story
-phases/commit milestones are not separate shippable releases; this is intentional because the owner
-requires actual AI correction and independent verification in the first usable slice. Do not mechanically
-copy the template's “US1 only MVP” or split model integration into a future feature. The coherent feature
-may use many small reviewed commits; no single giant implementation commit/run is required.
+The owner corrected the single-PR interpretation on 2026-11-04. **A delivery slice is now one
+reviewable implementation PR, not the whole feature.** The first usable complete feature still requires
+real AI analysis/correction, independent verification and owner review; that does not require one PR.
+Earlier slices are honestly labelled infrastructure/modules, not a completed project-live product.
 
-| Order | Phase or named checkpoint | Exact tasks | Validation and stop boundary |
-| --- | --- | --- | --- |
-| 1 | I6 — First complete project-live workflow (Phases 1–7) | T001–T055 | V1 default regression + V2 actual image/full-live + V3 untimed owner evidence + final integrity/cleanup/Constitution. Stop and report; no publish/merge/deploy implied. |
+| Slice / PR | Named checkpoint | Exact task IDs | Predecessor PRs | Validation and stop boundary |
+| --- | --- | --- | --- | --- |
+| S1 | Contracts, outside-project store, lifecycle and runtime preparation | T001–T009 | None | Foundation contracts/store/lifecycle tests, discovery exclusion and actual immutable image inspection; stop at S1. |
+| S2 | Real project setup, offline runtime and guarded candidate copy | T010–T020, T035, T039 | S1 | Admission/runtime/target/CLI/patch checks and independent project-setup E2E; no model or full-feature claim; stop at S2. |
+| S3 | Safe demonstration capture module | T021–T022, T024–T025 | S1 | Capture/privacy contracts and unit checks, rendered seeded-secret masking on synthetic target frames; no production integration claim; stop at S3. |
+| S4 | Frozen replay/compiler module | T034, T037 | S1 | Closed DSL, unique locators, frozen identities and fresh-state replay tests; no model or end-to-end claim; stop at S4. |
+| S5 | Real model analysis/correction adapter | T023, T027–T028, T031 | S1, S3 | Image/request/schema/identity/call-budget tests and isolated live-smoke discovery; actual calls remain T053; stop at S5. |
+| S6 | Demonstration-to-correction workflow integration | T026, T029–T030, T032–T033, T036, T038, T040–T043 | S2, S3, S4, S5 | Actual target recorder integration and deterministic analysis/verification negatives; real acceptance remains open; stop at S6. |
+| S7 | Retained review and complete-feature acceptance | T044–T055 | S6 | Result/artifact/UI negatives, V1 regression, V2 actual image/full-live, V3 untimed owner evidence and final integrity/cleanup/Constitution; stop at S7. |
 
-Later implementation may validate/commit I1–I5 internally without claiming independent product delivery
-or repeatedly asking the owner to approve routine internal steps. If a blocker prevents the first real
-vertical slice, preserve it explicitly; do not relabel a mockup as the accepted slice or weaken the gate.
-If a genuine scope split is necessary, return a concrete revised proposal rather than silently deferring AI.
+S2/S3/S4 are independent sibling PRs from merged S1 and may be implemented/reviewed concurrently.
+S5 starts from current main after S3 merges; it need not wait for S2/S4. S6 waits for all four module
+PRs. Each ID occurs in exactly one slice; the noncontiguous sets preserve existing IDs without silently
+omitting or duplicating work. [parallel-execution.md](parallel-execution.md) gives branch names,
+per-slice file ownership, exact task predecessors and focused validation commands.
+
+Follow `CONTRIBUTING.md`: one branch/worktree/PR per slice, each dependent branch from updated main
+after its prerequisites merge, validate/report/stop at each authorized boundary. Existing module PRs
+are not recopied into a final umbrella PR. Push, PR creation, merge and next-slice implementation retain
+their existing authorization rules; this correction does not start implementation or publication.
 
 ## Validation Commands and Evidence
 
@@ -241,55 +252,43 @@ and contain no secret/private data. Human and automated observations remain clea
 
 ```mermaid
 flowchart TD
-  Foundation[Shared contracts / store / lifecycle] --> Runtime[Runtime / admission / patch lane]
-  Foundation --> Capture[Privacy / recorder lane]
-  Foundation --> Model[Model / replay lane]
-  Image[Sample / immutable image] --> Runtime
-  Capture --> Model
-  Runtime --> SetupUI[Integrate real target and setup]
-  SetupUI --> Analysis[Integrate capture / interpretation]
-  Capture --> Analysis
-  Model --> Analysis
-  Analysis --> Verification[Baseline / correction / same-check verification]
-  Runtime --> Verification
-  Model --> Verification
-  Verification --> Review[Retained result / evidence / diff]
-  Review --> Final[Serial regression / actual live / owner evidence]
+  S1[S1: foundations] --> S2[S2: project / runtime / patch]
+  S1 --> S3[S3: privacy / capture]
+  S1 --> S4[S4: frozen replay]
+  S3 --> S5[S5: real model adapter]
+  S2 --> S6[S6: workflow integration]
+  S3 --> S6
+  S4 --> S6
+  S5 --> S6
+  S6 --> S7[S7: review / complete acceptance]
 ```
 
 - T001 precedes image binding T002; T003 can be prepared independently of the sample/image.
 - T004/T006/T008 and their foundation implementations do not need an actual image. They may overlap
   T001/T002/T003; no story module bypasses completed T005/T007/T009. Actual execution still requires T002.
-- After foundations, US1 admission/runtime, US2 privacy/recorder/model and US3 replay/patch modules
-  may overlap against frozen contracts. Do not wait for all of US1 before starting US2/US3 modules.
+- After S1 merges, S2 admission/runtime/patch, S3 privacy/recorder and S4 replay overlap against
+  frozen contracts in separate PRs. S5 model work follows merged S3, without waiting for S2/S4.
 - Production capture integration T029 still needs actual project setup T019, recorder T025 and model
   client T028. Replay module T037 may be ready early; baseline integration T038 requires the actual
   runtime/target and sealed interpretation. Correction still follows the intended baseline failure.
-- US3 fixed-pair evaluator tests do not need another model call. Result-contract T044 may start after
-  foundations; US4 integration still waits for authoritative engine/store results.
+- US3 fixed-pair evaluator tests do not need another model call. Result-contract T044 and US4 work
+  belong to S7 after S6 merges; result integration needs authoritative engine/store outputs.
 - T050 closes only unproven negative gaps. T051 documents implementation facts. T052 precedes final
   live/owner evidence T053/T054; T055 checks the exact resulting implementation and truthful marks.
 - Any follow-up code change invalidates affected acceptance evidence and requires the relevant rerun;
   no documentation-only result note requires an unrelated full regression repeat.
 
-## Parallel Execution (Four Active Lanes)
+## Parallel PR Execution
 
-The dispatch-ready task/owner/predecessor matrix is in [parallel-execution.md](parallel-execution.md).
-There are at most four active agents: one integration owner plus three module workers, not four workers
-in addition to a coordinator. This document does not start product implementation.
+Use [parallel-execution.md](parallel-execution.md), not the superseded single-checkout/four-lane plan.
+After S1 merges, at most three worker agents implement S2/S3/S4 in isolated worktrees while the parent
+coordinates review and resources. S5 can use the released S3 worker slot after S3 merges. S6 and S7
+are dependent integration slices, not simultaneous writers to the module branches.
 
-- **I — integration/UI**: shared contracts/store/lifecycle, CLI/Studio/target/UI, orchestration and
-  authoritative final verification. One writer owns shared integration files and task completion marks.
-- **A — runtime/project**: sample/image, admission/snapshot/profile/offline runtime and bounded patch.
-- **B — capture/privacy**: safe observations/masking, target recorder and capture-specific tests.
-- **C — AI/replay**: prompt/client/opt-in smoke authoring and frozen replay compiler/interpreter.
-- **Early overlap**: A prepares T001→T002 while I establishes T004–T009/T003. After foundations, A's
-  admission/runtime, B's T021/T022→T024→T025 and C's T023/T034→T037 overlap. C's prompt waits for T024,
-  not all of US1. A's T035→T039 waits for T015, not all of US2.
-- **Join**: I integrates ready modules in small commits while independent owners continue. C hands
-  `projectReplay.ts` exclusively to I after verified T037 for T038/T040; no simultaneous edits.
-- **Resources**: browser/Docker/image/full-suite/live execution uses one coordinator-issued resource
-  lease. Pure module edits and focused resource-free checks can overlap; heavy suites cannot.
+The exact task DAG still controls readiness inside each slice. Contracts/store/lifecycle work can
+overlap operator image preparation within S1. Separate worktrees isolate source/build output, but
+Docker/headed-browser/heavy-suite/live execution still uses one coordinator-issued resource lease.
+Changes to a published shared contract need a focused prerequisite fix, not divergent worker copies.
 
 ## Constraint Register (Inherited, Not New Product Scope)
 
@@ -346,14 +345,13 @@ field, extra key, bound and illegal transition, not only the abbreviated labels 
 - Preserve the confirmed scope: a supported local running project that the user directly manipulates,
   actual capture/image/code analysis, system-derived reproduction, one correction, independent checks,
   retained evidence/exact diff and original unchanged. No manual-script input requirement or human timer.
-- Complete shared risk boundaries first, then execute ready modules across lanes and join story
+- Complete shared risk boundaries first, then execute independent module PR slices and join story
   integrations in dependency order with small coherent Conventional Commits. Internal checkpoints
   are not publication or new product-approval ceremonies; use the parallel dispatch matrix.
-- MVP is the **complete first live vertical slice**, not US1 alone. Work with the permitted sample and
+- MVP is **complete feature acceptance at S7**, not US1 or a single early module PR. Work with the permitted sample and
   first fixed dependency/category profile; do not expand to arbitrary projects/services/agents.
 - Run the repository's read-only Analyze after this Tasks stage when requested/recommended, and resolve
   any critical/high/Constitution finding before implementation. This task generation is not an Analyze
   report and does not claim such findings were checked by that separate command.
 - No task is marked complete because it has been written. Every live gate, browser/runtime behavior,
-  privacy/integrity check and human observation stays open until supporting evidence exists. Stop after
-  this Tasks artifact set now; further stage execution is a separate request.
+  privacy/integrity check and human observation stays open until supporting evidence exists. This revision changes scheduling artifacts only; implementation remains unstarted.

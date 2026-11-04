@@ -25,11 +25,14 @@ repository. Internal foundation work is not a substitute for that first acceptan
 prepared modes and their claims remain unchanged. [Research](research.md) records reuse, gaps and
 alternatives; [quickstart](quickstart.md) defines later validation, not checks already performed.
 
-**Execution scheduling**: The subsequent owner-requested Tasks/parallelization pass retains one complete
-delivery slice, I6 / T001–T055. [Parallel dispatch](parallel-execution.md) assigns four active lanes
-(integration/UI, runtime/project, capture/privacy, AI/replay), exact task prerequisites, exclusive shared-file
-handoffs and serialized heavy validation. Independent modules overlap; production story joins retain
-their authority gates. This adds no product scope and does not start implementation.
+**Execution scheduling**: The owner corrected the one-PR interpretation after the initial parallel
+plan. [Delivery slices](tasks.md#delivery-slices) now define seven separate implementation PRs:
+S1 foundations; S2 runtime/project; S3 capture/privacy; S4 replay; S5 real-model adapter; S6 workflow
+integration; S7 retained review/full acceptance. After merged S1, S2/S3/S4 use independent branches and
+worktrees concurrently; S5 follows merged S3 and can overlap S2/S4. S6 joins the merged modules, then
+S7 completes the full usable feature. [Parallel dispatch](parallel-execution.md) records task sets,
+predecessors, ownership and validation. Complete-feature acceptance still requires the actual model
+path and owner review; it is not the boundary of every individual PR. No implementation is started.
 
 ## Technical Context
 
