@@ -1327,3 +1327,92 @@ export const parseFrozenVerificationDefinition = (input: unknown) => parseWith('
 export const parseProviderInvocation = (input: unknown) => parseWith('provider-invocation', ProviderInvocationSchema, input)
 export const parseCandidate = (input: unknown) => parseWith('candidate', CandidateSchema, input)
 export const parseProjectRunResult = (input: unknown) => parseWith('project-run-result', ProjectRunResultSchema, input)
+
+// ---------------------------------------------------------------------------------------
+// Run lifecycle states (shared by the run coordinator, Studio and result reduction)
+// ---------------------------------------------------------------------------------------
+
+/** The declared Spec 006 run state sequence; `finalizing -> terminal` is reached only by finalization. */
+export const RUN_STATES = [
+  'project-selected',
+  'configuration-required',
+  'preparing',
+  'demonstration-ready',
+  'recording',
+  'capture-ready',
+  'analyzing',
+  'clarification-required',
+  'interpretation-ready',
+  'baseline-replay',
+  'correcting',
+  'candidate-checking',
+  'finalizing',
+  'terminal',
+] as const
+export type RunState = (typeof RUN_STATES)[number]
+
+/**
+ * Human waiting states: selection/configuration, demonstration, report review, clarification,
+ * interpretation review and result review (`terminal`). No execution countdown runs in them and
+ * no automatic work may start in them, so they never close the window on the user's behalf.
+ */
+export const HUMAN_WAIT_STATES = [
+  'project-selected',
+  'configuration-required',
+  'demonstration-ready',
+  'recording',
+  'capture-ready',
+  'clarification-required',
+  'interpretation-ready',
+  'terminal',
+] as const satisfies readonly RunState[]
+export type HumanWaitState = (typeof HUMAN_WAIT_STATES)[number]
+
+/** Automatic states: only these accrue the 600-second aggregate automatic budget. */
+export const AUTOMATIC_RUN_STATES = ['preparing', 'analyzing', 'baseline-replay', 'correcting', 'candidate-checking'] as const satisfies readonly RunState[]
+export type AutomaticRunState = (typeof AUTOMATIC_RUN_STATES)[number]
+
+const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  'project-selected': ['configuration-required', 'finalizing'],
+  'configuration-required': ['preparing', 'finalizing'],
+  preparing: ['demonstration-ready', 'finalizing'],
+  'demonstration-ready': ['recording', 'finalizing'],
+  // Discard returns to demonstration-ready; re-record from capture-ready starts a new capture.
+  recording: ['capture-ready', 'demonstration-ready', 'finalizing'],
+  'capture-ready': ['analyzing', 'recording', 'demonstration-ready', 'finalizing'],
+  analyzing: ['clarification-required', 'interpretation-ready', 'finalizing'],
+  'clarification-required': ['analyzing', 'finalizing'],
+  'interpretation-ready': ['baseline-replay', 'finalizing'],
+  'baseline-replay': ['correcting', 'finalizing'],
+  correcting: ['candidate-checking', 'finalizing'],
+  'candidate-checking': ['finalizing'],
+  finalizing: ['terminal'],
+  terminal: [],
+})
+
+export const canTransitionRun = (from: RunState, to: RunState): boolean => RUN_TRANSITIONS[from]?.includes(to) ?? false
+export const isHumanWaitState = (state: RunState): boolean => (HUMAN_WAIT_STATES as readonly string[]).includes(state)
+export const isAutomaticRunState = (state: RunState): state is AutomaticRunState => (AUTOMATIC_RUN_STATES as readonly string[]).includes(state)
+
+/** Kinds of bounded automatic work; each runs only in its own automatic states. */
+export const AUTOMATIC_OPERATION_KINDS = ['prepare', 'build', 'check', 'replay', 'provider'] as const
+export type AutomaticOperationKind = (typeof AUTOMATIC_OPERATION_KINDS)[number]
+
+export const OPERATION_STATES: Readonly<Record<AutomaticRunState, readonly AutomaticOperationKind[]>> = Object.freeze({
+  preparing: ['prepare', 'build'],
+  analyzing: ['provider'],
+  'baseline-replay': ['build', 'check', 'replay'],
+  correcting: ['provider'],
+  'candidate-checking': ['build', 'check', 'replay'],
+})
+
+/** 90 seconds per provider exchange; 120 seconds per prepare/build/check/replay phase. */
+export const operationTimeoutMs = (kind: AutomaticOperationKind): number =>
+  kind === 'provider' ? EXECUTION_LIMITS.provider_timeout_ms : EXECUTION_LIMITS.phase_timeout_ms
+
+/** A check never regresses from `failed`; `not_evaluated` may only become an evaluated status. */
+export function canUpdateCheckStatus(from: CheckStatus, to: CheckStatus): boolean {
+  if (from === 'not_evaluated') return true
+  if (from === 'passed') return to === 'passed' || to === 'failed'
+  return to === 'failed'
+}
