@@ -405,6 +405,12 @@ export class ProjectCaptureSession {
     return this.#sealed
   }
 
+  /** The reflected-value registry of the report claimed for analysis; prompts redact with it. */
+  analysisRegistry(): RedactedValueRegistry {
+    if (!this.#submitted || this.#sealed === null) throw new ProjectRecorderError('CAPTURE_NOT_READY', 'Only a claimed ready report exposes its redaction registry.')
+    return this.#registry
+  }
+
   /** The current S1 view: staged while recording, sealed once finished, empty once discarded. */
   snapshot(): DemonstrationCapture {
     if (this.#sealed !== null && this.#state !== 'discarded') return this.#sealed.capture
