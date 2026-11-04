@@ -647,8 +647,10 @@ export interface ProjectDemonstration {
   /** The single explicit clarification answer to the current question. */
   clarify(questionId: string, answer: string): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>>
   /**
-   * Settings/reset change: revokes every pending operation at once, deletes unclaimed evidence, waits
-   * for revoked work to settle and discard what it produced; once a report was claimed it cancels.
+   * Settings/reset change: revokes every pending operation at once and deletes unclaimed evidence;
+   * once a report was claimed it cancels. It never waits on a pending producer: revoked work
+   * discards what it produced when it settles, and until then the service stays busy, so nothing is
+   * reused before the old producer settled.
    */
   invalidate(): Promise<void>
   /** Sticky run cancellation; a response arriving later is discarded. */
@@ -700,7 +702,6 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
   // Every invalidation or cancellation bumps the generation; work started under an older one is
   // revoked after each await, discards what it produced and never publishes a success.
   let generation = 0
-  let inflight: Promise<unknown> = Promise.resolve()
 
   const refuse = (code: DemonstrationErrorCode): { readonly ok: false; readonly code: DemonstrationErrorCode } => ({ ok: false, code })
   const accepting = (): boolean => {
@@ -712,11 +713,9 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
   const stopped = (): DemonstrationErrorCode => (accepting() ? 'CAPTURE_INVALIDATED' : 'RUN_NOT_ACCEPTING')
   const exclusive = <T>(work: (gen: number) => Promise<T>): Promise<T> => {
     busy = true
-    const task = work(generation).finally(() => {
+    return work(generation).finally(() => {
       busy = false
     })
-    inflight = task.catch(() => undefined)
-    return task
   }
 
   /** True only when the recorder itself confirmed the discard; otherwise it is only detached. */
@@ -967,8 +966,6 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       generation += 1
       if (claimed !== null) cancel()
       else if (recorder !== null && !(await drop())) cancel()
-      // Revoked work settles and discards whatever it produced before anything is reused.
-      await inflight
     },
 
     cancel: () => cancel(),
