@@ -98,7 +98,7 @@ test('records real target actions, seals an immutable report, discards it, and r
     page.on('request', (outgoing) => {
       const url = new URL(outgoing.url())
       if (url.pathname === '/api/runs' || url.pathname.endsWith('/analyze') || url.pathname.endsWith('/clarify')) browserModelRoutes.push(url.pathname)
-      if (url.protocol.startsWith('http') && url.origin !== studioOrigin && url.hostname !== new URL(studioOrigin).hostname) foreignRequests.push(url.origin)
+      if (url.protocol.startsWith('http') && url.origin !== studioOrigin) foreignRequests.push(url.origin)
     })
 
     await page.getByRole('checkbox', { name: /I reviewed the committed project identity/ }).check()
@@ -108,6 +108,7 @@ test('records real target actions, seals an immutable report, discards it, and r
     const target = page.frameLocator('[data-testid="project-target"]')
     await expect(target.getByTestId('task-summary')).toHaveText('3 open tasks')
 
+    const targetOrigin = new URL((await page.getByTestId('project-target').getAttribute('src'))!).origin
     const context = await api(page, 'GET', '/api/project/context')
     expect(context.status).toBe(200)
     const configuration = context.body.configuration as Record<string, unknown>
@@ -197,7 +198,7 @@ test('records real target actions, seals an immutable report, discards it, and r
     // Only the explicit Analyze route was attempted, and nothing reached the provider seam.
     expect(providerCalls).toEqual([])
     expect(browserModelRoutes).toEqual([`/api/project/captures/${captureId}/analyze`])
-    expect(foreignRequests).toEqual([])
+    expect(foreignRequests.filter((origin) => origin !== targetOrigin)).toEqual([])
     expect(changedSnapshotFacets(before, await snapshotOriginalProject(repository.root))).toEqual([])
   } finally {
     await instance?.close()
