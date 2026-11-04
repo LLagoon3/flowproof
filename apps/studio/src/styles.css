@@ -920,6 +920,7 @@ code {
 .work-row__events .agent-activity__item {
   padding: 0.375rem 0 0.375rem 0.75rem;
   border-bottom: 0;
+  scroll-margin: 0.75rem;
 }
 
 /* Offered only while the reader is away from the latest work; new work never scrolls by itself. */

@@ -2002,8 +2002,11 @@ async function installTestTransport(page: Page): Promise<(records: readonly Reco
 
 const SYNTHETIC_PHASES = ['initialized', 'applying', 'failure_captured'] as const
 
-/** Contract-valid synthetic captured activity, four events per phase group, clearly labelled. */
-function syntheticEvents(runId: string, from: number, to: number): Record<string, unknown>[] {
+/**
+ * Contract-valid synthetic activity, clearly labelled: four events per phase group, or every event
+ * of the one given phase, which keeps them in one contiguous row.
+ */
+function syntheticEvents(runId: string, from: number, to: number, phase?: (typeof SYNTHETIC_PHASES)[number]): Record<string, unknown>[] {
   const records: Record<string, unknown>[] = []
   for (let sequence = from; sequence <= to; sequence += 1) {
     const record = {
@@ -2013,7 +2016,7 @@ function syntheticEvents(runId: string, from: number, to: number): Record<string
       sequence,
       occurred_at: new Date(Date.UTC(2026, 10, 4, 9, 0, sequence)).toISOString(),
       type: 'agent_message',
-      phase: SYNTHETIC_PHASES[Math.floor((sequence - 1) / 4) % SYNTHETIC_PHASES.length],
+      phase: phase ?? SYNTHETIC_PHASES[Math.floor((sequence - 1) / 4) % SYNTHETIC_PHASES.length],
       message: `Synthetic test-transport activity ${sequence}; not produced by the engine.`,
       evidence_ids: [],
       gate: null,
@@ -2148,6 +2151,152 @@ test('captured work log keeps an earlier focused row, its open events and the re
   }
   expectNothingLeft(cleanup, harness?.baseline)
 })
+
+// ---------------------------------------------------------------------------------------
+// Both modes: the newest event of an open latest row taller than the panel (synthetic)
+// ---------------------------------------------------------------------------------------
+
+/** Where `target` sits relative to the visible work panel body: overlapping it, and wholly inside it. */
+const placeInPanel = (target: Locator): Promise<{ readonly overlaps: boolean; readonly inside: boolean }> =>
+  target.evaluate((node) => {
+    const view = (node.closest('.work-panel__body') as HTMLElement).getBoundingClientRect()
+    const box = node.getBoundingClientRect()
+    return { overlaps: box.bottom > view.top && box.top < view.bottom, inside: box.top >= view.top - 1 && box.bottom <= view.bottom + 1 }
+  })
+
+/** Whether the focused element is inside the work panel and overlaps its visible part. */
+const focusVisibleInPanel = (page: Page): Promise<boolean> =>
+  page.evaluate(() => {
+    const node = document.activeElement
+    const body = node?.closest('.work-panel__body')
+    if (!(node instanceof HTMLElement) || !(body instanceof HTMLElement)) return false
+    const view = body.getBoundingClientRect()
+    const box = node.getBoundingClientRect()
+    return box.bottom > view.top && box.top < view.bottom
+  })
+
+for (const mode of ['legacy', 'captured'] as const) {
+  test(`${mode} work log: Jump to latest work reaches and focuses the newest event of an open latest row taller than the panel, and new work moves neither (synthetic test transport)`, async () => {
+    test.setTimeout(RUN_BUDGET_MS)
+    const review = await reviewCase(`${mode}-tall-latest-row-synthetic`, 'slice3')
+    let harness: StudioHarness | CapturedStudioHarness | undefined
+    let cleanup: CleanupReport | undefined
+    let failure: unknown
+    let results: Barrier | undefined
+    try {
+      harness = mode === 'legacy' ? await openStudioHarness({ scenarioId: HERO }) : await openCapturedVerificationHarness({ capture: produceCanvasFix })
+      const { page } = harness
+      const work = workLogOf(page)
+      const watched = watchPage(page)
+      await page.setViewportSize({ width: 1280, height: 720 })
+      const push = await installTestTransport(page)
+      const runId = randomUUID()
+      // The start never reaches the server: no run, engine or target change; the activity is synthetic.
+      let starts = 0
+      await page.route(
+        (url) => url.pathname === '/api/runs',
+        async (route: Route) => {
+          if (route.request().method() !== 'POST') return route.continue()
+          starts += 1
+          await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ request_id: randomUUID(), run_id: runId, events_url: `/api/runs/${runId}/events` }) })
+        },
+      )
+      results = await holdRequests(page, isResultRead)
+      review.record('conditions', ['synthetic start response', 'synthetic contract-valid events through a test-controlled transport', 'result reads held'])
+      const start = mode === 'legacy' ? page.getByRole('button', { name: /^(start|send|run)\b/i }) : page.getByRole('button', { name: 'Start candidate verification' })
+      await start.click({ timeout: ELEMENT_TIMEOUT_MS })
+      await expect.poll(() => starts).toBe(1)
+
+      // A short earlier row, then one contiguous latest row of thirty accepted events of one phase.
+      await push([...syntheticEvents(runId, 1, 2, 'initialized'), ...syntheticEvents(runId, 3, 32, 'applying')])
+      await expect(work.items).toHaveCount(32)
+      await work.details.focus()
+      await page.keyboard.press('Enter')
+      await expect(work.details).toHaveAttribute('aria-expanded', 'true')
+      await expect(work.rows).toHaveCount(2)
+      const latest = work.rows.last()
+      await expect(latest).toHaveAttribute('data-work-id', `${runId}:3`)
+      const latestEvents = eventsToggleOf(latest)
+      await latestEvents.focus()
+      await page.keyboard.press('Space')
+      await expect(latestEvents).toHaveAttribute('aria-expanded', 'true')
+      const eventOf = (sequence: number): Locator => latest.locator(`li.agent-activity__item[data-sequence="${sequence}"]`)
+
+      // The reader scrolls midway through the open row: it spans both panel edges, its newest event below.
+      await latest.evaluate((row) => {
+        const body = row.closest('.work-panel__body') as HTMLElement
+        const box = row.getBoundingClientRect()
+        body.scrollTop += box.top - body.getBoundingClientRect().top + (box.height - body.clientHeight) / 2
+      })
+      const spansPanel = (): Promise<boolean> =>
+        latest.evaluate((row) => {
+          const view = (row.closest('.work-panel__body') as HTMLElement).getBoundingClientRect()
+          const box = row.getBoundingClientRect()
+          return box.top < view.top && box.bottom > view.bottom
+        })
+      expect(await spansPanel()).toBe(true)
+      const middle = eventOf(17)
+      expect((await placeInPanel(middle)).overlaps).toBe(true)
+      expect((await placeInPanel(eventOf(32))).overlaps).toBe(false)
+      await expect(work.jump).toBeVisible()
+      const reading = await readingPosition(latestEvents)
+      const middleAt = await readingPosition(middle)
+      expect(reading.focused).toBe(true)
+
+      // New work extends the same row: no focus, scroll or reading position moves; latest work is offered.
+      await push(syntheticEvents(runId, 33, 37, 'applying'))
+      await expect(work.items).toHaveCount(37)
+      await expect(work.rows).toHaveCount(2)
+      const appended = await readingPosition(latestEvents)
+      expect(appended.focused).toBe(true)
+      expect(Math.abs(appended.scrollTop - reading.scrollTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs((await readingPosition(middle)).top - middleAt.top)).toBeLessThanOrEqual(1)
+      expect(await spansPanel()).toBe(true)
+      await expect(work.jump).toContainText('Jump to latest work · 5 new')
+      await review.shot(page, 'tall-row-midway.png')
+
+      // The explicit control, with the keyboard, reaches the newest event and focuses it in view.
+      await work.jump.focus()
+      await page.keyboard.press('Enter')
+      // The panel scrolls instantly (no smooth scrolling), so the jump's effect is in place here.
+      const newest = eventOf(37)
+      const jumped = await readingPosition(newest)
+      const newestPlace = await placeInPanel(newest)
+      const focusVisible = await focusVisibleInPanel(page)
+      const focusedKind = await page.evaluate(() => document.activeElement?.closest('.work-row__title, .agent-activity__item')?.className ?? null)
+      review.record('jump', { before: appended, after: jumped, newestPlace, focusVisible, focusedKind })
+      expect.soft(jumped.scrollTop, 'the panel scrolled toward the newest event').toBeGreaterThan(appended.scrollTop)
+      expect.soft(newestPlace.inside, 'the newest event is wholly visible').toBe(true)
+      expect.soft(focusVisible, 'the focused element is visible in the panel').toBe(true)
+      expect.soft(jumped.focused, 'the newest event holds focus').toBe(true)
+      await expect(newest).toBeFocused()
+      await expect(work.jump).toBeHidden()
+      await review.shot(page, 'tall-row-latest-reached.png')
+
+      // Later work again neither steals focus from that event nor scrolls; the control returns.
+      await push(syntheticEvents(runId, 38, 39, 'applying'))
+      await expect(work.items).toHaveCount(39)
+      const later = await readingPosition(newest)
+      expect(later.focused).toBe(true)
+      expect(Math.abs(later.scrollTop - jumped.scrollTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs(later.top - jumped.top)).toBeLessThanOrEqual(1)
+      await expect(work.jump).toContainText('Jump to latest work · 2 new')
+      expect(await work.items.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('data-sequence'))))).toEqual(Array.from({ length: 39 }, (_, index) => index + 1))
+      expect(await pageOverflow(page)).toEqual({ x: 0, y: 0 })
+      expect(watched.errors).toEqual([])
+      expect(watched.csp).toEqual([])
+    } catch (error) {
+      failure = error
+      throw error
+    } finally {
+      results?.release()
+      cleanup = await harness?.close()
+      review.record('cleanup', cleanup ?? null)
+      await review.finish(failure)
+    }
+    expectNothingLeft(cleanup, harness?.baseline)
+  })
+}
 
 // ---------------------------------------------------------------------------------------
 // Legacy: real appended work, finalization, pending reads and the result

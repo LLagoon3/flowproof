@@ -14,7 +14,8 @@ import type { RunPresentation, WorkCardView } from '../presentation.js'
 // Disclosure choices are keyed by stable run/first-sequence identities and kept for the run while
 // the component stays mounted, also through panel collapse and result arrival; they reset only for
 // another run. New work never moves focus or scroll: when the reader is away from the latest work,
-// an explicit control returns there. Only concise state changes are announced, never the log.
+// an explicit control returns there, to its newest event when the latest row's Events are open.
+// Only concise state changes are announced, never the log.
 // The component renders the presentation it is given; it reads nothing and changes no run.
 
 export interface ActivityWarning {
@@ -109,9 +110,11 @@ function WorkRow({ card, mode, open, onToggle, eventLabel, eventDetail }: WorkRo
       </button>
       <ol id={eventsId} className="agent-activity__list work-row__events" aria-label={`Events ${range}`} hidden={!open}>
         {card.events.map((event) => (
-          // The raw accepted records, unchanged and in their original order.
+          // The raw accepted records, unchanged and in their original order. Each is focusable by
+          // script only (never in the tab order), so the latest-work control can land on the newest.
           <li
             key={event.event_id}
+            tabIndex={-1}
             className="agent-activity__item"
             data-type={event.type}
             data-phase={event.phase ?? 'none'}
@@ -165,13 +168,19 @@ export function WorkTimeline({ presentation, eventLabel, eventDetail, activityWa
   const [seenSequence, setSeenSequence] = useState<number | null>(null)
   const latest = cards.at(-1)
   const latestSequence = latest?.lastSequence ?? null
+  const latestEventsOpen = latest !== undefined && open.has(latest.id)
 
+  // The concrete end of the latest work: the newest event while the latest row's Events are open (a
+  // row taller than the view can span it with that event still below), else that row, else the summary.
   const latestElement = useCallback((): HTMLElement | null => {
     const section = sectionRef.current
     if (section === null) return null
-    if (detailsOpen && latest !== undefined) return section.querySelector<HTMLElement>(`[data-work-id="${CSS.escape(latest.id)}"]`)
+    if (detailsOpen && latest !== undefined) {
+      const row = section.querySelector<HTMLElement>(`[data-work-id="${CSS.escape(latest.id)}"]`)
+      return (latestEventsOpen ? row?.querySelector<HTMLElement>('.work-row__events > .agent-activity__item:last-child') : null) ?? row
+    }
     return section.querySelector<HTMLElement>('.work-summary') ?? section.querySelector<HTMLElement>('.work-timeline__details')
-  }, [detailsOpen, latest])
+  }, [detailsOpen, latest, latestEventsOpen])
 
   const measure = useCallback((): void => {
     const section = sectionRef.current
@@ -201,8 +210,11 @@ export function WorkTimeline({ presentation, eventLabel, eventDetail, activityWa
   const jumpToLatest = (): void => {
     const element = latestElement()
     if (element === null) return
-    element.scrollIntoView({ block: 'nearest' })
-    const target = element.matches('.work-row') ? element.querySelector<HTMLElement>('.work-row__title') : document.getElementById(headingId)
+    // The newest event is its own focus target, aligned to the bottom of the view; a row or the
+    // summary is brought into view and focused on its heading.
+    const isEvent = element.matches('.agent-activity__item')
+    element.scrollIntoView({ block: isEvent ? 'end' : 'nearest' })
+    const target = isEvent ? element : element.matches('.work-row') ? element.querySelector<HTMLElement>('.work-row__title') : document.getElementById(headingId)
     target?.focus({ preventScroll: true })
     measure()
   }
