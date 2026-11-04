@@ -488,7 +488,9 @@ interface Demo {
   readonly events: string[]
 }
 
-async function preparedDemonstration(options: { readonly withPort?: boolean } = {}): Promise<Demo> {
+async function preparedDemonstration(
+  options: { readonly withPort?: boolean; readonly startGate?: Promise<void>; readonly finishGate?: Promise<void>; readonly releaseGate?: Promise<void>; readonly discardGate?: Promise<void> } = {},
+): Promise<Demo> {
   const repository = await sample()
   const project = await admitted(repository.root)
   const { fake, ports } = fakePreparation()
@@ -500,10 +502,12 @@ async function preparedDemonstration(options: { readonly withPort?: boolean } = 
     opened.push(input)
     return {
       startRecorder: async () => {
-        const recorder = new TestRecorder(input.runId, { configurationId: input.configuration.configuration_id })
+        if (options.startGate) await options.startGate
+        const recorder = new TestRecorder(input.runId, { configurationId: input.configuration.configuration_id, ...(options.finishGate ? { finishGate: options.finishGate } : {}) })
         const discard = recorder.discard.bind(recorder)
         recorder.discard = async () => {
           events.push('discard')
+          if (options.discardGate) await options.discardGate
           await discard()
         }
         recorders.push(recorder)
@@ -548,6 +552,7 @@ async function preparedDemonstration(options: { readonly withPort?: boolean } = 
       prepare: ports.prepare,
       release: async () => {
         events.push('release')
+        if (options.releaseGate) await options.releaseGate
         await ports.release()
       },
       ...(options.withPort === false ? {} : { openDemonstration }),
@@ -647,5 +652,82 @@ describe('T029 guarded demonstration routes', () => {
     const reply = await post(demo.server, '/api/project/captures', startBody(demo))
     expect(reply.status).toBe(409)
     expect(reply.body).toContain('DEMONSTRATION_UNAVAILABLE')
+  })
+})
+
+function gate(): { readonly promise: Promise<void>; readonly open: () => void } {
+  let open: () => void = () => undefined
+  const promise = new Promise<void>((resolve) => (open = resolve))
+  return { promise, open }
+}
+
+describe('T029 configuration revocation of the demonstration', () => {
+  async function readyCapture(demo: Demo): Promise<{ readonly runId: string; readonly captureId: string }> {
+    const started = (await post(demo.server, '/api/project/captures', startBody(demo))).json()
+    expect((await post(demo.server, `/api/project/captures/${started.capture_id}/finish`, {})).status).toBe(200)
+    return { runId: started.run_id, captureId: started.capture_id }
+  }
+
+  it('a settings request that rejects the configuration revokes the demonstration: the old report is never analyzed', async () => {
+    const demo = await preparedDemonstration()
+    const { runId, captureId } = await readyCapture(demo)
+    const rejected = await post(demo.server, '/api/project/configuration', await settingsBody(demo.project, {}, { bad: true }))
+    expect(rejected.status).toBe(400)
+    expect((await call(demo.server, 'GET', '/api/project/context')).json().configuration).toMatchObject({ state: 'rejected', configuration_id: null })
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })).status).toBe(404)
+    expect((await call(demo.server, 'GET', `/api/project/runs/${runId}`)).status).toBe(404)
+    expect(demo.recorders[0]!.state).toBe('discarded')
+    expect(demo.calls).toHaveLength(0)
+  })
+
+  it('a malformed closed-schema request changes nothing and does not revoke the demonstration', async () => {
+    const demo = await preparedDemonstration()
+    const { captureId } = await readyCapture(demo)
+    expect((await post(demo.server, '/api/project/configuration', { ...(await settingsBody(demo.project)), image: 'node:latest' })).status).toBe(400)
+    expect((await post(demo.server, '/api/project/configuration', '{bad')).status).toBe(400)
+    const analyzed = await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })
+    expect(analyzed.status).toBe(200)
+    expect(demo.calls).toHaveLength(1)
+  })
+
+  it('closes capture admission while a settings change is pending and never resurrects the old demonstration', async () => {
+    const held = gate()
+    const demo = await preparedDemonstration({ discardGate: held.promise })
+    const { runId, captureId } = await readyCapture(demo)
+    const changing = post(demo.server, '/api/project/configuration', await settingsBody(demo.project))
+    // Held while the old capture's discard is still pending, before any target release.
+    await waitFor(async () => demo.events.includes('discard'))
+    expect(demo.events).not.toContain('release')
+    expect((await post(demo.server, '/api/project/captures', startBody(demo))).status).toBe(409)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })).status).toBe(404)
+    expect((await post(demo.server, `/api/project/runs/${runId}/clarify`, { question_id: newProjectUuid(), answer: 'Yes.' })).status).toBe(404)
+    held.open()
+    const changed = await changing
+    expect(changed.status).toBe(200)
+    expect(changed.json().configuration_id).not.toBe(demo.configurationId)
+    expect(demo.opened).toHaveLength(1)
+    expect(demo.recorders[0]!.state).toBe('discarded')
+    expect(demo.calls).toHaveLength(0)
+  })
+
+  it.each(['start', 'finish'] as const)('revokes a capture %s still pending when the settings change', async (step) => {
+    const held = gate()
+    const demo = await preparedDemonstration(step === 'start' ? { startGate: held.promise } : { finishGate: held.promise })
+    let pending: Promise<Reply>
+    if (step === 'start') {
+      pending = post(demo.server, '/api/project/captures', startBody(demo))
+      await waitFor(async () => demo.opened.length === 1)
+    } else {
+      const { capture_id: captureId } = (await post(demo.server, '/api/project/captures', startBody(demo))).json()
+      pending = post(demo.server, `/api/project/captures/${captureId}/finish`, {})
+      await waitFor(async () => demo.recorders.length === 1)
+    }
+    expect((await post(demo.server, '/api/project/configuration', await settingsBody(demo.project))).status).toBe(200)
+    held.open()
+    const late = await pending
+    expect(late.status).toBe(409)
+    expect(late.body).toContain('CAPTURE_INVALIDATED')
+    await waitFor(async () => demo.recorders.length === 1 && demo.recorders[0]!.state === 'discarded')
+    expect(demo.calls).toHaveLength(0)
   })
 })
