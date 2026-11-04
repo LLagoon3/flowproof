@@ -33,3 +33,36 @@ Not done in this unit (open, marks unchanged): T026 real launcher-owned Chromium
 (session/Host/Origin/cookie/closed schemas, `/api/project/captures*`, `/runs/:id/clarify`) and launcher
 wiring; T030 UI; T032 UI-dependent cases. A prompt-construction failure after the report is claimed
 leaves the run in capture-ready with the report locked (only cancel proceeds) and needs an explicit stop.
+
+## Unit A2 — service ownership revocation and fail-closed claimed reports
+
+Base `1e894d0`. Parent reproduced with a synthetic deferred recorder (no provider,
+`/tmp/flowproof-s6-parent-service-probe.mjs`, red retained at
+`.flowproof/task-logs/006-project-live-verification/s6-parent-a/ownership-red.json`): invalidation was
+skipped while start/finish were pending (old recorder became recording / old report capture-ready, not
+discarded); a source failure after the claim reported `SOURCES_UNAVAILABLE` but left a claimed report
+"discarded" OK when the recorder had actually refused; cancel during finish surfaced `CAPTURE_FAILED`.
+
+Fix (`project/run.ts`): every invalidation/cancellation bumps a generation; work started under an older
+generation is revoked after each await (start, finish, source load, claim, model call), discards what it
+produced and returns `CAPTURE_INVALIDATED` (or `RUN_NOT_ACCEPTING` once the run stopped), never a stale
+success. Invalidation revokes immediately, deletes unclaimed evidence and does not wait on a pending
+producer; the service stays busy (`CAPTURE_ACTIVE`) until that producer settled, so nothing is reused
+first. Sources load before the irreversible claim. After the claim the analysis state and provider
+operation begin before the prompt is built, so a prompt failure or an unexpected thrown model error
+(`ANALYSIS_FAILED`) fails the operation and finalizes the run; the report stays `claimed` (locked, unsent)
+or `submitted` (a provider request carried its bytes) and is never reported deleted. A discard the
+recorder refuses is `CAPTURE_DISCARD_REFUSED` and stops the run. Late completions never publish.
+
+| Step | Tested SHA | Result |
+| --- | --- | --- |
+| Red-first (9 new cases) | `1e894d0` + tests (`39953e6`) | 9 failed, 13 passed |
+| Green focused | `6b63f3e` | 22 passed; parent probe then hung: `invalidate` awaited a pending producer |
+| Non-blocking invalidation case + fix | `fc58672` | 23 passed, 0 skipped |
+| Lifecycle / S3+S5 contracts (lock) | `fc58672` | 15 passed / 95 passed |
+| Typecheck + build (lock) | `fc58672` | passed |
+| Parent probe on rebuilt `dist` | `fc58672` | start/finish invalidation `CAPTURE_INVALIDATED` + discarded + demonstration-ready; source failure unclaimed, discard OK and actually discarded; cancel during finish `RUN_NOT_ACCEPTING`/finalizing |
+
+Logs: ignored `.flowproof/task-logs/006-project-live-verification/s6-unit-a2/`. Fakes only (`test_recorder`,
+`test_transport`); no provider, Chromium or UI evidence. Task marks unchanged. Remaining: A3 routes, A4
+real launcher-owned Chromium recorder (T026), then UI.
