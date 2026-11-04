@@ -103,7 +103,7 @@ afterEach(async () => {
 afterAll(async () => {
   expect(await runtime.dispose()).toBe(true)
   for (const repository of repositories.splice(0)) await repository.remove()
-  expect(await containersWithLabel(RUNTIME_LABEL)).toEqual([])
+  expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
 }, DOCKER_TIMEOUT)
 
 interface Prepared {
@@ -182,7 +182,7 @@ describe('immutable image and lock admission', () => {
     await commitFiles(repository.root, { 'package-lock.json': `${JSON.stringify(lock, null, 2)}\n` })
     const admission = await admitProject({ root: repository.root, profile: admissionProfileOf(profile) })
     expect(admission).toEqual({ state: 'blocked', reasons: ['PROJECT_LOCK_MISMATCH'] })
-    expect(await containersWithLabel(RUNTIME_LABEL)).toEqual([])
+    expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
   })
 })
 

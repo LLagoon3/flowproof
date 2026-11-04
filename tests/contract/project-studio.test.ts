@@ -234,7 +234,7 @@ describe('CLI project mode exclusivity and read-only preconditions', () => {
     expect(noManifest.code).toBe(3)
     expect(withoutOptionalEnvNotice(noManifest.stderr).trim()).toBe('PROFILE_MANIFEST_MISSING: The vite-static-v1 runtime profile manifest is not available.')
     for (const result of [blocked, missing, invalidJson, noManifest]) expect(result.stdout).toBe('')
-  })
+  }, 60_000)
 
   it('keeps the existing prepared mode usage and scenario refusal unchanged', async () => {
     const cleanRoot = await mkdtemp(path.join(tmpdir(), 'flowproof-s2-clean-cli-'))

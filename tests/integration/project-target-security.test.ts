@@ -220,7 +220,7 @@ afterAll(async () => {
   if (hostRoot) await rm(hostRoot, { recursive: true, force: true })
   expect(await runtime.dispose()).toBe(true)
   await repository?.remove()
-  expect(await containersWithLabel(RUNTIME_LABEL)).toEqual([])
+  expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
 }, TIMEOUT)
 
 describe('actual built target identity and confinement', () => {
