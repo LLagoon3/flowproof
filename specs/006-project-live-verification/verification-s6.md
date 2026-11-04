@@ -167,3 +167,15 @@ Sources tests use a real materialized and admitted sample repository (working-tr
 `projectTargetFrame` and `startRecorder` path on real Chromium, recorder release ordering on the real
 frame, and the route mapping of a source refusal (generic `SOURCES_UNAVAILABLE`); these are A4 (T026).
 The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding). Marks unchanged.
+
+## S6 unit A4a — launcher-owned recorder journey (T026 partial)
+
+- Tested source: `6f879bf8b1bcb682a9c81eebaf0b0500a2854ea2` (test-only commits cf9e312, fb375c5, 6f879bf); product source unchanged from 218e16c.
+- Under `flock -w 1800 /tmp/flowproof-spec006-heavy.lock`: `pnpm typecheck` 0 and `pnpm build` 0 at cf9e312; `tsc --noEmit` 0 at 6f879bf.
+- Headed Chromium (DISPLAY=:10.0), retained pinned offline runtime image, real `startProjectStudio`, T001 permitted repository, built Studio:
+  - `playwright test tests/e2e/project-recording.spec.ts` at 6f879bf:  1 passed (5.0s) (no retries, no timeout changes).
+  - Regression `playwright test tests/e2e/project-setup.spec.ts` at fb375c5 (same product source): 2 passed.
+- Proved: cookie-less request refused (4xx); stale configuration 409 CONFIGURATION_STALE; stale output 409 PREPARATION_STALE; browser-supplied `run_id` 400 REQUEST_FIELD_REJECTED; host-minted run/capture UUIDs; real recorder on the admitted frame with click + native select; Finish returns only identity/state/digest; repeat Finish after later target actions keeps the same digest (immutable); Discard returns the run to `demonstration-ready` with no capture/report/digest; Analyze/Finish/Discard after discard 404 CAPTURE_UNKNOWN; labelled `test_transport` provider seam got 0 calls; only the explicit Analyze route was attempted; no request outside the Studio and admitted target origins; original repository snapshot facets unchanged; runtime-label containers and all Docker container IDs unchanged.
+- Red runs (test-authoring, no product change): recording-1 expected `report: 'none'` while recording (contract value `'recording'`); recording-2 foreign-origin filter compared hostnames and flagged the admitted target origin. One earlier invocation never ran Playwright (shell construct error) and is not counted.
+- Not proved (A4b): safe fill, coalesced scroll, same-origin navigation ordering, foreign/Studio-frame contamination, Finish/Discard/cancel/settings-change races, overflow/unsupported non-completion. T026 and T029 remain open.
+- Logs: `.flowproof/task-logs/006-project-live-verification/s6-unit-a4/`.
