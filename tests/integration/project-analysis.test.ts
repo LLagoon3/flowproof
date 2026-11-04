@@ -404,6 +404,20 @@ describe('T029 ownership revocation across every service await', () => {
     expect(next.ok && next.value.capture_id).not.toBe(w.recorders[0]!.captureId)
   })
 
+  it('returns from a settings change without waiting on a pending producer, and reuses nothing until it settles', async () => {
+    const gate = deferred()
+    const w = world({ startGate: gate.promise })
+    const pending = w.service.start()
+    await w.service.invalidate()
+    expect(codeOf(await w.service.start())).toBe('CAPTURE_ACTIVE')
+    gate.release()
+    expect(codeOf(await pending)).toBe('CAPTURE_INVALIDATED')
+    expect(w.recorders[0]!.state).toBe('discarded')
+    expect(w.lifecycle.state()).toBe('demonstration-ready')
+    expect(codeOf(await w.service.start())).toBe('OK')
+    expect(w.recorders).toHaveLength(2)
+  })
+
   it('invalidating settings during a pending finish never yields a ready report and discards it', async () => {
     const gate = deferred()
     const w = world({ recorder: (runId) => new TestRecorder(runId, { finishGate: gate.promise }) })
