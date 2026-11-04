@@ -3,17 +3,23 @@ import type { ChangeEvent } from 'react'
 
 import { createStudioClient, toStudioError } from './api.js'
 import type { RunEventSubscription, StudioClient, StudioError } from './api.js'
-import { AgentPanel } from './components/AgentPanel.js'
+import { AgentPanel, RequestComposer } from './components/AgentPanel.js'
+import { CapturedStart } from './components/CapturedVerification.js'
 import { ProofTrail } from './components/ProofTrail.js'
 import { TargetPane } from './components/TargetPane.js'
+import { WorkspaceShell } from './components/WorkspaceShell.js'
+import { selectCompactStatus, selectMeasuringTarget } from './presentation.js'
 import { canStartRun, initialStudioState, runEventHandlers, selectCapturedEvidence, selectCapturedTarget, selectStudioMode, studioReducer } from './state.js'
 import type { StudioState } from './state.js'
 import type { CapturedPaneLabel } from './components/TargetPane.js'
 
-// The split Studio workspace: the prepared application framed on the left (in a captured
-// verification Studio, replaced by the finalized run's captured evidence once the target was
-// released), the agent pane and the finalized run's Proof Trail on the right, and the prepared-case
-// selector above them.
+// The Studio workspace: a work panel on the left with the prepared case or the fixed candidate,
+// the agent work and the finalized run's Proof Trail, and the request composer or the candidate
+// verification action as its entry; the larger canvas on the right frames the prepared application
+// (in a captured verification Studio, replaced by the finalized run's captured evidence once the
+// target was released). `WorkspaceShell` owns only the panel's width and collapse; each slot keeps
+// one stable position, so no layout choice remounts the target pane, the work or its reads, and a
+// layout request made while the target is measured waits until that measurement ends.
 // `studioReducer` alone decides what the session may do; the effects below only keep network work
 // in step with its state. Each request owns an AbortController that its effect aborts on change or
 // unmount, and an aborted request never dispatches, so a stale or post-unmount response cannot
@@ -101,9 +107,24 @@ function CasePicker({ state, onSelect }: { readonly state: StudioState; readonly
           ))
         )}
       </select>
-      <p id={noteId} className="case-picker__note">
+      <p id={noteId} className="case-picker__note visually-hidden">
         {casePickerNote(state, locked)}
       </p>
+    </div>
+  )
+}
+
+/** The host-fixed candidate of a captured verification Studio; it cannot be changed or edited. */
+function CapturedContext({ state }: { readonly state: StudioState }) {
+  const selected = state.catalog.scenarios.find((scenario) => scenario.scenario_id === state.selectedScenarioId) ?? null
+  return (
+    <div className="work-panel__title-group">
+      <h2 className="work-panel__title">Candidate verification</h2>
+      {selected !== null && (
+        <p className="work-panel__subtitle" data-case={selected.case}>
+          {selected.title}
+        </p>
+      )}
     </div>
   )
 }
@@ -172,20 +193,34 @@ export function App({ client: providedClient }: AppProps) {
   const target = capturedTarget(state)
   // The finalized captured run's evidence replaces the released target; kept stable for the memoized pane.
   const completedEvidence = useMemo(() => selectCapturedEvidence(state.capturedRun), [state.capturedRun])
+  const mode = selectStudioMode(state)
 
   return (
     <div className="studio">
       <header className="studio__header">
-        <h1 className="studio__title">FlowProof Studio</h1>
-        <CasePicker state={state} onSelect={selectScenario} />
+        <h1 className="studio__title">
+          FlowProof <span className="studio__product">Studio</span>
+        </h1>
       </header>
-      <main className="studio__workspace">
-        <TargetPane capturedLabel={target.label} guarded={target.guarded} completedEvidence={target.label === 'completed-evidence' ? completedEvidence : null} />
-        <div className="studio__side">
-          <AgentPanel state={state} requestText={requestText} onRequestTextChange={changeRequestText} onStartRun={startRun} />
-          <ProofTrail run={state.run} client={client} mode={selectStudioMode(state)} />
-        </div>
-      </main>
+      <WorkspaceShell
+        status={selectCompactStatus(state)}
+        holdLayout={selectMeasuringTarget(state)}
+        context={mode === 'captured' ? <CapturedContext state={state} /> : <CasePicker state={state} onSelect={selectScenario} />}
+        work={
+          <>
+            <AgentPanel state={state} />
+            <ProofTrail run={state.run} client={client} mode={mode} />
+          </>
+        }
+        entry={
+          mode === 'captured' ? (
+            <CapturedStart state={state} requestText={requestText} onStart={startRun} />
+          ) : (
+            <RequestComposer state={state} requestText={requestText} onRequestTextChange={changeRequestText} onStartRun={startRun} />
+          )
+        }
+        canvas={<TargetPane capturedLabel={target.label} guarded={target.guarded} completedEvidence={target.label === 'completed-evidence' ? completedEvidence : null} />}
+      />
     </div>
   )
 }

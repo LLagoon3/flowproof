@@ -4,8 +4,11 @@
 [data-model.md](./data-model.md), [UI contract](./contracts/workspace-ui.md), and
 [validation guide](./quickstart.md).
 
-**Status**: Tasks prepared after owner approval of the Plan direction on 2026-11-03. Analyze corrections were authorized on 2026-11-03; no task
-below is implemented or verified by documentation correction. Execution is one authorized slice at a time.
+**Status**: Slice 1 (T001-T008) merged in PR #23 at `3c7acb3`. Slice 2 (T009-T016) was locally
+implemented and verified on 2026-11-04 using the coding workflow; see the exact-revision record below.
+The owner subsequently authorized slice 2 publication and the repository review loop on 2026-11-04.
+T017+, merge and deployment remain unauthorized.
+Only verified work is checked off; human-only usability observations remain separate.
 
 **Tests**: Required by the feature's state, accessibility, evidence and compatibility criteria.
 Use test-first (RED then GREEN) regressions for risky product changes; the static design preview receives
@@ -63,17 +66,17 @@ panel without losing a draft, run, frame identity, focus accessibility or select
 
 ### Tests before risky integration
 
-- [ ] T009 [US1] Add failing preservation and mode-boundary cases in `tests/ui/workspace-presentation.test.ts`, keeping current `tests/ui/state.test.ts` and `tests/ui/captured-verification.test.ts` acceptance assertions intact (FR-002, FR-003, FR-013).
-- [ ] T010 [P] [US1] Add failing real-browser workspace cases in `tests/e2e/workspace-ux.spec.ts` for same iframe element/frame, no reload or duplicate start, pending reads through collapse, keyboard resize/restore, 100% viewport reflow, updating collapsed status/result access, and captured resize/collapse during guarded measurement against a matched control (same outcomes, screenshot dimensions and within-run evidence bindings); also author the opt-in `native-zoom-review` case with bounded acknowledgements and cleanup per quickstart for T015/T031; use native OS zoom, not a Playwright zoom API; use the existing harness rather than a second browser/runtime (FR-001, FR-002, FR-011-FR-013).
+- [X] T009 [US1] Add failing preservation and mode-boundary cases in `tests/ui/workspace-presentation.test.ts`, keeping current `tests/ui/state.test.ts` and `tests/ui/captured-verification.test.ts` acceptance assertions intact (FR-002, FR-003, FR-013).
+- [X] T010 [P] [US1] Add failing real-browser workspace cases in `tests/e2e/workspace-ux.spec.ts` for same iframe element/frame, no reload or duplicate start, pending reads through collapse, keyboard resize/restore, 100% viewport reflow, updating collapsed status/result access, and captured resize/collapse during guarded measurement against a matched control (same outcomes, screenshot dimensions and within-run evidence bindings); also author the opt-in `native-zoom-review` case with bounded acknowledgements and cleanup per quickstart for T015/T031; use native OS zoom, not a Playwright zoom API; use the existing harness rather than a second browser/runtime (FR-001, FR-002, FR-011-FR-013).
 
 ### Implementation and boundary verification
 
-- [ ] T011 [US1] Implement `apps/studio/src/components/WorkspaceShell.tsx` and local workspace selection in `apps/studio/src/presentation.ts`: `panelWidthStep` is "one of seven integer width choices, default the 24rem choice" and `panelCollapsed` is "boolean; never means run cancellation or event unsubscription"; derive the external updating compact status/result restore entry only from existing authoritative state/selectors, never stream-end inference; hide/unfocus the width separator in stacked layout while retaining its width choice; no persistence or execution-reducer changes (FR-002).
-- [ ] T012 [US1] Apply the accepted color/type/space/surface/focus rules and applicable control states in `apps/studio/src/styles.css`, referencing `specs/005-studio-workspace-ux/design-system.md`; bounded widths use self-hosted CSS classes, with no new dependency, external font or CSP exception (FR-010-FR-012).
-- [ ] T013 [US1] Integrate the stable shell in `apps/studio/src/App.tsx` without alternate layout trees or target reparenting; keep the keyed live wrapper in `apps/studio/src/components/TargetPane.tsx` and mounted work/read owners intact through panel changes (FR-001, FR-002, FR-009, FR-013).
-- [ ] T014 [US1] Adapt the existing case picker/request and fixed-candidate entry surfaces in `apps/studio/src/App.tsx`, `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/CapturedVerification.tsx` to the shared controls; preserve bounded request, one-run admission and no-chat captured mode (FR-003, FR-005, FR-013).
-- [ ] T015 [US1] Pass typecheck/build, UI tests and the new workspace browser cases using `specs/005-studio-workspace-ux/quickstart.md`; verify computed contrast/focus and actual 200% browser zoom rather than CSS or device-scale substitution (SC-004, SC-005).
-- [ ] T016 [US1] Run the existing headed suites, including `tests/e2e/captured-verification.spec.ts`, under the current CSP; record exact revision, commands, results and remaining human-only SC-001 feedback in `specs/005-studio-workspace-ux/tasks.md` without claiming it passed (FR-013, SC-006).
+- [X] T011 [US1] Implement `apps/studio/src/components/WorkspaceShell.tsx` and local workspace selection in `apps/studio/src/presentation.ts`: `panelWidthStep` is "one of seven integer width choices, default the 24rem choice" and `panelCollapsed` is "boolean; never means run cancellation or event unsubscription"; derive the external updating compact status/result restore entry only from existing authoritative state/selectors, never stream-end inference; hide/unfocus the width separator in stacked layout while retaining its width choice; no persistence or execution-reducer changes (FR-002).
+- [X] T012 [US1] Apply the accepted color/type/space/surface/focus rules and applicable control states in `apps/studio/src/styles.css`, referencing `specs/005-studio-workspace-ux/design-system.md`; bounded widths use self-hosted CSS classes, with no new dependency, external font or CSP exception (FR-010-FR-012).
+- [X] T013 [US1] Integrate the stable shell in `apps/studio/src/App.tsx` without alternate layout trees or target reparenting; keep the keyed live wrapper in `apps/studio/src/components/TargetPane.tsx` and mounted work/read owners intact through panel changes (FR-001, FR-002, FR-009, FR-013).
+- [X] T014 [US1] Adapt the existing case picker/request and fixed-candidate entry surfaces in `apps/studio/src/App.tsx`, `apps/studio/src/components/AgentPanel.tsx` and `apps/studio/src/components/CapturedVerification.tsx` to the shared controls; preserve bounded request, one-run admission and no-chat captured mode (FR-003, FR-005, FR-013).
+- [X] T015 [US1] Pass typecheck/build, UI tests and the new workspace browser cases using `specs/005-studio-workspace-ux/quickstart.md`; verify computed contrast/focus and actual 200% browser zoom rather than CSS or device-scale substitution (SC-004, SC-005).
+- [X] T016 [US1] Run the existing headed suites, including `tests/e2e/captured-verification.spec.ts`, under the current CSP; record exact revision, commands, results and remaining human-only SC-001 feedback in `specs/005-studio-workspace-ux/tasks.md` without claiming it passed (FR-013, SC-006).
 
 **Checkpoint / slice 2**: The usable real shell is independently reviewable with the old work/result
 presentation still functioning. Stop; do not incorporate the activity or evidence rewrite here.
@@ -239,3 +242,95 @@ the static preview's prior zoom gap; other gaps are recorded in the preview READ
 Publication status: [PR #23](https://github.com/LLagoon3/flowproof/pull/23) is open against `main`
 for slice 1 only. Exact-head CI and Codex review are tracked on that PR; their completion will be
 recorded in PR metadata without changing the reviewed source. Merge remains unauthorized.
+
+
+## Slice 2 implementation authorization (2026-11-04)
+
+The owner requested the coding workflow for the next slice after the slice 2 scope was explained.
+Work starts from merged `main` at `3c7acb3de2b39d7fdab113820dd29f284330bd4f` on
+`feat/005-studio-workspace-ux-shell`, for T009-T016 only. The accepted minimalist default layout
+is the reference; preview testing menus and synthetic data must not enter the real application.
+Retain existing work/result presentation until its later slice, rather than rewriting it here.
+Motion: retain restrained hover/focus feedback; introduce no new progress or entrance animation.
+No push, PR, bot review, merge, later-slice work or deployment is authorized by this instruction.
+
+## Slice 2 verification record (2026-11-04)
+
+Implementation by isolated Claude Opus 5.5 workers was independently reviewed and verified by
+the source parent. Commits: `cb97c7b` (stable shell/presentation), `c164d8a` (real integration
+and browser cases), `48417c5` (measurement protection after lost activity). This results-only
+record follows clean tested revision `48417c5cf3571d8cd8d9d0fb55f90a9ba8c93776`; the later
+documentation commit itself is not represented as runtime-tested.
+
+The accepted light, canvas-first shell and composer are integrated in both real modes. Seven
+local width choices, keyboard resize, compact reflow, collapse/restore and result access retain
+the mounted work/read owners and same target element/frame. Existing work/result content is
+intentionally retained until slices 3/4. No engine/reducer, dependency, external font, stored
+preference or CSP exception was introduced; fixed-candidate mode remains no-chat.
+
+Independent parent checks on the clean tested revision:
+
+| Command | Observed result |
+| --- | --- |
+| `pnpm typecheck` | exit 0 |
+| `pnpm build` | exit 0 |
+| `pnpm exec vitest run --project ui` | 4 files, 332 tests passed |
+| `xvfb-run -a pnpm test:e2e` | 16 passed, 1 skipped (opt-in native zoom), exit 0 |
+| `git diff --check 614930c..48417c5` | exit 0 |
+
+The full headed suite includes the existing captured-verification, Hero, failure, browser-close,
+secret-safety and target-load cases under unchanged CSP. Workspace cases verify draft/pending
+reads, focus and same frame through panel changes. Captured resized and disconnected runs match
+an unresized control: same outcome/checks, 640 x 360 screenshots, identical per-phase hashes and
+each run's own evidence bindings. Unreceived evidence IDs remain explicitly not received.
+All four workspace manifests report passed, clean worktree, no failed measured checks and no
+owned cleanup leftovers; cases assert zero page errors. Existing state/captured/proof-trail
+acceptance tests remain unchanged.
+
+Parent logs: `.flowproof/review/005-studio-workspace-ux/48417c5cf3571d8cd8d9d0fb55f90a9ba8c93776/slice2/parent-validation/`.
+Under that same `slice2/` root, case manifests and full-page screenshots use stamp
+`2026-11-04T01-11-58-733Z` in `legacy-workspace`, `captured-control`,
+`captured-resized-during-measurement` and `captured-activity-lost-during-run`.
+Parent visual review covered desktop, compact and disconnected/pending real UI. Ready desktop
+text contrast minimum was 5.97:1, control minimum 3.67:1, focus minimum 7.39:1; this is not a
+complete accessibility audit.
+
+The parent found that losing activity could release layout while the engine still measured.
+Correction RED: `.flowproof/task-logs/slice2-measure-hold/red-ui.log` (3 new failures, 26 passes)
+and `red-e2e-prefix.log` (old selector fails the hold assertion). Two earlier browser attempts
+failed on test assumptions, not product defects. GREEN is the clean-revision verification above;
+the correction worker independently passed the same checks (`clean-*.log` in that directory).
+Both modes now hold layout after lost/rejected activity until a bound result. An unreadable
+result alone does not prove measurement ended. If result and activity are both unavailable,
+layout requests can remain pending until reload; status/result access remains available.
+
+Actual native 200% zoom passed once on clean `c164d8a1c99dfabb08befd3b9469f8f0dcc58198`.
+Evidence: `.flowproof/review/005-studio-workspace-ux/c164d8a1c99dfabb08befd3b9469f8f0dcc58198/slice2/native-zoom-review/2026-11-04T00-44-47-847Z/`;
+log: that revision's `slice2/validation/08-native-zoom-review.log`. Parent inspected the visible
+Chromium 200% indicator and manifest: unchanged outer window 1288 x 805, effective viewport
+1280 x 720/DPR 1 to 640 x 360/DPR 2, then restored. Reflow, contrast, focus and cleanup passed.
+This is reused evidence, not a rerun on `48417c5`: the correction changes only the selector and
+tests, not components/CSS. All 100% workspace/headed cases were rerun on `48417c5`.
+
+Earlier parent full Vitest passed 49 files/1672 tests on `c164d8a` (its
+`slice2/parent-validation/test.log`). Non-UI Vitest was not rerun after the presentation-only
+correction; the current-revision claim is 332 UI tests, not 1672.
+
+SC-001 owner-operated per-mode start timing remains pending; no human usability pass is claimed.
+Later timeline, six-state comprehension and comparison reviews remain for their own slices.
+Optional before/after Git hooks were skipped with auto-commit disabled; no mandatory implement
+hook is registered. T009-T016 stop here. No T017+, push, PR, bot review, merge, deployment or
+preview republication was performed.
+
+
+## Slice 2 publication authorization (2026-11-04)
+
+After local completion, the owner explicitly requested a pull request and review loop. This
+authorizes pushing this slice to `LLagoon3/flowproof`, opening a PR against `main`, and the
+repository-required GitHub Codex review with up to three remediation rounds. In-scope findings
+may be corrected, verified and pushed before requesting a review of the new exact HEAD.
+Published as [PR #24](https://github.com/LLagoon3/flowproof/pull/24) against `main`.
+Exact-head CI, Codex review and any correction rounds are tracked in PR metadata without
+creating a new source commit solely to record their outcome.
+The implementation and verification record above is unchanged. T017+, merge and deployment
+remain unauthorized. CI is verification-only; this repository has no automatic PR deployment.
