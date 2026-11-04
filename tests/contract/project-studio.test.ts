@@ -406,6 +406,35 @@ describe('project routes and their guards', () => {
     expect((await post(server, '/api/project/prepare', { configuration_id: configurationId })).json().error.code).toBe('CONFIGURATION_STALE')
   })
 
+  it('refuses a second preparation while a target is ready, so no prepared output is replaced without release', async () => {
+    const { server, project, fake } = await startProjectServer({ withConfig: true })
+    const isReady = async (): Promise<boolean> => (await call(server, 'GET', '/api/project/context')).json().preparation.state === 'ready'
+    const { configuration_id: configurationId } = (await post(server, '/api/project/configuration', await settingsBody(project))).json()
+    expect((await post(server, '/api/project/prepare', { configuration_id: configurationId })).status).toBe(202)
+    fake.resolveNext()
+    await waitFor(isReady)
+    const ready = (await call(server, 'GET', '/api/project/context')).json().preparation
+
+    const again = await post(server, '/api/project/prepare', { configuration_id: configurationId })
+    expect(again.status).toBe(409)
+    expect(again.json().error.code).toBe('PROJECT_ALREADY_PREPARED')
+    expect(fake.calls).toHaveLength(1)
+    expect(fake.releases).toHaveLength(0)
+    expect((await call(server, 'GET', '/api/project/context')).json().preparation).toEqual(ready)
+
+    // Reconfiguring releases the owned output before another preparation can start.
+    const { configuration_id: nextId } = (await post(server, '/api/project/configuration', await settingsBody(project))).json()
+    expect(fake.releases).toHaveLength(1)
+    expect((await post(server, '/api/project/prepare', { configuration_id: nextId })).status).toBe(202)
+    fake.resolveNext()
+    await waitFor(isReady)
+
+    // Shutdown releases the one remaining prepared output.
+    await server.close()
+    expect(fake.calls).toHaveLength(2)
+    expect(fake.releases).toHaveLength(2)
+  })
+
   it('reports fixed preparation failures and a stale baseline without leaking messages', async () => {
     const { server, project, fake } = await startProjectServer({ withConfig: true })
     const { configuration_id: configurationId } = (await post(server, '/api/project/configuration', await settingsBody(project))).json()

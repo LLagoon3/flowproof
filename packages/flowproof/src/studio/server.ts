@@ -865,6 +865,9 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
         throw fail(409, 'CONFIGURATION_STALE', 'The project configuration has changed; confirm it again.')
       }
       if (activePreparation !== null || preparation.state === 'preparing') throw fail(409, 'PROJECT_PREPARATION_ACTIVE', 'Project preparation is already active.')
+      // A ready target owns its immutable output; only a settings change (which releases it) may
+      // start another preparation, so no prepared output is ever replaced without release.
+      if (preparation.state === 'ready') throw fail(409, 'PROJECT_ALREADY_PREPARED', 'The project target is already prepared; change the settings to prepare again.')
       const controller = new AbortController()
       activePreparation = controller
       const sequence = ++preparationSequence

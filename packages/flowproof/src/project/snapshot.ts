@@ -174,6 +174,12 @@ export async function exportProjectSnapshot(options: { readonly project: Admitte
         const segments = file.path.split('/')
         for (let index = 1; index < segments.length; index += 1) directories.add(segments.slice(0, index).join('/'))
       }
+      // A nested runtime output may need ancestors the build created: they are traversed, never
+      // trusted, so their other children (files, symlinks, unknown entries) stay integrity-checked.
+      if (runtimeOutput !== null) {
+        const segments = runtimeOutput.split('/')
+        for (let index = 1; index < segments.length; index += 1) directories.add(segments.slice(0, index).join('/'))
+      }
       const seen = new Set<string>()
       const walk = async (relative: string): Promise<void> => {
         const entries = await readdir(path.join(workspace, relative), { withFileTypes: true }).catch(() => [])

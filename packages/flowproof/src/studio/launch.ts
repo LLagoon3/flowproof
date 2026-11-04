@@ -1056,6 +1056,9 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
 
   const prepare = async (configuration: ExecutionConfiguration, signal: AbortSignal): Promise<ProjectPreparation> => {
     const job = (async (): Promise<ProjectPreparation> => {
+      // Defense in depth behind the server guard: a retained output is released before any new
+      // preparation, so a later success never overwrites (and orphans) the previous output.
+      if (activeOutput !== null || releaseOutputWork !== null) await releaseProjectOutput()
       const current = await checkProjectBaseline(project, admissionProfileOf(profile))
       if (current.state !== 'ready') throw new ProjectPreparationError('PROJECT_BASELINE_STALE', current.reasons)
       if (signal.aborted) throw new ProjectPreparationError('RUNTIME_CANCELLED')

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { lstat, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -428,4 +428,36 @@ describe('nested output integrity boundaries', () => {
     expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
     expect(changedSnapshotFacets(prepared.before, await snapshotOriginalProject(prepared.repository.root))).toEqual([])
   }, DOCKER_TIMEOUT)
+
+  it('accepts a nested output whose ancestors did not exist, while strays, symlinks and source tampering stay refused', async () => {
+    const prepared = await prepare({
+      'tests/nested-output.mjs':
+        "import { mkdirSync, writeFileSync } from 'node:fs'\nmkdirSync('build/dist', { recursive: true })\nwriteFileSync('build/dist/index.html', '<!doctype html><title>ok</title>')\n",
+    })
+    const configuration = await configure(prepared.project, {
+      build: { argv: ['node', 'tests/nested-output.mjs'], output_directory: 'build/dist' },
+    })
+
+    const fresh = await snapshotOf(prepared.project)
+    const passed = await runtime.build({ snapshot: fresh, configuration })
+    expect(passed).toMatchObject({ status: 'passed' })
+    expect(passed.output).not.toBeNull()
+    expect(await fresh.verify()).toMatchObject({ ok: true, changed: [], missing: [], unexpected: [] })
+    await passed.output?.remove()
+
+    const strays = await snapshotOf(prepared.project)
+    await mkdir(path.join(strays.workspace, 'build'))
+    await writeFile(path.join(strays.workspace, 'build/stray.txt'), 'stray\n')
+    await symlink('/etc', path.join(strays.workspace, 'build/link'))
+    expect(await runtime.build({ snapshot: strays, configuration })).toMatchObject({ status: 'failed', reason: 'RUNTIME_INPUT_CHANGED', output: null })
+    expect([...(await strays.verify()).unexpected].sort()).toEqual(['build/link', 'build/stray.txt'])
+
+    const tampered = await snapshotOf(prepared.project)
+    await writeFile(path.join(tampered.workspace, 'tests/tasks.test.mjs'), 'tampered test input\n')
+    expect(await runtime.build({ snapshot: tampered, configuration })).toMatchObject({ status: 'failed', reason: 'RUNTIME_INPUT_CHANGED', output: null })
+    expect((await tampered.verify()).changed).toContain('tests/tasks.test.mjs')
+
+    expect(await containersWithLabel(RUNTIME_LABEL, runtime.runtimeId)).toEqual([])
+    expect(changedSnapshotFacets(prepared.before, await snapshotOriginalProject(prepared.repository.root))).toEqual([])
+  }, DOCKER_TIMEOUT * 3)
 })
