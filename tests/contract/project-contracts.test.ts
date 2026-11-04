@@ -639,6 +639,19 @@ describe('DemonstrationCapture', () => {
     expectInvalid(parseDemonstrationCapture(capture((body) => void Object.assign(body, { state: 'unsupported', completeness: { status: 'complete', reasons: [] } }))))
   })
 
+  it('never marks a capture with dropped or unsupported events as ready and complete', () => {
+    for (const counter of ['dropped', 'unsupported']) {
+      const lossy = capture((body) => void ((body.counters as Json)[counter] = 1))
+      expectInvalid(parseDemonstrationCapture(lossy), 'CAPTURE_READY_LOSSY')
+    }
+    expectValid(parseDemonstrationCapture(capture((body) => void ((body.counters as Json).unavailable = 1))))
+    const incomplete = capture((body) => {
+      Object.assign(body, { state: 'incomplete', completeness: { status: 'incomplete', reasons: ['EVENT_DROPPED'] } })
+      ;(body.counters as Json).dropped = 1
+    })
+    expectValid(parseDemonstrationCapture(incomplete))
+  })
+
   it('rejects out-of-order, duplicate, foreign or future-epoch interactions', () => {
     const interactions = (capture().interactions as Json[]).map(clone)
     expectInvalid(parseDemonstrationCapture(capture((body) => void (body.interactions = [interactions[1], interactions[0]]))), 'INTERACTION_SEQUENCE_ORDER')
@@ -960,6 +973,17 @@ describe('ProjectRunResult', () => {
     expectValid(parseProjectRunResult({ ...faked, live_acceptance_eligible: false }))
     expectInvalid(parseProjectRunResult(result((body) => void (body.kind = 'captured-verification'))))
     expectInvalid(parseProjectRunResult(result((body) => void (body.verdict = 'Verified Fix'))))
+  })
+
+  it('requires every completed invocation summary to carry the observed requested model and response ID', () => {
+    const summaryAt = (index: number, patch: Json) =>
+      result((body) => void Object.assign((body.invocations as Json[])[index]!, patch))
+    for (const index of [0, 1]) {
+      expectInvalid(parseProjectRunResult(summaryAt(index, { observed_model: null })), 'INVOCATION_RESPONSE_REQUIRED')
+      expectInvalid(parseProjectRunResult(summaryAt(index, { response_id: null })), 'INVOCATION_RESPONSE_REQUIRED')
+      expectInvalid(parseProjectRunResult(summaryAt(index, { observed_model: 'other-model' })), 'INVOCATION_MODEL_MISMATCH')
+    }
+    expectInvalid(parseProjectRunResult(summaryAt(0, { status: 'started' })), 'INVOCATION_NOT_FINISHED')
   })
 
   it('enforces the per-run call budget and evidence references', () => {

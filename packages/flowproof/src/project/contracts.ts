@@ -725,6 +725,8 @@ export const DemonstrationCaptureSchema = z
         const expected = capture.state === 'ready' ? 'complete' : capture.state
         if (completeness.status !== expected) issue(['completeness', 'status'], 'CAPTURE_COMPLETENESS_MISMATCH')
         if (capture.state === 'ready' && completeness.reasons.length > 0) issue(['completeness', 'reasons'], 'CAPTURE_COMPLETENESS_MISMATCH')
+        // A usable ready capture lost nothing; an absent collector (`unavailable`) stays disclosed.
+        if (capture.state === 'ready' && (capture.counters.dropped > 0 || capture.counters.unsupported > 0)) issue(['counters'], 'CAPTURE_READY_LOSSY')
         if (capture.state !== 'ready' && completeness.reasons.length === 0) issue(['completeness', 'reasons'], 'CAPTURE_REASON_REQUIRED')
       }
       if (capture.timing.finished_offset_ms === null) issue(['timing', 'finished_offset_ms'], 'CAPTURE_FINISH_TIME_REQUIRED')
@@ -1111,15 +1113,25 @@ const resultCheckSchema = z.strictObject({
   evidence_ids: uniqueBy(projectUuidSchema).max(16),
 })
 
-const invocationSummarySchema = z.strictObject({
-  invocation_id: projectUuidSchema,
-  phase: z.enum(INVOCATION_PHASES),
-  transport: z.enum(PROVIDER_TRANSPORTS),
-  status: z.enum(INVOCATION_STATUSES),
-  requested_model: z.literal(META_MODEL_ID),
-  observed_model: z.string().regex(MODEL_NAME).nullable(),
-  response_id: z.string().regex(RESPONSE_ID).nullable(),
-})
+/** Mirrors ProviderInvocation: `completed` carries the observed requested model and response ID. */
+const invocationSummarySchema = z
+  .strictObject({
+    invocation_id: projectUuidSchema,
+    phase: z.enum(INVOCATION_PHASES),
+    transport: z.enum(PROVIDER_TRANSPORTS),
+    status: z.enum(INVOCATION_STATUSES),
+    requested_model: z.literal(META_MODEL_ID),
+    observed_model: z.string().regex(MODEL_NAME).nullable(),
+    response_id: z.string().regex(RESPONSE_ID).nullable(),
+  })
+  .superRefine((summary, ctx) => {
+    const issue = reporter(ctx)
+    if (summary.status === 'started' && (summary.observed_model !== null || summary.response_id !== null)) issue(['status'], 'INVOCATION_NOT_FINISHED')
+    if (summary.status === 'completed') {
+      if (summary.observed_model === null || summary.response_id === null) issue(['response_id'], 'INVOCATION_RESPONSE_REQUIRED')
+      else if (summary.observed_model !== summary.requested_model) issue(['observed_model'], 'INVOCATION_MODEL_MISMATCH')
+    }
+  })
 
 const artifactReferenceSchema = z.strictObject({ artifact_id: projectUuidSchema, sha256: projectSha256Schema })
 
