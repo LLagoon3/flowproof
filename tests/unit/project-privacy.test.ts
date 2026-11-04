@@ -309,7 +309,7 @@ describe('rendered surface assessment', () => {
 
 describe('collection boundary', () => {
   it('never calls trace, video, HAR, cookie, storage, header or body collection APIs', async () => {
-    for (const file of ['projectPrivacy.ts']) {
+    for (const file of ['projectPrivacy.ts', 'projectRecorder.ts']) {
       const source = await readFile(path.join(ROOT, 'packages/flowproof/src/capture', file), 'utf8')
       const code = source.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
       for (const api of [/\.tracing\b/, /recordVideo/, /recordHar/, /routeFromHAR/, /\.cookies\(/, /storageState/, /\.(?:all)?[hH]eaders\(/, /headerValue/, /postData/, /\.body\(/, /\.text\(\)/, /\.json\(\)/, /desktopCapturer|getDisplayMedia/]) {
