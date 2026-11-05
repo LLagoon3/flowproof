@@ -1208,6 +1208,7 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
   let page: Page | null = null
   let activeOutput: ImmutableOutput | null = null
   let candidateOutput: ImmutableOutput | null = null
+  let candidateServed = false
   let releaseOutputWork: Promise<void> | null = null
   const preparationJobs = new Set<Promise<ProjectPreparation>>()
 
@@ -1319,33 +1320,33 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
               const build = await runtime.build({ snapshot: copy, configuration, signal })
               if (build.status !== 'passed' || build.output === null) return { ok: false, reason: build.status === 'failed' ? build.reason : 'RUNTIME_BUILD_FAILED', checks }
               const output = build.output
+              // Owned from here; only restoreBaseline removes it, after confirmed re-serving.
+              candidateOutput = output
               for (const projectCheck of configuration.required_project_checks) {
+                if (signal.aborted) return { ok: false, reason: 'RUNTIME_CANCELLED', checks }
                 const result = await runtime.check({ snapshot: copy, configuration, signal, checkId: projectCheck.id, output })
                 checks.push({ id: projectCheck.id, status: result.status })
-                if (result.status !== 'passed') {
-                  await output.remove()
-                  return { ok: false, reason: result.status === 'failed' ? result.reason : 'RUNTIME_CHECK_FAILED', checks }
-                }
+                if (result.status !== 'passed') return { ok: false, reason: result.status === 'failed' ? result.reason : 'RUNTIME_CHECK_FAILED', checks }
               }
               const app = target
-              if (app === null || signal.aborted) {
-                await output.remove()
-                return { ok: false, reason: signal.aborted ? 'RUNTIME_CANCELLED' : 'TARGET_APP_FAILED', checks }
-              }
+              if (app === null || signal.aborted) return { ok: false, reason: signal.aborted ? 'RUNTIME_CANCELLED' : 'TARGET_APP_FAILED', checks }
+              candidateServed = true
               await app.serve(output, { entryPath: configuration.entry_path })
-              candidateOutput = output
               return { ok: true, outputSha256: output.sha256, checks }
             },
             restoreBaseline: async () => {
               let clean = true
               const app = target
               const baselineOutput = activeOutput
-              if (app !== null && baselineOutput !== null) await app.serve(baselineOutput, { entryPath: configuration.entry_path }).catch(() => (clean = false))
+              if (candidateServed) {
+                if (app === null || baselineOutput === null) clean = false
+                else await app.serve(baselineOutput, { entryPath: configuration.entry_path }).then(() => (candidateServed = false), () => (clean = false))
+              }
               const owned = candidateOutput
-              candidateOutput = null
-              if (owned !== null) await owned.remove().catch(() => (clean = false))
-              return clean
+              if (owned !== null && !candidateServed) await owned.remove().then(() => (candidateOutput = null), () => (clean = false))
+              return clean && candidateOutput === null && !candidateServed
             },
+            candidateReleased: async () => candidateOutput === null && !candidateServed,
             originalIntegrity: async () => ((await checkProjectBaseline(project, admissionProfileOf(profile))).state === 'ready' ? 'verified' : 'changed'),
           }),
           model: projectDemonstrationModel(runId, { ...(modelEnv === undefined ? {} : { modelEnv }), ...(modelFake === undefined ? {} : { modelFake }) }),

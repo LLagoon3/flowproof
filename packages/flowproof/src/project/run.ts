@@ -640,6 +640,8 @@ export interface DemonstrationView {
   readonly question_id: string | null
   /** Safe provenance of the exchange that produced the shown interpretation (never a key or prompt). */
   readonly model: { readonly requested_model: string; readonly observed_model: string | null; readonly transport: string } | null
+  /** True only when this host can run verify-and-fix. */
+  readonly verify_available: boolean
   /** Host-owned verify-and-fix progress and finalized reduction; never a browser claim. */
   readonly verification: {
     readonly status: 'running' | 'finished'
@@ -667,8 +669,8 @@ export interface ProjectDemonstration {
    * reused before the old producer settled.
    */
   invalidate(): Promise<void>
-  /** Host-owned verify-and-fix of the ready interpretation; at most once per run. */
-  verify(): Promise<DemonstrationOutcome<VerifyResult>>
+  /** Starts the host-owned verify-and-fix of the ready interpretation; at most once per run. Progress is read from `view()`. */
+  verify(): Promise<DemonstrationOutcome<{ readonly started: true }>>
   /** Sticky run cancellation; a response arriving later is discarded. */
   cancel(): void
   view(): DemonstrationView
@@ -1000,18 +1002,26 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       if (busy) return refuse('CAPTURE_ACTIVE')
       busy = true
       verification = { status: 'running' }
-      try {
-        const result = await runVerifyAndFix(
-          { ...verifyPorts(), lifecycle, runId, capture: claim.sealed.capture, interpretation: ready, registry: claim.registry, sources: claim.sources, admitted: claim.admitted, model },
-          (event) => {
-            verifyEvents.push(event)
-          },
-        )
-        verification = { status: 'finished', result }
-        return { ok: true as const, value: result }
-      } finally {
-        busy = false
-      }
+      // Runs in the background; an unexpected failure still finalizes the run as non-success, so
+      // the host view can never stay 'running'.
+      void (async () => {
+        try {
+          const result = await runVerifyAndFix(
+            { ...verifyPorts(), lifecycle, runId, capture: claim.sealed.capture, interpretation: ready, registry: claim.registry, sources: claim.sources, admitted: claim.admitted, model },
+            (event) => {
+              verifyEvents.push(event)
+            },
+          )
+          verification = { status: 'finished', result }
+        } catch {
+          verifyEvents.push(Object.freeze({ stage: 'cleanup' as const, status: 'failed' as const, reason: 'VERIFY_ENGINE_FAILED' }))
+          const finalized = await lifecycle.finalize({ originalIntegrity: 'unverified' })
+          verification = { status: 'finished', result: Object.freeze({ finalized, baseline: null, candidate: null, patch: null, events: Object.freeze([...verifyEvents]) }) }
+        } finally {
+          busy = false
+        }
+      })()
+      return { ok: true as const, value: { started: true as const } }
     },
     cancel: () => cancel(),
 
@@ -1024,6 +1034,7 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
         report_sha256: sealed?.report_sha256 ?? claimed?.sealed.report_sha256 ?? null,
         interpretation: current,
         model: current === null ? null : interpretationModel,
+        verify_available: verifyPorts !== undefined,
         verification:
           verification === null
             ? null

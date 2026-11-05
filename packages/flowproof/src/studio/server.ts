@@ -1045,7 +1045,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
         const verified = await current.service.verify()
         if (demonstration !== current) throw revokedRefusal()
         if (!verified.ok) throw refuseDemonstration(verified.code)
-        sendJson(res, 200, runView(current))
+        sendJson(res, 202, runView(current))
         return
       }
       const outcome = await current.service.clarify(body.question_id as string, body.answer as string)

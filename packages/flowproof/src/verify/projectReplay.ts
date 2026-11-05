@@ -654,6 +654,7 @@ export async function openChromiumReplaySession(
   } = {},
 ): Promise<ReplaySession> {
   if (!isHostFrozenReplay(frozen) || !definitionIntact(frozen)) throw new ProjectReplayError('DEFINITION_NOT_HOST_FROZEN', 'Only a host-frozen definition can open a session.')
+  if (options.collector !== undefined && options.collectorFactory !== undefined) throw new ProjectReplayError('REPLAY_BINDING_INVALID', 'A replay session takes one evidence collector source.')
   const parsedBinding = ReplayPhaseBindingSchema.safeParse(snapshot(binding))
   if (!parsedBinding.success) throw new ProjectReplayError('REPLAY_BINDING_INVALID', 'A replay session needs a valid phase binding.')
   const origin = parsedBinding.data.target_origin
