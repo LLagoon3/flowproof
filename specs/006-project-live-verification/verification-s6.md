@@ -357,3 +357,25 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
 - T032 OPEN: no invalid-model-identity assertion was found in `project-analysis.test.ts`; every other listed negative is covered.
 - T031 (actual live), T033 and T026 remain OPEN for integrated E and the final gate.
 - Logs: `s6-unit-b2/`.
+
+## S6 units C/D/E — engine and UI wiring under the owner's skip-tests override (UNVERIFIED)
+
+- Owner override: "skip tests, proceed as fast as possible" (11:00 KST deadline). No tests were authored or run in this unit, and no older tests were rerun. Validation is limited to the exact heavy lock: `pnpm typecheck` 0 and `pnpm build` 0 at 76df2d3. Nothing in this engine has been executed against a real target, runtime or browser.
+- **Replay evidence:** `openChromiumReplaySession` takes `collectorFactory(page)`, created after the private page and before navigation, disposed before the context closes. `projectReplayImages.ts` produces genuine masked PNG observations through the unchanged `captureMaskedTargetImage` on the top-level page (clip at the origin), bound to the phase binding's run, phase and build, with bytes kept host-side.
+- **`verifyEngine.ts`**, host-owned and serial:
+  - `compileFrozenReplay` freezes the definition.
+  - Fresh isolated baseline replay; only the designated task-condition failure, with every action executed, unlocks the one `model.correct`. A satisfied baseline finishes as not reproduced with no correction call; any other failure is never treated as intended.
+  - The correction prompt is built from the actual baseline images and observations.
+  - `admitProjectPatch` then `applyProjectPatch` onto an owned copy.
+  - The launcher's offline runtime builds the copy and runs every required project check, then serves the candidate at the same admitted origin. An identical candidate replay follows.
+  - Mandatory checks are recorded through `recordCheck`.
+  - Cleanup: baseline restored, copy removed, browser closed. Original integrity is re-checked against the admitted baseline, then `lifecycle.finalize` performs the authoritative reduction.
+- **`run.ts`:** service `verify()`, at most once, only from `interpretation-ready` with a ready interpretation. The run view adds `verification` (ordered events, finalized outcome and primary reason, read-only patch summary). Cancel stays sticky through lifecycle operations.
+- **`server.ts`:** guarded `POST /api/project/runs/:id/verify` with an empty body.
+- **`launch.ts`:** `verifyPorts` supplies the real host ports: project, configuration, baseline output digest, a fresh headless Chromium, the runtime candidate build/check/serve, baseline restore and original-integrity re-check.
+- **UI:** Verify-and-fix is active and explains what it does. While running, the panel refreshes host-owned progress every second (a display refresh, not an outcome), shows the finalized result and the proposed change read-only, and keeps Cancel available.
+- **Known consequences and gaps:**
+  - The B2 headed test still expects Verify-and-fix to be disabled, so it will now fail until it is updated.
+  - Not executed: lifecycle transition legality from `interpretation-ready`; the project-check ID format passed to `recordCheck`; replay checkpoint/evidence binding with real images; candidate serve and baseline restore at the same origin; cancellation mid-build or mid-replay.
+  - The `inputs_unchanged` check is not evaluated (left `not_evaluated`). Target input is not locked during the automatic stages. No SSE.
+  - T036, T038, T040, T041, T042 and T043 remain OPEN. No test or task marks were made.
