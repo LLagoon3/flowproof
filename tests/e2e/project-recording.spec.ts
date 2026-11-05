@@ -358,7 +358,12 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 120)
     const firstScroll = await settledScrollTop(scroller)
     const option = await filter.locator('option').nth(1).evaluate((node) => ({ value: (node as HTMLOptionElement).value, label: (node.textContent ?? '').trim() }))
-    await filter.selectOption(option.value)
+    // A trusted native change: focusing the select blurs the search field (its trusted commit), then
+    // ArrowDown changes the closed select. Playwright's selectOption dispatches untrusted events,
+    // which the recorder deliberately ignores.
+    await filter.focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(filter).toHaveValue(option.value)
     await page.mouse.click(4, 4) // Studio document, outside the admitted frame.
     await target.getByTestId('show-archive').click()
     await expect.poll(pathOf).toBe('/archive')
@@ -398,6 +403,7 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     expect(shape).toEqual([
       [0, 'fill', 'task-search'],
       [0, 'scroll', 'task-scroll'],
+      [0, 'fill', 'task-search'], // trusted blur commit of the same field after the intervening scroll
       [0, 'select', 'task-filter'],
       [0, 'click', 'show-archive'],
       [0, 'navigate', '/archive'],
@@ -413,9 +419,9 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     // The launcher records under the default privacy policy (admitSafeValues=false): typed and
     // selected values are redacted and never replayable. Safe-value retention remains an open gap.
     const notAdmitted = { kind: 'redacted', reason: 'VALUE_NOT_ADMITTED' }
-    expect([action(0).value, action(2).value, action(9).value]).toEqual([notAdmitted, notAdmitted, notAdmitted])
+    expect([action(0).value, action(2).value, action(3).value, action(10).value]).toEqual([notAdmitted, notAdmitted, notAdmitted, notAdmitted])
     expect(option.value.length).toBeGreaterThan(0)
-    expect([action(1).y, action(5).y, action(10).y]).toEqual([firstScroll, secondScroll, lastScroll])
+    expect([action(1).y, action(6).y, action(11).y]).toEqual([firstScroll, secondScroll, lastScroll])
     for (const raw of ['zq-a4b1-alpha', 'zq-a4b1-omega']) expect(body.includes(raw)).toBe(false)
     expect((JSON.parse(body) as { store?: unknown }).store).toBe(false)
     const pngs = pngBlocks(body)
