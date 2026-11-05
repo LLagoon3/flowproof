@@ -636,6 +636,8 @@ export interface DemonstrationView {
   readonly report_sha256: string | null
   readonly interpretation: Interpretation | null
   readonly question_id: string | null
+  /** Safe provenance of the exchange that produced the shown interpretation (never a key or prompt). */
+  readonly model: { readonly requested_model: string; readonly observed_model: string | null; readonly transport: string } | null
 }
 
 export interface ProjectDemonstration {
@@ -697,6 +699,7 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
   let sealed: SealedCapture | null = null
   let claimed: ClaimedReport | null = null
   let interpretation: Interpretation | null = null
+  let interpretationModel: DemonstrationView['model'] = null
   let report: DemonstrationReportState = 'none'
   let busy = false
   // Every invalidation or cancellation bumps the generation; work started under an older one is
@@ -822,11 +825,13 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
         // An explicit unsupported interpretation stops the run; it is shown, never replayed.
         if (!operation.fail('INTERPRETATION_UNSUPPORTED') || gen !== generation) return refuse('RUN_NOT_ACCEPTING')
         interpretation = record.data
+        interpretationModel = Object.freeze({ requested_model: result.invocation.requested_model, observed_model: result.invocation.observed_model, transport: result.invocation.transport })
         return { ok: true, value: { interpretation: record.data } }
       }
       // A late completion after cancellation or revocation is never accepted.
       if (operation.signal.aborted || gen !== generation || !operation.complete() || !accepting()) return refuse('RUN_NOT_ACCEPTING')
       interpretation = record.data
+      interpretationModel = Object.freeze({ requested_model: result.invocation.requested_model, observed_model: result.invocation.observed_model, transport: result.invocation.transport })
       lifecycle.transition(record.data.result.status === 'clarify' ? 'clarification-required' : 'interpretation-ready')
       return { ok: true, value: { interpretation: record.data } }
     } finally {
@@ -978,6 +983,7 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
         report,
         report_sha256: sealed?.report_sha256 ?? claimed?.sealed.report_sha256 ?? null,
         interpretation: current,
+        model: current === null ? null : interpretationModel,
         question_id: current?.result.status === 'clarify' ? current.result.question.question_id : null,
       })
     },

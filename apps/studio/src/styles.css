@@ -1466,3 +1466,23 @@ code {
   min-height: 0;
   border: 0;
 }
+
+/* Project demonstration panel (T030), in the host column beside the anchored target. */
+.demonstration {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.demonstration__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.demonstration textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  box-sizing: border-box;
+}
+.demonstration__conditions li[data-task-condition='true'] {
+  font-weight: 700;
+}

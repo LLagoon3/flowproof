@@ -639,3 +639,21 @@ export function selectCapturedCheckSummary(run: CapturedRunView | undefined): Re
   for (const check of run.result.checks) summary[check.status] += 1
   return summary
 }
+
+// Project demonstration (T030): how a refused request changes the local demonstration state.
+// `host-changed`: the host revoked or replaced the prepared target, so the panel resets and the
+// Studio re-reads the host context. `stopped`: the run no longer accepts work (sticky). `busy`: a
+// valid serialization refusal; the person may retry explicitly. Anything else is shown and kept.
+export type DemonstrationRefusal = 'host-changed' | 'stopped' | 'busy' | 'failed'
+
+const HOST_CHANGED_CODES = new Set(['CAPTURE_INVALIDATED', 'CONFIGURATION_STALE', 'PROJECT_NOT_PREPARED', 'PREPARATION_STALE', 'RUN_UNKNOWN', 'CAPTURE_UNKNOWN', 'CONFIGURATION_CHANGING'])
+
+export function classifyDemonstrationRefusal(code: string): DemonstrationRefusal {
+  if (HOST_CHANGED_CODES.has(code)) return 'host-changed'
+  if (code === 'RUN_NOT_ACCEPTING' || /^(PROVIDER_|PROMPT_|INTERPRETATION_|ANALYSIS_)/.test(code)) return 'stopped'
+  if (code === 'CAPTURE_ACTIVE') return 'busy'
+  return 'failed'
+}
+
+/** Run states after which the demonstration accepts nothing more in this session. */
+export const isDemonstrationRunStopped = (state: string): boolean => state === 'finalizing' || state === 'terminal'

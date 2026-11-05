@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { parseProjectContextView } from '../api.js'
 import type { ProjectContextView } from '../api.js'
+import { DemonstrationPanel } from './DemonstrationPanel.js'
 
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms'
 
@@ -202,6 +203,15 @@ export function ProjectSetup() {
           <h2>Prepared project</h2>
           <p>The target is served from immutable output at its isolated local origin.</p>
           <iframe title="Prepared project application" src={preparation.target_url!} sandbox={SANDBOX} data-testid="project-target" />
+          {configuration.state === 'confirmed' && configuration.configuration_id !== null && preparation.output_sha256 !== null && (
+            <DemonstrationPanel
+              key={`${configuration.configuration_id}:${preparation.output_sha256}`}
+              configurationId={configuration.configuration_id}
+              outputSha256={preparation.output_sha256}
+              modelConfigured={context.model_configured}
+              onHostChanged={refresh}
+            />
+          )}
         </section>
       )}
     </main>

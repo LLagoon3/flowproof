@@ -705,3 +705,70 @@ export function selectCanvasView(state: StudioState, selected: SelectedEvidence 
   if (comparison.mode === 'captured') return { tabs: false, tab: 'evidence', selected: valid }
   return { tabs: true, tab: valid === null ? 'target' : 'evidence', selected: valid }
 }
+
+// Project demonstration (T030) wording. Messages name what happened in plain language; provider
+// text, keys, prompts and raw values are never shown.
+export function demonstrationMessage(code: string): string {
+  switch (code) {
+    case 'CAPTURE_ACTIVE':
+      return 'The previous capture step is still running. Try again when it finishes.'
+    case 'CAPTURE_INVALIDATED':
+    case 'CONFIGURATION_STALE':
+    case 'CONFIGURATION_CHANGING':
+    case 'PROJECT_NOT_PREPARED':
+    case 'PREPARATION_STALE':
+    case 'RUN_UNKNOWN':
+    case 'CAPTURE_UNKNOWN':
+      return 'The project settings or prepared target changed, so this demonstration was discarded. Review the project again.'
+    case 'RUN_NOT_ACCEPTING':
+      return 'This demonstration run has stopped and accepts no further steps.'
+    case 'DEMONSTRATION_UNAVAILABLE':
+      return 'This Studio cannot record a demonstration.'
+    case 'CAPTURE_FAILED':
+      return 'The capture could not be completed. Nothing was sent.'
+    case 'SOURCES_UNAVAILABLE':
+      return 'The project sources could not be read, so nothing was sent. You can discard this report.'
+    case 'PROVIDER_CREDENTIAL_MISSING':
+      return 'No model credential is configured, so nothing was sent.'
+    default:
+      if (code.startsWith('PROVIDER_')) return 'The model provider did not return a usable interpretation. The run has stopped.'
+      if (code.startsWith('PROMPT_') || code.startsWith('INTERPRETATION_') || code.startsWith('ANALYSIS_')) return 'The report could not be interpreted safely. The run has stopped.'
+      return 'FlowProof could not complete that demonstration step.'
+  }
+}
+
+const locatorText = (locator: unknown): string => {
+  if (typeof locator !== 'object' || locator === null) return 'an element'
+  const value = locator as Record<string, unknown>
+  if (value.kind === 'test-id' && typeof value.value === 'string') return `test ID “${value.value}”`
+  if (value.kind === 'role' && typeof value.role === 'string') return typeof value.name === 'string' && value.name !== '' ? `${value.role} “${value.name}”` : `a ${value.role}`
+  if (value.kind === 'css' && typeof value.selector === 'string') return `element “${value.selector}”`
+  return 'an element'
+}
+
+/** One read-only expected condition, in words. */
+export function demonstrationConditionText(condition: Readonly<Record<string, unknown>>): string {
+  switch (condition.kind) {
+    case 'element-visible':
+      return `${locatorText(condition.locator)} is ${condition.visible === false ? 'hidden' : 'visible'}`
+    case 'element-count':
+      return `${locatorText(condition.locator)} appears ${String(condition.count)} time${condition.count === 1 ? '' : 's'}`
+    case 'text':
+      return `${locatorText(condition.locator)} shows “${String(condition.text)}”`
+    case 'form-value':
+      return `${locatorText(condition.locator)} holds “${String(condition.value)}”`
+    case 'path':
+      return `the page path is ${String(condition.path)}`
+    case 'no-error':
+      return `no ${String(condition.error_type).replace('-', ' ')} occurs`
+    default:
+      return 'an expected condition FlowProof cannot describe'
+  }
+}
+
+/** Honest model provenance: a labelled test transport is never presented as a live provider. */
+export function demonstrationModelText(model: { readonly requested_model: string; readonly observed_model: string | null; readonly transport: string }): string {
+  const observed = model.observed_model === null ? 'not reported' : model.observed_model
+  const transport = model.transport === 'meta' ? 'live provider' : `labelled ${model.transport.replace('_', ' ')}, not a live provider`
+  return `Requested ${model.requested_model} · observed ${observed} · ${transport}`
+}

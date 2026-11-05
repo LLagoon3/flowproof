@@ -1077,3 +1077,164 @@ export function createStudioClient(options: StudioClientOptions = {}): StudioCli
     },
   })
 }
+
+// Project demonstration (T030): typed views of the guarded capture and run routes. The browser
+// supplies only the confirmed configuration ID, output digest, an optional description and one
+// answer; the host owns run, capture, report and model identity.
+
+export interface DemonstrationModelView {
+  readonly requested_model: string
+  readonly observed_model: string | null
+  readonly transport: string
+}
+
+export type DemonstrationResultView =
+  | {
+      readonly status: 'ready'
+      readonly observed_problem: string
+      readonly intent_summary: string
+      readonly support_explanation: string
+      readonly expected_conditions: readonly Record<string, unknown>[]
+      readonly task_condition_index: number
+    }
+  | {
+      readonly status: 'clarify'
+      readonly observed_facts: string
+      readonly question: { readonly question_id: string; readonly text: string; readonly missing_intent: string; readonly alternatives: readonly string[] }
+    }
+  | { readonly status: 'unsupported'; readonly reason: string; readonly explanation: string }
+
+export interface DemonstrationRunView {
+  readonly run_id: string
+  readonly state: string
+  readonly capture_id: string | null
+  readonly report: string
+  readonly report_sha256: string | null
+  readonly analysis_attempt: number | null
+  readonly result: DemonstrationResultView | null
+  readonly question_id: string | null
+  readonly model: DemonstrationModelView | null
+}
+
+export class DemonstrationRequestError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number,
+  ) {
+    super(code)
+  }
+}
+
+const isDemoRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+const demoText = (value: unknown): value is string => typeof value === 'string'
+const demoOptionalText = (value: unknown): value is string | null => value === null || typeof value === 'string'
+
+function parseDemonstrationResult(input: unknown): DemonstrationResultView | null {
+  if (!isDemoRecord(input)) return null
+  if (input.status === 'ready') {
+    const conditions = input.expected_conditions
+    if (!demoText(input.observed_problem) || !demoText(input.intent_summary) || !demoText(input.support_explanation)) return null
+    if (!Array.isArray(conditions) || !conditions.every(isDemoRecord) || typeof input.task_condition_index !== 'number') return null
+    return {
+      status: 'ready',
+      observed_problem: input.observed_problem,
+      intent_summary: input.intent_summary,
+      support_explanation: input.support_explanation,
+      expected_conditions: conditions,
+      task_condition_index: input.task_condition_index,
+    }
+  }
+  if (input.status === 'clarify') {
+    const question = input.question
+    if (!demoText(input.observed_facts) || !isDemoRecord(question)) return null
+    const alternatives = question.alternatives
+    if (!demoText(question.question_id) || !demoText(question.text) || !demoText(question.missing_intent)) return null
+    if (!Array.isArray(alternatives) || !alternatives.every(demoText)) return null
+    return {
+      status: 'clarify',
+      observed_facts: input.observed_facts,
+      question: { question_id: question.question_id, text: question.text, missing_intent: question.missing_intent, alternatives },
+    }
+  }
+  if (input.status === 'unsupported' && demoText(input.reason) && demoText(input.explanation)) {
+    return { status: 'unsupported', reason: input.reason, explanation: input.explanation }
+  }
+  return null
+}
+
+/** Strictly reads the host run view; anything malformed is refused rather than partially shown. */
+export function parseDemonstrationRunView(input: unknown): DemonstrationRunView | null {
+  if (!isDemoRecord(input)) return null
+  const { run_id, state, capture_id, report, report_sha256, interpretation, question_id, model } = input
+  if (!demoText(run_id) || !demoText(state) || !demoOptionalText(capture_id) || !demoText(report) || !demoOptionalText(report_sha256) || !demoOptionalText(question_id)) return null
+  let result: DemonstrationResultView | null = null
+  let attempt: number | null = null
+  if (interpretation !== null && interpretation !== undefined) {
+    if (!isDemoRecord(interpretation) || typeof interpretation.analysis_attempt !== 'number') return null
+    result = parseDemonstrationResult(interpretation.result)
+    if (result === null) return null
+    attempt = interpretation.analysis_attempt
+  }
+  let modelView: DemonstrationModelView | null = null
+  if (model !== null && model !== undefined) {
+    if (!isDemoRecord(model) || !demoText(model.requested_model) || !demoOptionalText(model.observed_model) || !demoText(model.transport)) return null
+    modelView = { requested_model: model.requested_model, observed_model: model.observed_model, transport: model.transport }
+  }
+  return { run_id, state, capture_id, report, report_sha256, analysis_attempt: attempt, result, question_id, model: modelView }
+}
+
+async function demonstrationRequest(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Record<string, unknown>> {
+  const response = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    headers: method === 'POST' ? { Accept: 'application/json', 'Content-Type': 'application/json' } : { Accept: 'application/json' },
+    ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}),
+  })
+  let value: unknown = null
+  try {
+    value = await response.json()
+  } catch {
+    value = null
+  }
+  if (!response.ok) {
+    const error = isDemoRecord(value) && isDemoRecord(value.error) ? value.error : null
+    throw new DemonstrationRequestError(error !== null && demoText(error.code) ? error.code : 'REQUEST_FAILED', response.status)
+  }
+  if (!isDemoRecord(value)) throw new DemonstrationRequestError('RESPONSE_INVALID', response.status)
+  return value
+}
+
+const demoId = (value: unknown): string => {
+  if (!demoText(value)) throw new DemonstrationRequestError('RESPONSE_INVALID', 200)
+  return value
+}
+
+export const demonstrationApi = {
+  async start(configurationId: string, outputSha256: string): Promise<{ readonly runId: string; readonly captureId: string }> {
+    const value = await demonstrationRequest('/api/project/captures', 'POST', { configuration_id: configurationId, output_sha256: outputSha256 })
+    return { runId: demoId(value.run_id), captureId: demoId(value.capture_id) }
+  },
+  async finish(captureId: string): Promise<{ readonly state: string; readonly reportSha256: string | null }> {
+    const value = await demonstrationRequest(`/api/project/captures/${encodeURIComponent(captureId)}/finish`, 'POST', {})
+    if (!demoText(value.state) || !demoOptionalText(value.report_sha256)) throw new DemonstrationRequestError('RESPONSE_INVALID', 200)
+    return { state: value.state, reportSha256: value.report_sha256 }
+  },
+  async discard(captureId: string): Promise<void> {
+    await demonstrationRequest(`/api/project/captures/${encodeURIComponent(captureId)}/discard`, 'POST', {})
+  },
+  async analyze(captureId: string, description: string): Promise<void> {
+    const trimmed = description.trim()
+    await demonstrationRequest(`/api/project/captures/${encodeURIComponent(captureId)}/analyze`, 'POST', trimmed === '' ? { submit: true } : { submit: true, description: trimmed })
+  },
+  async clarify(runId: string, questionId: string, answer: string): Promise<void> {
+    await demonstrationRequest(`/api/project/runs/${encodeURIComponent(runId)}/clarify`, 'POST', { question_id: questionId, answer })
+  },
+  async cancel(runId: string): Promise<void> {
+    await demonstrationRequest(`/api/project/runs/${encodeURIComponent(runId)}/cancel`, 'POST', {})
+  },
+  async view(runId: string): Promise<DemonstrationRunView> {
+    const parsed = parseDemonstrationRunView(await demonstrationRequest(`/api/project/runs/${encodeURIComponent(runId)}`, 'GET'))
+    if (parsed === null) throw new DemonstrationRequestError('RESPONSE_INVALID', 200)
+    return parsed
+  },
+}
