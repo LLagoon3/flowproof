@@ -796,7 +796,8 @@ function labelledReply(call: number, request: LabelledRequest): Response {
     object: 'response',
     status: 'completed',
     model: 'muse-spark-1.3',
-    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(document) }] }],
+    // The structured analysis output wraps the result, exactly as the client's output format requires.
+    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ result: document }) }] }],
     usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
   }
   return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
