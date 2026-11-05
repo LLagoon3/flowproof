@@ -203,3 +203,21 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
 - Unresolved cause: what moves the Studio scroll after Start. Candidates: test actions racing the async start image, or a scroll reset followed by Playwright revealing only the element. Isolate with one probe (scroll around the screenshot and the first action), then apply a proven durable fix without bypassing the guard.
 - Validation under the exact heavy lock: `pnpm typecheck` 0 and `pnpm build` 0 at ad7c474; `tsc --noEmit` 0 at d81c227. Ordering case red twice: order-1 was an over-strict border-box framing check in my test; order-2 was `PROMPT_IMAGE_REQUIRED`. Regressions at d81c227: A4a recording  1 passed (5.1s) ; setup  2 passed (7.0s) ; privacy (seeded mask, occluding Studio content, small overlay)  3 passed (4.5s) . `docker ps -aq` 46 IDs unchanged: yes.
 - Report contents remain UNVERIFIED: redaction, order, epochs, flush at navigation, Finish drain, and a PNG at the seam. Safe-value acceptance is a separate design gap. T026 and T029 remain open. Logs: `s6-unit-a4b1-fix/`.
+
+## S6 unit A4b1-SCROLL — initial image boundary and real report ordering
+
+- Baseline 2c8443d. Causal probes were temporary and uncommitted, each reverted and verified clean.
+  - **Start returned before its image:** the recorder's begin returned, then the Start response, then the start image registered about 113 ms later.
+  - **Idle Start image is fine:** with no concurrent action the Start image was ok (pre/recheck y=232, scrollY 588).
+  - **Fill, hover, wheel, Studio click and select never moved the Studio scroll.**
+  - **Playwright's retry moves it:** `DEBUG=pw:api` shows `<html> intercepts pointer events` then `retrying hover action` (retry scrolls ancestors). That moved the Studio to scrollY 260/277 while an in-flight image was capturing, so the unchanged guard correctly rejected it.
+- `271b2e3` fix(capture): `startProjectRecorder` awaits `session.imagesSettled()` after `begin`. Start is reported ready only once its framed initial image is produced or explicitly omitted. Generation and cancel handling are unchanged, and failures still detach and dispose.
+- Test-hypothesis corrections (real report observed at the labelled `test_transport`, synthetic key):
+  - `0125d6a` Playwright `selectOption` dispatches untrusted events, which the recorder correctly ignores (`isTrusted`). The test now focuses the select and presses ArrowDown, a trusted change. The real report also contains the trusted blur-commit `fill` of the same field after the intervening scroll.
+  - `bb95f0f` under the default policy, the trusted select's redacted values (`open`/`done`) reappear in visible text. Every later image was `IMAGE_SENSITIVE_TEXT` and Finish returned `unsupported` (fail-closed, correct). The ordering case uses a test-owned synthetic select with opaque, never-rendered values.
+- **Gaps:**
+  - Selects or fills whose redacted values are rendered cannot complete under the default policy.
+  - Safe-value retention needs a separate design.
+  - The A4a case's `selectOption` is untrusted and was never recorded; its "native select" wording is corrected here.
+- Validation under the exact heavy lock: `pnpm typecheck` 0 and `pnpm build` 0 at 271b2e3; `tsc --noEmit` 0 at bb95f0f. RED: serializes  1 failed  (see order-3.log); regressions not run. `docker ps -aq` 46 IDs unchanged: yes.
+- T026 and T029 remain OPEN (A4b2 races, overflow and frames). Logs: `s6-unit-a4b1-scroll/`.
