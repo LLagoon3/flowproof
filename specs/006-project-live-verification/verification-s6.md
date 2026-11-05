@@ -311,3 +311,30 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
   - T029 configuration revocation: real (API), UI refresh unverified.
   - T029 one user-triggered re-analysis, clarification, and no correction before the baseline gate: fake or OPEN (unit B / T053).
 - T026 and T029 remain OPEN. Logs: `s6-unit-a4b2-races/`.
+
+## S6 unit B — demonstration panel (T030 implementation) and T029 completion
+
+- Baseline 2f04700.
+- `136ab6a` feat(studio):
+  - `run.ts`: the run view adds `model` (requested/observed model and transport of the exchange behind the shown interpretation; never a key or prompt).
+  - `api.ts`: strict `parseDemonstrationRunView` plus `demonstrationApi` over the guarded routes.
+  - `state.ts`: refusal classification (host-changed / stopped / busy / failed).
+  - `presentation.ts`: plain wording, read-only condition text, and honest model provenance (a labelled test transport is never presented as live).
+  - `DemonstrationPanel.tsx` in the host column through `ProjectSetup`, keyed by configuration and output: Start/Finish/Discard, the sealed report and its data-transfer disclosure, an optional description, explicit Analyze, Cancel while analyzing, a read-only interpretation with expected conditions and the task condition, one focused clarification, a stopped state, and a disabled Verify-and-fix with a visible "not available yet" note.
+  - Untimed, with no invented progress. Stale replies are dropped by generation. A host-changed refusal resets the panel and re-reads host context.
+  - The origin-anchored iframe, privacy, images, guards and isolation are unchanged.
+- `eb7be12` tests:
+  - `tests/unit/project-demonstration-ui.test.ts` (strict parsing, refusal mapping, wording).
+  - Two real headed Studio journeys:
+    - UI Start, a real target click and Finish produce the sealed report and disclosure with 0 exchanges. The description keeps focus and value. Explicit Analyze makes exactly one exchange with the labelled failing `test_transport` (synthetic key) and shows an honest stopped state, with no Verify control.
+    - A guarded configuration revocation followed by the next panel step resets the panel. Host context is re-read, and the Studio returns to the ordinary layout (no target frame, Confirm visible).
+- Validation under the exact heavy lock at eb7be12:
+  - `pnpm typecheck` 0, `pnpm build` 0.
+  - vitest (`project-demonstration-ui`, `project-analysis`, `project-studio`, `project-lifecycle`): 4 files, 64 passed.
+  - Full `project-recording.spec.ts`: 7 passed. `project-setup.spec.ts`: 2 passed. 0 skipped, 0 retried.
+  - Original-snapshot assertions passed. `docker ps -aq` 46/46 IDs identical. Full privacy was not rerun: the recorder, privacy and image paths are unchanged.
+- **T029 marked complete.**
+  - Real launcher: start/finish/discard/analyze ownership, sealed submission only on explicit Analyze, one active attempt, sticky cancel, and configuration revocation (A4a, A4b1, A4b2-RACES, this unit).
+  - Labelled supporting tests (`project-analysis`, `project-studio`, `project-lifecycle`): the single explicit clarification and re-analysis budget, cancel after the request was sent, no late completion, and no correction before the host baseline gate.
+- **T030 remains OPEN.** Interpretation and clarification rendering have not been exercised in a real browser; that needs a valid labelled reply bound to the actual prompt citations and replay. T032 and T033 remain OPEN. T026 remains OPEN (decoy/descendant frames and explicit overflow/unsupported actions are deferred to integrated E).
+- Logs: `s6-unit-b/`.
