@@ -379,3 +379,26 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
   - Not executed: lifecycle transition legality from `interpretation-ready`; the project-check ID format passed to `recordCheck`; replay checkpoint/evidence binding with real images; candidate serve and baseline restore at the same origin; cancellation mid-build or mid-replay.
   - The `inputs_unchanged` check is not evaluated (left `not_evaluated`). Target input is not locked during the automatic stages. No SSE.
   - T036, T038, T040, T041, T042 and T043 remain OPEN. No test or task marks were made.
+
+## S6 C/D/E correction of the parent's diff review (owner skip-tests override; UNVERIFIED)
+
+- Baseline be90c9d. No tests were authored or executed (owner override). The only validation is under the exact heavy lock: `pnpm typecheck` 0 and `pnpm build` 0 on this source (commits e22b699..3920cbe). The one stale e2e assertion (Verify disabled) now expects Verify enabled, because the real launcher supplies verify ports; it was not run.
+- **Fixes by review item:**
+  1. The reserved `original_unchanged` `recordCheck` is removed; finalization alone sets `original_unchanged` and `cleanup_complete`. The service runs verification in the background, and an unexpected failure still finalizes the run as `unverified` with a `VERIFY_ENGINE_FAILED` event, so the view never stays `running`.
+  2. Candidate project checks are recorded as `projectCheckId(id)`.
+  3. The browser (`browser-context`), candidate copy (`temp-directory`) and candidate output/serving (`target-server`) are registered with `lifecycle.own` before they exist. Releases are memoized, and each has a real `verifyReleased`: browser disconnected, copy root absent, launcher `candidateReleased()` (no retained candidate output and baseline re-served).
+     - The engine releases everything in reverse order before reading original integrity; `finalize` then re-verifies each resource, so any cleanup failure reaches `cleanup_complete` and the reduction.
+     - The launcher keeps the candidate output handle from build until a confirmed baseline re-serve and removal, including after partial check or serve failures.
+  4. `inputs_unchanged` is evaluated, not optimistic: `copy.verify(applied.files)` before the runtime build and after the candidate replay, plus unchanged digests of the frozen definition, configuration and admitted sources.
+  5. Verify capability: the run view adds `verify_available` (launcher ports present); without it the button is disabled with a "not available" note.
+     - Verify returns 202 with the run view and progress is polled. Poll replies are dropped after a phase, run or generation change; the phase moves to `verified` only when the host reports `finished`.
+     - Target input lock: the same iframe gets `project-target--locked` (`pointer-events: none`, `tabIndex -1`, `aria-disabled`), and a focused frame is blurred while automatic stages run. The lock is released when the run finishes, is cancelled or the panel unmounts. Cancel stays available; there is no remount and the origin-anchored layout is unchanged.
+  6. The replay collector adds sanitized console (error/warning) and page-error observations: the recorder's `sanitizeErrorText` with the run registry and the same fingerprint, coalesced and byte-bounded. Overflow fails the drain closed. Network errors are not collected, so `no-error` network conditions stay unevaluable (fail-closed). A collector and a factory together are refused.
+  7. Halted preflight (cancel, finalizing or terminal) runs before opening the browser, the correction, patch apply, candidate build and candidate replay. Resources are registered before creation, so late-created ones are released.
+- **Remaining gaps:**
+  - Nothing has been executed.
+  - Replay images and errors are not persisted to the run store (S7 manifest links).
+  - No network-error collector.
+  - No SSE (polling only).
+  - The T043 live harness is not written.
+  - T036, T038, T040, T041, T042, T043, T026, T032 and T033 remain OPEN.
