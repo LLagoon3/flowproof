@@ -644,7 +644,14 @@ export async function openChromiumReplaySession(
   browser: Browser,
   frozen: FrozenReplay,
   binding: unknown,
-  options: { readonly collector?: ReplayEvidenceCollector } = {},
+  options: {
+    readonly collector?: ReplayEvidenceCollector
+    /**
+     * Host-owned producer of genuine evidence at the actual private replay page. It is created after
+     * the page exists and before any navigation; `dispose` runs before the context closes.
+     */
+    readonly collectorFactory?: (page: Page) => ReplayEvidenceCollector & { dispose?(): Promise<void> }
+  } = {},
 ): Promise<ReplaySession> {
   if (!isHostFrozenReplay(frozen) || !definitionIntact(frozen)) throw new ProjectReplayError('DEFINITION_NOT_HOST_FROZEN', 'Only a host-frozen definition can open a session.')
   const parsedBinding = ReplayPhaseBindingSchema.safeParse(snapshot(binding))
@@ -673,6 +680,7 @@ export async function openChromiumReplaySession(
     })
     const page = await context.newPage()
     main = page
+    const produced = options.collectorFactory === undefined ? null : options.collectorFactory(page)
     page.on('dialog', (dialog) => {
       violations.push('REPLAY_DIALOG')
       void dialog.dismiss().catch(() => undefined)
@@ -722,8 +730,16 @@ export async function openChromiumReplaySession(
       value: (locator, timeout) => guardPlaywright(() => target(locator).inputValue({ timeout })),
       violations: () => [...violations],
     }
-    const sessionOptions = options.collector === undefined ? {} : { collector: options.collector }
-    return createReplaySession({ binding, driver, ...sessionOptions, release: () => context.close() })
+    const collector = produced ?? options.collector
+    const sessionOptions = collector === undefined ? {} : { collector }
+    const release = async (): Promise<void> => {
+      try {
+        await produced?.dispose?.()
+      } finally {
+        await context.close()
+      }
+    }
+    return createReplaySession({ binding, driver, ...sessionOptions, release })
   } catch (error) {
     await context.close().catch(() => undefined)
     throw error
