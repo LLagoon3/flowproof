@@ -1104,6 +1104,14 @@ export type DemonstrationResultView =
     }
   | { readonly status: 'unsupported'; readonly reason: string; readonly explanation: string }
 
+export interface DemonstrationVerificationView {
+  readonly status: 'running' | 'finished'
+  readonly events: readonly { readonly stage: string; readonly status: string; readonly reason: string | null }[]
+  readonly outcome: string | null
+  readonly primary_reason: string | null
+  readonly patch: { readonly target_paths: readonly string[]; readonly summary: string } | null
+}
+
 export interface DemonstrationRunView {
   readonly run_id: string
   readonly state: string
@@ -1114,6 +1122,7 @@ export interface DemonstrationRunView {
   readonly result: DemonstrationResultView | null
   readonly question_id: string | null
   readonly model: DemonstrationModelView | null
+  readonly verification: DemonstrationVerificationView | null
 }
 
 export class DemonstrationRequestError extends Error {
@@ -1162,10 +1171,30 @@ function parseDemonstrationResult(input: unknown): DemonstrationResultView | nul
   return null
 }
 
+function parseVerification(input: unknown): DemonstrationVerificationView | null | undefined {
+  if (input === null || input === undefined) return null
+  if (!isDemoRecord(input) || (input.status !== 'running' && input.status !== 'finished') || !Array.isArray(input.events)) return undefined
+  const events: { stage: string; status: string; reason: string | null }[] = []
+  for (const event of input.events) {
+    if (!isDemoRecord(event) || !demoText(event.stage) || !demoText(event.status) || !demoOptionalText(event.reason)) return undefined
+    events.push({ stage: event.stage, status: event.status, reason: event.reason })
+  }
+  if (!demoOptionalText(input.outcome) || !demoOptionalText(input.primary_reason)) return undefined
+  let patch: DemonstrationVerificationView['patch'] = null
+  if (input.patch !== null && input.patch !== undefined) {
+    const value = input.patch
+    if (!isDemoRecord(value) || !Array.isArray(value.target_paths) || !value.target_paths.every(demoText) || !demoText(value.summary)) return undefined
+    patch = { target_paths: value.target_paths, summary: value.summary }
+  }
+  return { status: input.status, events, outcome: input.outcome, primary_reason: input.primary_reason, patch }
+}
+
 /** Strictly reads the host run view; anything malformed is refused rather than partially shown. */
 export function parseDemonstrationRunView(input: unknown): DemonstrationRunView | null {
   if (!isDemoRecord(input)) return null
   const { run_id, state, capture_id, report, report_sha256, interpretation, question_id, model } = input
+  const verification = parseVerification(input.verification)
+  if (verification === undefined) return null
   if (!demoText(run_id) || !demoText(state) || !demoOptionalText(capture_id) || !demoText(report) || !demoOptionalText(report_sha256) || !demoOptionalText(question_id)) return null
   let result: DemonstrationResultView | null = null
   let attempt: number | null = null
@@ -1180,7 +1209,7 @@ export function parseDemonstrationRunView(input: unknown): DemonstrationRunView 
     if (!isDemoRecord(model) || !demoText(model.requested_model) || !demoOptionalText(model.observed_model) || !demoText(model.transport)) return null
     modelView = { requested_model: model.requested_model, observed_model: model.observed_model, transport: model.transport }
   }
-  return { run_id, state, capture_id, report, report_sha256, analysis_attempt: attempt, result, question_id, model: modelView }
+  return { run_id, state, capture_id, report, report_sha256, analysis_attempt: attempt, result, question_id, model: modelView, verification }
 }
 
 async function demonstrationRequest(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Record<string, unknown>> {
@@ -1228,6 +1257,9 @@ export const demonstrationApi = {
   },
   async clarify(runId: string, questionId: string, answer: string): Promise<void> {
     await demonstrationRequest(`/api/project/runs/${encodeURIComponent(runId)}/clarify`, 'POST', { question_id: questionId, answer })
+  },
+  async verify(runId: string): Promise<void> {
+    await demonstrationRequest(`/api/project/runs/${encodeURIComponent(runId)}/verify`, 'POST', {})
   },
   async cancel(runId: string): Promise<void> {
     await demonstrationRequest(`/api/project/runs/${encodeURIComponent(runId)}/cancel`, 'POST', {})

@@ -10,7 +10,7 @@ import { classifyDemonstrationRefusal, isDemonstrationRunStopped } from '../stat
 // the explicit Analyze. A reply that arrives after its request was superseded is ignored, so a
 // stale response can never revive a discarded or revoked report.
 
-type Phase = 'idle' | 'starting' | 'recording' | 'finishing' | 'ready' | 'unusable' | 'discarding' | 'analyzing' | 'interpreted' | 'clarify' | 'answering' | 'stopped'
+type Phase = 'idle' | 'starting' | 'recording' | 'finishing' | 'ready' | 'unusable' | 'discarding' | 'analyzing' | 'interpreted' | 'clarify' | 'answering' | 'stopped' | 'verifying' | 'verified'
 
 export interface DemonstrationPanelProps {
   readonly configurationId: string
@@ -178,6 +178,32 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
     }
   }
 
+  const verify = async () => {
+    if (runId === null) return
+    const gen = begin('verifying')
+    try {
+      await demonstrationApi.verify(runId)
+      const next = await demonstrationApi.view(runId)
+      if (!current(gen)) return
+      setView(next)
+      setPhase('verified')
+    } catch (error) {
+      await refuse(gen, error, 'interpreted', runId)
+    }
+  }
+
+  // Host-owned progress of the automatic stages; a display refresh only, never an outcome.
+  useEffect(() => {
+    if (phase !== 'verifying' || runId === null) return
+    const timer = setInterval(() => {
+      void demonstrationApi
+        .view(runId)
+        .then((next) => setView(next))
+        .catch(() => undefined)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [phase, runId])
+
   const result = view?.result ?? null
   const busy = phase === 'starting' || phase === 'finishing' || phase === 'discarding' || phase === 'analyzing' || phase === 'answering'
 
@@ -291,7 +317,7 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
         </div>
       )}
 
-      {(phase === 'interpreted' || phase === 'stopped') && result !== null && result.status !== 'clarify' && (
+      {(phase === 'interpreted' || phase === 'stopped' || phase === 'verifying' || phase === 'verified') && result !== null && result.status !== 'clarify' && (
         <div data-testid="demonstration-interpretation">
           {result.status === 'ready' ? (
             <>
@@ -318,10 +344,45 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
 
       {phase === 'interpreted' && result?.status === 'ready' && (
         <div className="demonstration__actions">
-          <button type="button" data-testid="demonstration-verify" disabled aria-describedby="demonstration-verify-note">
+          <button type="button" data-testid="demonstration-verify" onClick={() => void verify()} aria-describedby="demonstration-verify-note">
             Verify and fix
           </button>
-          <p id="demonstration-verify-note">Verification and correction are not available in this Studio yet.</p>
+          <p id="demonstration-verify-note">
+            FlowProof replays your demonstration on a fresh copy of the project. Only if the problem reproduces does it ask the model once for a
+            change, then builds, checks and replays the changed copy. Your project is never modified.
+          </p>
+        </div>
+      )}
+
+      {(phase === 'verifying' || phase === 'verified') && (
+        <div data-testid="demonstration-verification">
+          {phase === 'verifying' && <p role="status">Verifying automatically. You can cancel at any time.</p>}
+          <ol aria-label="Verification stages">
+            {(view?.verification?.events ?? []).map((event, index) => (
+              <li key={index}>
+                {event.stage}: {event.status}
+                {event.reason !== null ? ` (${event.reason})` : ''}
+              </li>
+            ))}
+          </ol>
+          {view?.verification?.status === 'finished' && (
+            <p data-testid="demonstration-outcome">
+              Result: {view.verification.outcome}
+              {view.verification.primary_reason !== null ? ` (${view.verification.primary_reason})` : ''}
+            </p>
+          )}
+          {view?.verification?.patch && (
+            <p data-testid="demonstration-patch">
+              Proposed change to {view.verification.patch.target_paths.join(', ')}: {view.verification.patch.summary}
+            </p>
+          )}
+          {phase === 'verifying' && (
+            <div className="demonstration__actions">
+              <button type="button" data-testid="demonstration-cancel" onClick={() => void cancelRun()}>
+                Cancel run
+              </button>
+            </div>
+          )}
         </div>
       )}
 

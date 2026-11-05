@@ -1207,6 +1207,7 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
   let browserContext: BrowserContext | null = null
   let page: Page | null = null
   let activeOutput: ImmutableOutput | null = null
+  let candidateOutput: ImmutableOutput | null = null
   let releaseOutputWork: Promise<void> | null = null
   const preparationJobs = new Set<Promise<ProjectPreparation>>()
 
@@ -1308,6 +1309,45 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
             return demonstrationRecorderOf(await startProjectRecorder({ page: current, frame, binding, entryPath: configuration.entry_path }))
           },
           loadSources: () => loadAdmittedProjectSources(project, profile),
+          verifyPorts: () => ({
+            project,
+            configuration,
+            baselineBuildSha256: preparation.output_sha256,
+            openBrowser: () => chromium.launch({ headless: true }),
+            serveCandidate: async (copy: ProjectSnapshot, signal: AbortSignal) => {
+              const checks: Array<{ readonly id: string; readonly status: 'passed' | 'failed' | 'not_evaluated' }> = []
+              const build = await runtime.build({ snapshot: copy, configuration, signal })
+              if (build.status !== 'passed' || build.output === null) return { ok: false, reason: build.status === 'failed' ? build.reason : 'RUNTIME_BUILD_FAILED', checks }
+              const output = build.output
+              for (const projectCheck of configuration.required_project_checks) {
+                const result = await runtime.check({ snapshot: copy, configuration, signal, checkId: projectCheck.id, output })
+                checks.push({ id: projectCheck.id, status: result.status })
+                if (result.status !== 'passed') {
+                  await output.remove()
+                  return { ok: false, reason: result.status === 'failed' ? result.reason : 'RUNTIME_CHECK_FAILED', checks }
+                }
+              }
+              const app = target
+              if (app === null || signal.aborted) {
+                await output.remove()
+                return { ok: false, reason: signal.aborted ? 'RUNTIME_CANCELLED' : 'TARGET_APP_FAILED', checks }
+              }
+              await app.serve(output, { entryPath: configuration.entry_path })
+              candidateOutput = output
+              return { ok: true, outputSha256: output.sha256, checks }
+            },
+            restoreBaseline: async () => {
+              let clean = true
+              const app = target
+              const baselineOutput = activeOutput
+              if (app !== null && baselineOutput !== null) await app.serve(baselineOutput, { entryPath: configuration.entry_path }).catch(() => (clean = false))
+              const owned = candidateOutput
+              candidateOutput = null
+              if (owned !== null) await owned.remove().catch(() => (clean = false))
+              return clean
+            },
+            originalIntegrity: async () => ((await checkProjectBaseline(project, admissionProfileOf(profile))).state === 'ready' ? 'verified' : 'changed'),
+          }),
           model: projectDemonstrationModel(runId, { ...(modelEnv === undefined ? {} : { modelEnv }), ...(modelFake === undefined ? {} : { modelFake }) }),
         }),
       },

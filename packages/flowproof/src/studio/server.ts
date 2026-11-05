@@ -1014,7 +1014,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       }
       return
     }
-    const runRoute = /^\/api\/project\/runs\/([^/]+)(?:\/(clarify|cancel))?$/.exec(pathname)
+    const runRoute = /^\/api\/project\/runs\/([^/]+)(?:\/(clarify|cancel|verify))?$/.exec(pathname)
     if (runRoute !== null) {
       const runId = runRoute[1] ?? ''
       const action = runRoute[2]
@@ -1032,13 +1032,20 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
           throw fail(400, 'REQUEST_FIELD_REJECTED', 'A clarification needs the current question ID and a safe answer.')
         }
       } else if (Object.keys(body).length !== 0) {
-        throw fail(400, 'REQUEST_FIELD_REJECTED', 'Cancel takes an empty object.')
+        throw fail(400, 'REQUEST_FIELD_REJECTED', 'This run request takes an empty object.')
       }
       const current = demonstration
       if (current === null || current.runId !== runId) throw fail(404, 'RUN_UNKNOWN', 'The run does not exist.')
       if (action === 'cancel') {
         current.service.cancel()
         sendJson(res, 202, runView(current))
+        return
+      }
+      if (action === 'verify') {
+        const verified = await current.service.verify()
+        if (demonstration !== current) throw revokedRefusal()
+        if (!verified.ok) throw refuseDemonstration(verified.code)
+        sendJson(res, 200, runView(current))
         return
       }
       const outcome = await current.service.clarify(body.question_id as string, body.answer as string)
