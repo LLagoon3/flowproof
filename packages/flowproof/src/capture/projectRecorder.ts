@@ -1114,6 +1114,9 @@ export async function startProjectRecorder(options: StartRecorderOptions): Promi
     const entry = hello as { readonly source: RecorderSource; readonly envelope: unknown } | null
     if (entry === null) throw new ProjectRecorderError('CAPTURE_INSTRUMENTATION_UNAVAILABLE', 'The target entry document did not announce the recorder.')
     session.begin(entry.source, entry.envelope)
+    // Start is ready only once its initial image is produced or explicitly omitted, so the entry
+    // evidence is captured from the framed target before any demonstration action can move it.
+    await session.imagesSettled()
   } catch (error) {
     await detach()
     session.dispose()
