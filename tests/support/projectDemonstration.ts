@@ -135,4 +135,3 @@ export class TestRecorder implements DemonstrationRecorder {
     return { capture: capture as never, report_sha256: report, artifacts: new Map([[this.artifact, IMAGE_BYTES]]) }
   }
 }
-
