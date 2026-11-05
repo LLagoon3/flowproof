@@ -469,3 +469,229 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     await repository.remove()
   }
 })
+
+// T026/T029 (S6 unit A4b2-RACES): Finish racing Discard, cancel and configuration revocation on the
+// actual launcher. Scheduling is CONTROLLED, not natural: the test holds the launcher-owned
+// Playwright `page.screenshot` call that Finish's real end image makes (the original call still
+// runs once released, with every recorder, image and guard path intact), so the competing guarded
+// request is proven to arrive while Finish is pending. Nothing is fabricated or replaced.
+
+interface ScreenshotGate {
+  calls(): number
+  pending(): number
+  arm(): void
+  reached(): Promise<void>
+  release(): void
+  restore(): void
+}
+
+function screenshotGate(page: Page): ScreenshotGate {
+  const original = page.screenshot.bind(page)
+  let calls = 0
+  let pending = 0
+  let armed = false
+  let onReached: () => void = () => undefined
+  let reached: Promise<void> = Promise.resolve()
+  let releaseHeld: () => void = () => undefined
+  let held: Promise<void> = Promise.resolve()
+  ;(page as unknown as { screenshot: Page['screenshot'] }).screenshot = (async (options?: Parameters<Page['screenshot']>[0]) => {
+    calls += 1
+    pending += 1
+    try {
+      if (armed) {
+        armed = false
+        onReached()
+        await held
+      }
+      return await original(options)
+    } finally {
+      pending -= 1
+    }
+  }) as Page['screenshot']
+  return {
+    calls: () => calls,
+    pending: () => pending,
+    arm: () => {
+      armed = true
+      reached = new Promise<void>((resolve) => {
+        onReached = resolve
+      })
+      held = new Promise<void>((resolve) => {
+        releaseHeld = resolve
+      })
+    },
+    reached: () => reached,
+    release: () => releaseHeld(),
+    restore: () => {
+      delete (page as unknown as Record<string, unknown>).screenshot
+    },
+  }
+}
+
+interface PreparedRace {
+  readonly page: Page
+  readonly context: Record<string, unknown>
+  readonly configurationId: string
+  readonly exchanges: readonly string[]
+  readonly containersBefore: readonly string[]
+  readonly gate: ScreenshotGate
+  /** Starts a capture, makes one real target click and waits until its real action image is done. */
+  recordOneClick(): Promise<{ readonly runId: string; readonly captureId: string }>
+  /** Sends Finish and resolves once Finish is held inside its real end-image screenshot. */
+  finishHeld(captureId: string): Promise<{ readonly finishing: Promise<ApiResult> }>
+}
+
+async function withPreparedRace(body: (race: PreparedRace) => Promise<void>): Promise<void> {
+  const repository = await materializeProjectLiveRepository()
+  const before = await snapshotOriginalProject(repository.root)
+  const config = await settingsFromFile()
+  const profile = await readRuntimeManifest(runtimeManifestPath())
+  const project = await admittedProject(repository)
+  const containersBefore = await containersWithLabel(RUNTIME_LABEL)
+  const exchanges: string[] = []
+  const modelFake: ProjectModelFake = Object.freeze({
+    label: 'test_transport' as const,
+    fetch: async (input: string | URL | Request): Promise<Response> => {
+      exchanges.push(String(input instanceof Request ? input.url : input))
+      throw new Error('test_transport: no exchange is permitted in a race journey')
+    },
+  })
+  let instance: StudioInstance | null = null
+  let gate: ScreenshotGate | null = null
+  try {
+    instance = await startProjectStudio({
+      repoRoot: process.cwd(),
+      project,
+      profile,
+      initialSettings: config.settings,
+      modelConfigured: true,
+      modelEnv: Object.freeze({ MODEL_API_KEY: SYNTHETIC_KEY }),
+      modelFake,
+    })
+    const page = instance.page
+    await page.getByRole('checkbox', { name: /I reviewed the committed project identity/ }).check()
+    await page.getByTestId('confirm-project-settings').click()
+    await expect(page.getByTestId('project-target')).toBeVisible({ timeout: 240_000 })
+    await expect(page.getByText('sample-unit: passed')).toBeVisible()
+    const target = page.frameLocator('[data-testid="project-target"]')
+    await expect(target.getByTestId('task-summary')).toHaveText('3 open tasks')
+    const context = (await api(page, 'GET', '/api/project/context')).body
+    const configurationId = (context.configuration as Record<string, unknown>).configuration_id as string
+    const outputSha = (context.preparation as Record<string, unknown>).output_sha256 as string
+    const currentGate = screenshotGate(page)
+    gate = currentGate
+    await body({
+      page,
+      context,
+      configurationId,
+      exchanges,
+      containersBefore,
+      gate: currentGate,
+      recordOneClick: async () => {
+        const started = await api(page, 'POST', '/api/project/captures', { configuration_id: configurationId, output_sha256: outputSha })
+        expect(started.status).toBe(200)
+        const callsBefore = currentGate.calls()
+        await target.getByTestId('task-list').getByRole('checkbox').first().click()
+        await expect(target.getByTestId('task-summary')).toHaveText('4 open tasks')
+        await expect.poll(() => currentGate.calls() > callsBefore && currentGate.pending() === 0).toBe(true)
+        return { runId: started.body.run_id as string, captureId: started.body.capture_id as string }
+      },
+      finishHeld: async (captureId: string) => {
+        currentGate.arm()
+        const finishing = api(page, 'POST', `/api/project/captures/${captureId}/finish`, {})
+        await currentGate.reached()
+        return { finishing }
+      },
+    })
+    expect(exchanges).toEqual([])
+  } finally {
+    gate?.release()
+    gate?.restore()
+    await instance?.close()
+    await rm(config.root, { recursive: true, force: true })
+    expect(await containersWithLabel(RUNTIME_LABEL)).toEqual(containersBefore)
+    expect(changedSnapshotFacets(before, await snapshotOriginalProject(repository.root))).toEqual([])
+    await repository.remove()
+  }
+}
+
+test('Discard during a pending Finish is refused as busy, and the explicit retry deletes the sealed report', async () => {
+  await withPreparedRace(async ({ page, exchanges, recordOneClick, finishHeld, gate }) => {
+    const { runId, captureId } = await recordOneClick()
+    const { finishing } = await finishHeld(captureId)
+    const during = await api(page, 'POST', `/api/project/captures/${captureId}/discard`, {})
+    expect([during.status, codeOf(during)]).toEqual([409, 'CAPTURE_ACTIVE'])
+    gate.release()
+    const finished = await finishing
+    expect(finished.status).toBe(200)
+    expect(finished.body).toMatchObject({ run_id: runId, capture_id: captureId, state: 'ready' })
+    expect(finished.body.report_sha256).toMatch(SHA256)
+    const retried = await api(page, 'POST', `/api/project/captures/${captureId}/discard`, {})
+    expect(retried.body).toEqual({ run_id: runId, capture_id: captureId, state: 'discarded' })
+    const view = await api(page, 'GET', `/api/project/runs/${runId}`)
+    expect(view.body).toMatchObject({ state: 'demonstration-ready', capture_id: null, report: 'none', report_sha256: null, interpretation: null })
+    for (const action of ['finish', 'analyze'] as const) {
+      const late = await api(page, 'POST', `/api/project/captures/${captureId}/${action}`, action === 'analyze' ? { submit: true } : {})
+      expect([late.status, codeOf(late)]).toEqual([404, 'CAPTURE_UNKNOWN'])
+    }
+    expect(exchanges).toEqual([])
+  })
+})
+
+test('cancel during a pending Finish is sticky and no sealed report becomes usable', async () => {
+  await withPreparedRace(async ({ page, configurationId, context, exchanges, recordOneClick, finishHeld, gate }) => {
+    const { runId, captureId } = await recordOneClick()
+    const { finishing } = await finishHeld(captureId)
+    const cancelled = await api(page, 'POST', `/api/project/runs/${runId}/cancel`, {})
+    expect(cancelled.status).toBe(202)
+    gate.release()
+    const finished = await finishing
+    expect([finished.status, codeOf(finished)]).toEqual([409, 'RUN_NOT_ACCEPTING'])
+    const view = await api(page, 'GET', `/api/project/runs/${runId}`)
+    expect(String(view.body.state)).toMatch(/^cancel/)
+    expect(view.body).toMatchObject({ run_id: runId, report_sha256: null, interpretation: null })
+    expect(view.body.report).not.toBe('sealed')
+    for (const action of ['finish', 'discard', 'analyze'] as const) {
+      const late = await api(page, 'POST', `/api/project/captures/${captureId}/${action}`, action === 'analyze' ? { submit: true } : {})
+      expect(late.status).toBeGreaterThanOrEqual(400)
+      expect(late.body).not.toHaveProperty('interpretation')
+      expect(late.body).not.toHaveProperty('report_sha256')
+    }
+    const outputSha = (context.preparation as Record<string, unknown>).output_sha256 as string
+    const restart = await api(page, 'POST', '/api/project/captures', { configuration_id: configurationId, output_sha256: outputSha })
+    expect([restart.status, codeOf(restart)]).toEqual([409, 'RUN_NOT_ACCEPTING'])
+    expect(exchanges).toEqual([])
+  })
+})
+
+test('configuration revocation during a pending Finish invalidates it and the released target cannot keep recording', async () => {
+  await withPreparedRace(async ({ page, context, configurationId, containersBefore, exchanges, recordOneClick, finishHeld, gate }) => {
+    const { runId, captureId } = await recordOneClick()
+    const { finishing } = await finishHeld(captureId)
+    const project = context.project as Record<string, unknown>
+    const settings = (context.configuration as Record<string, unknown>).settings
+    const configuring = api(page, 'POST', '/api/project/configuration', { project_id: project.project_id, baseline_commit: project.baseline_commit, settings, confirm: true })
+    // Observable synchronization: the demonstration is revoked synchronously, before any await.
+    await expect.poll(async () => (await api(page, 'GET', `/api/project/runs/${runId}`)).status).toBe(404)
+    gate.release()
+    const [finished, configured] = await Promise.all([finishing, configuring])
+    expect([finished.status, codeOf(finished)]).toEqual([409, 'CAPTURE_INVALIDATED'])
+    expect(configured.status).toBe(200)
+    expect(configured.body.configuration_id).not.toBe(configurationId)
+    const gone = await api(page, 'GET', `/api/project/runs/${runId}`)
+    expect([gone.status, codeOf(gone)]).toEqual([404, 'RUN_UNKNOWN'])
+    for (const action of ['finish', 'discard', 'analyze'] as const) {
+      const late = await api(page, 'POST', `/api/project/captures/${captureId}/${action}`, action === 'analyze' ? { submit: true } : {})
+      expect([late.status, codeOf(late)]).toEqual([404, 'CAPTURE_UNKNOWN'])
+    }
+    const after = (await api(page, 'GET', '/api/project/context')).body
+    expect((after.preparation as Record<string, unknown>).state).toBe('idle')
+    expect(await containersWithLabel(RUNTIME_LABEL)).toEqual(containersBefore)
+    const outputSha = (context.preparation as Record<string, unknown>).output_sha256 as string
+    const stale = await api(page, 'POST', '/api/project/captures', { configuration_id: configurationId, output_sha256: outputSha })
+    expect([stale.status, codeOf(stale)]).toEqual([409, 'CONFIGURATION_STALE'])
+    const unprepared = await api(page, 'POST', '/api/project/captures', { configuration_id: configured.body.configuration_id, output_sha256: outputSha })
+    expect([unprepared.status, codeOf(unprepared)]).toEqual([409, 'PROJECT_NOT_PREPARED'])
+    expect(exchanges).toEqual([])
+  })
+})
