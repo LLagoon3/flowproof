@@ -377,4 +377,40 @@ describe('T029 ownership revocation across every service await', () => {
     expect(codeOf(await missing.service.analyze(unsent, { description: null }))).toBe('PROVIDER_CREDENTIAL_MISSING')
     expect(missing.service.view().report).toBe('claimed')
   })
+
+  // T032 (S6 unit B2): closed-schema and single-clarification negatives.
+  it('a reply missing observed facts or intent is refused by the closed schema and never becomes usable', async () => {
+    const cases: Answer[] = [
+      (r) => ({ result: { ...ready([r.image]), intent_summary: undefined } }),
+      (r, body) => ({ result: { ...clarify(hostQuestion(body), r.image), observed_facts: undefined } }),
+      (r, body) => {
+        const asked = clarify(hostQuestion(body), r.image)
+        return { result: { ...asked, question: { ...asked.question, missing_intent: undefined } } }
+      },
+    ]
+    for (const answer of cases) {
+      const w = world({ answers: [answer] })
+      const id = await captured(w)
+      const outcome = await w.service.analyze(id, { description: null })
+      expect(codeOf(outcome)).toBe('PROMPT_OUTPUT_INVALID')
+      expect(w.service.view().interpretation).toBeNull()
+      expect(['interpretation-ready', 'clarification-required']).not.toContain(w.lifecycle.state())
+      expect(w.calls).toHaveLength(1)
+    }
+  })
+
+  it('a clarified re-analysis that asks again exhausts the single clarification without a usable interpretation', async () => {
+    const w = world({ answers: [(r, body) => ({ result: clarify(hostQuestion(body), r.image) }), (r, body) => ({ result: clarify(hostQuestion(body) ?? newProjectUuid(), r.image) })] })
+    const id = await captured(w)
+    const first = await w.service.analyze(id, { description: null })
+    expect(first.ok && first.value.interpretation.result.status).toBe('clarify')
+    const question = w.service.view().question_id!
+    const second = await w.service.clarify(question, 'Hide completed tasks.')
+    expect(codeOf(second)).toBe('PROMPT_OUTPUT_CLARIFICATION_REPEATED')
+    expect(w.service.view().interpretation?.result.status).not.toBe('ready')
+    expect(w.lifecycle.state()).not.toBe('interpretation-ready')
+    expect(codeOf(await w.service.clarify(question, 'Again.'))).not.toBe('OK')
+    expect(codeOf(await w.service.analyze(id, { description: null }))).not.toBe('OK')
+    expect(w.calls).toHaveLength(2)
+  })
 })

@@ -541,7 +541,13 @@ interface PreparedRace {
   finishHeld(captureId: string): Promise<{ readonly finishing: Promise<ApiResult> }>
 }
 
-async function withPreparedRace(body: (race: PreparedRace) => Promise<void>, expectedExchanges = 0): Promise<void> {
+type LabelledRequest = { readonly input: readonly { readonly content: readonly { readonly type: string; readonly text?: string }[] }[] }
+
+async function withPreparedRace(
+  body: (race: PreparedRace) => Promise<void>,
+  expectedExchanges = 0,
+  respond?: (call: number, request: LabelledRequest) => Response,
+): Promise<void> {
   const repository = await materializeProjectLiveRepository()
   const before = await snapshotOriginalProject(repository.root)
   const config = await settingsFromFile()
@@ -551,9 +557,10 @@ async function withPreparedRace(body: (race: PreparedRace) => Promise<void>, exp
   const exchanges: string[] = []
   const modelFake: ProjectModelFake = Object.freeze({
     label: 'test_transport' as const,
-    fetch: async (input: string | URL | Request): Promise<Response> => {
+    fetch: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       exchanges.push(String(input instanceof Request ? input.url : input))
-      throw new Error('test_transport: no exchange is permitted in a race journey')
+      if (respond !== undefined && typeof init?.body === 'string') return respond(exchanges.length, JSON.parse(init.body) as LabelledRequest)
+      throw new Error('test_transport: deliberate failure; no labelled reply is configured for this journey')
     },
   })
   let instance: StudioInstance | null = null
@@ -745,4 +752,93 @@ test('a configuration revoked by the host resets the panel and returns the Studi
     await expect(page.getByTestId('confirm-project-settings')).toBeVisible()
     expect(exchanges).toEqual([])
   })
+})
+
+// T030 (S6 unit B2): a real demonstration interpreted through the labelled `test_transport`. Each
+// labelled reply is built from the ACTUAL bounded request: citations are observation IDs present in
+// that prompt, the question ID is the prompt's binding, and the replay uses the capture's own
+// viewport and recorded click locator. The host still validates every reply against its prompt.
+
+const promptContext = (request: LabelledRequest): Record<string, unknown> =>
+  JSON.parse(String(request.input[0]!.content[0]!.text).split('\n').slice(1).join('\n')) as Record<string, unknown>
+
+function labelledReply(call: number, request: LabelledRequest): Response {
+  const context = promptContext(request)
+  const images = context.images as { observation_id: string }[]
+  const binding = context.binding as { question_id: string | null }
+  const actions = context.actions as { action: { type: string; locators?: unknown[] } }[]
+  const click = actions.find((entry) => entry.action.type === 'click')
+  const document =
+    call === 1
+      ? {
+          status: 'clarify',
+          observed_facts: 'One task checkbox was ticked and the open count rose from three to four.',
+          citations: [images[0]!.observation_id],
+          question: {
+            question_id: binding.question_id,
+            text: 'Should completing a task lower the open count?',
+            missing_intent: 'Whether a completed task still counts as open.',
+            alternatives: ['Lower it', 'Keep it'],
+          },
+        }
+      : {
+          status: 'ready',
+          observed_problem: 'Completing a task raised the open count instead of lowering it.',
+          citations: [images[0]!.observation_id],
+          replay: { entry_path: '/', viewport: context.viewport, actions: [{ op: 'click', locator: click!.action.locators![0] }] },
+          expected_conditions: [{ kind: 'text', locator: { kind: 'test-id', value: 'task-summary' }, match: 'exact', text: '2 open tasks' }],
+          task_condition_index: 0,
+          intent_summary: 'Completing a task lowers the open count.',
+          support_explanation: 'The screenshot after the click shows four open tasks.',
+        }
+  const payload = {
+    id: `resp_fake_${call}`,
+    object: 'response',
+    status: 'completed',
+    model: 'muse-spark-1.3',
+    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(document) }] }],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  }
+  return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+test('the Studio panel shows a real clarification, sends one answer and shows the read-only interpretation', async () => {
+  await withPreparedRace(
+    async ({ page, exchanges }) => {
+      const target = page.frameLocator('[data-testid="project-target"]')
+      const panel = page.getByTestId('demonstration-panel')
+      await page.getByTestId('demonstration-start').click()
+      await expect(panel).toHaveAttribute('data-phase', 'recording')
+      await target.getByTestId('task-list').getByRole('checkbox').first().click()
+      await expect(target.getByTestId('task-summary')).toHaveText('4 open tasks')
+      await page.getByTestId('demonstration-finish').click()
+      await expect(panel).toHaveAttribute('data-phase', 'ready')
+      await expect(page.getByTestId('demonstration-disclosure')).toContainText('your optional description')
+      await expect(page.getByTestId('demonstration-disclosure')).toContainText('your answer is sent with this report context for one re-analysis')
+      expect(exchanges).toEqual([])
+      await page.getByTestId('demonstration-analyze').click()
+      await expect(panel).toHaveAttribute('data-phase', 'clarify')
+      await expect(page.getByTestId('demonstration-clarify')).toContainText('Should completing a task lower the open count?')
+      await expect(page.getByTestId('demonstration-disclosure')).toHaveCount(0)
+      await expect(page.getByTestId('demonstration-report')).toHaveCount(0)
+      expect(exchanges).toEqual([PROJECT_META_ENDPOINT])
+      const answer = page.getByTestId('demonstration-answer')
+      await answer.fill('Lower it: a completed task is no longer open.')
+      await expect(answer).toBeFocused()
+      await page.getByTestId('demonstration-answer-submit').click()
+      await expect(panel).toHaveAttribute('data-phase', 'interpreted')
+      const interpretation = page.getByTestId('demonstration-interpretation')
+      await expect(interpretation).toContainText('Completing a task raised the open count instead of lowering it.')
+      await expect(interpretation).toContainText('Intended behavior: Completing a task lowers the open count.')
+      await expect(interpretation.getByRole('listitem')).toHaveText(['test ID “task-summary” shows “2 open tasks”'])
+      await expect(interpretation.getByRole('listitem')).toHaveAttribute('data-task-condition', 'true')
+      await expect(interpretation.locator('input, textarea, select, [contenteditable]')).toHaveCount(0)
+      await expect(page.getByTestId('demonstration-model')).toHaveText('Requested muse-spark-1.3 · observed muse-spark-1.3 · labelled test transport, not a live provider')
+      await expect(page.getByTestId('demonstration-verify')).toBeDisabled()
+      await expect(page.getByTestId('demonstration-answer')).toHaveCount(0)
+      expect(exchanges).toEqual([PROJECT_META_ENDPOINT, PROJECT_META_ENDPOINT])
+    },
+    2,
+    labelledReply,
+  )
 })
