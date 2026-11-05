@@ -1438,6 +1438,7 @@ code {
   width: 100%;
   min-height: min(68vh, 52rem);
   border: 1px solid #dce1e8;
-  border-radius: 0.5rem;
+  /* Square corners: rounded clipping would place Studio pixels inside the captured target rectangle. */
+  border-radius: 0;
   background: #fff;
 }

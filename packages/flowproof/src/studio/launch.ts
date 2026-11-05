@@ -1145,6 +1145,12 @@ async function projectTargetFrame(page: Page, targetOrigin: string): Promise<{ r
       // A frame without a URL is not the prepared target.
     }
     if (origin !== targetOrigin) throw unavailable()
+    // Explicit Start frames the whole admitted target inside the Studio viewport (host side, the
+    // Studio document only), so image evidence can meet the unchanged full-visibility guard.
+    await element.evaluate((node) => {
+      const box = node as unknown as { scrollIntoView(options: { block: string; inline: string; behavior: string }): void }
+      box.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+    })
     const viewport = await element.evaluate((node) => {
       const box = node as unknown as { clientWidth: number; clientHeight: number; ownerDocument: { defaultView: { devicePixelRatio: number } | null } }
       return { width: box.clientWidth, height: box.clientHeight, devicePixelRatio: box.ownerDocument.defaultView?.devicePixelRatio ?? 0 }
