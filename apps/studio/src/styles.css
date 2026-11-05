@@ -1486,3 +1486,9 @@ code {
 .demonstration__conditions li[data-task-condition='true'] {
   font-weight: 700;
 }
+
+/* Target input is locked while host-owned automatic verification runs; the frame stays in place. */
+.project-setup__target iframe.project-target--locked {
+  pointer-events: none;
+  outline: 2px dashed #8a94a6;
+}

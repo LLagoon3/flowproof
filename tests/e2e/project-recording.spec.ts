@@ -835,7 +835,7 @@ test('the Studio panel shows a real clarification, sends one answer and shows th
       await expect(interpretation.getByRole('listitem')).toHaveAttribute('data-task-condition', 'true')
       await expect(interpretation.locator('input, textarea, select, [contenteditable]')).toHaveCount(0)
       await expect(page.getByTestId('demonstration-model')).toHaveText('Requested muse-spark-1.3 · observed muse-spark-1.3 · labelled test transport, not a live provider')
-      await expect(page.getByTestId('demonstration-verify')).toBeDisabled()
+      await expect(page.getByTestId('demonstration-verify')).toBeEnabled() // the real launcher supplies verify ports
       await expect(page.getByTestId('demonstration-answer')).toHaveCount(0)
       expect(exchanges).toEqual([PROJECT_META_ENDPOINT, PROJECT_META_ENDPOINT])
     },

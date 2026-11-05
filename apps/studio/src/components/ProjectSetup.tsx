@@ -48,6 +48,12 @@ export function ProjectSetup() {
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Locks target input during host-owned automatic stages; the same frame stays in place.
+  const [targetLocked, setTargetLocked] = useState(false)
+  useEffect(() => {
+    const active = document.activeElement
+    if (targetLocked && active instanceof HTMLIFrameElement) active.blur()
+  }, [targetLocked])
 
   const refresh = useCallback(async () => {
     const next = await readContext()
@@ -202,7 +208,15 @@ export function ProjectSetup() {
         <section className="project-setup__target" aria-label="Prepared project">
           <h2>Prepared project</h2>
           <p>The target is served from immutable output at its isolated local origin.</p>
-          <iframe title="Prepared project application" src={preparation.target_url!} sandbox={SANDBOX} data-testid="project-target" />
+          <iframe
+            title="Prepared project application"
+            src={preparation.target_url!}
+            sandbox={SANDBOX}
+            data-testid="project-target"
+            className={targetLocked ? 'project-target--locked' : undefined}
+            tabIndex={targetLocked ? -1 : undefined}
+            aria-disabled={targetLocked ? true : undefined}
+          />
           {configuration.state === 'confirmed' && configuration.configuration_id !== null && preparation.output_sha256 !== null && (
             <DemonstrationPanel
               key={`${configuration.configuration_id}:${preparation.output_sha256}`}
@@ -210,6 +224,7 @@ export function ProjectSetup() {
               outputSha256={preparation.output_sha256}
               modelConfigured={context.model_configured}
               onHostChanged={refresh}
+              onAutomaticChange={setTargetLocked}
             />
           )}
         </section>

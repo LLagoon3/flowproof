@@ -18,9 +18,11 @@ export interface DemonstrationPanelProps {
   readonly modelConfigured: boolean
   /** Re-reads the host context after the host revoked or replaced the prepared target. */
   readonly onHostChanged: () => unknown
+  /** True while host-owned automatic stages run; the Studio locks target input meanwhile. */
+  readonly onAutomaticChange?: (running: boolean) => void
 }
 
-export function DemonstrationPanel({ configurationId, outputSha256, modelConfigured, onHostChanged }: DemonstrationPanelProps) {
+export function DemonstrationPanel({ configurationId, outputSha256, modelConfigured, onHostChanged, onAutomaticChange }: DemonstrationPanelProps) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [runId, setRunId] = useState<string | null>(null)
   const [captureId, setCaptureId] = useState<string | null>(null)
@@ -186,23 +188,40 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
       const next = await demonstrationApi.view(runId)
       if (!current(gen)) return
       setView(next)
-      setPhase('verified')
+      if (next.verification?.status === 'finished') setPhase('verified')
     } catch (error) {
       await refuse(gen, error, 'interpreted', runId)
     }
   }
 
-  // Host-owned progress of the automatic stages; a display refresh only, never an outcome.
+  // Host-owned progress of the automatic stages; a display refresh only, never an outcome. A reply
+  // that arrives after the phase, run or generation changed is dropped.
+  const automatic = phase === 'verifying' || (phase === 'stopped' && view?.verification?.status === 'running')
   useEffect(() => {
-    if (phase !== 'verifying' || runId === null) return
+    if (!automatic || runId === null) return
+    const gen = generation.current
+    const run = runId
+    let active = true
     const timer = setInterval(() => {
       void demonstrationApi
-        .view(runId)
-        .then((next) => setView(next))
+        .view(run)
+        .then((next) => {
+          if (!active || gen !== generation.current || next.run_id !== run) return
+          setView(next)
+          if (next.verification?.status === 'finished') setPhase((now) => (now === 'verifying' ? 'verified' : now))
+        })
         .catch(() => undefined)
     }, 1000)
-    return () => clearInterval(timer)
-  }, [phase, runId])
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [automatic, runId])
+
+  useEffect(() => {
+    onAutomaticChange?.(automatic)
+  }, [automatic, onAutomaticChange])
+  useEffect(() => () => onAutomaticChange?.(false), [onAutomaticChange])
 
   const result = view?.result ?? null
   const busy = phase === 'starting' || phase === 'finishing' || phase === 'discarding' || phase === 'analyzing' || phase === 'answering'
@@ -344,17 +363,18 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
 
       {phase === 'interpreted' && result?.status === 'ready' && (
         <div className="demonstration__actions">
-          <button type="button" data-testid="demonstration-verify" onClick={() => void verify()} aria-describedby="demonstration-verify-note">
+          <button type="button" data-testid="demonstration-verify" onClick={() => void verify()} disabled={view?.verify_available !== true} aria-describedby="demonstration-verify-note">
             Verify and fix
           </button>
           <p id="demonstration-verify-note">
-            FlowProof replays your demonstration on a fresh copy of the project. Only if the problem reproduces does it ask the model once for a
-            change, then builds, checks and replays the changed copy. Your project is never modified.
+            {view?.verify_available === true
+              ? 'FlowProof replays your demonstration on a fresh copy of the project. Only if the problem reproduces does it ask the model once for a change, then builds, checks and replays the changed copy. Your project is never modified, and the project frame is locked while this runs.'
+              : 'Verification and correction are not available in this Studio.'}
           </p>
         </div>
       )}
 
-      {(phase === 'verifying' || phase === 'verified') && (
+      {(phase === 'verifying' || phase === 'verified' || (phase === 'stopped' && view?.verification)) && (
         <div data-testid="demonstration-verification">
           {phase === 'verifying' && <p role="status">Verifying automatically. You can cancel at any time.</p>}
           <ol aria-label="Verification stages">

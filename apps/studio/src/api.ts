@@ -1122,6 +1122,7 @@ export interface DemonstrationRunView {
   readonly result: DemonstrationResultView | null
   readonly question_id: string | null
   readonly model: DemonstrationModelView | null
+  readonly verify_available: boolean
   readonly verification: DemonstrationVerificationView | null
 }
 
@@ -1209,7 +1210,7 @@ export function parseDemonstrationRunView(input: unknown): DemonstrationRunView 
     if (!isDemoRecord(model) || !demoText(model.requested_model) || !demoOptionalText(model.observed_model) || !demoText(model.transport)) return null
     modelView = { requested_model: model.requested_model, observed_model: model.observed_model, transport: model.transport }
   }
-  return { run_id, state, capture_id, report, report_sha256, analysis_attempt: attempt, result, question_id, model: modelView, verification }
+  return { run_id, state, capture_id, report, report_sha256, analysis_attempt: attempt, result, question_id, model: modelView, verify_available: input.verify_available === true, verification }
 }
 
 async function demonstrationRequest(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Record<string, unknown>> {
