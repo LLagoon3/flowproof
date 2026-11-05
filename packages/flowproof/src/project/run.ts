@@ -27,6 +27,8 @@ import { buildProjectAnalysisPrompt } from '../model/projectPrompt.js'
 import type { ProjectPromptErrorCode, PromptSourceFile } from '../model/projectPrompt.js'
 import { InterpretationSchema, PROJECT_SCHEMA_VERSION } from './contracts.js'
 import type { CaptureState, Interpretation } from './contracts.js'
+import { runVerifyAndFix } from './verifyEngine.js'
+import type { VerifyEvent, VerifyHostPorts, VerifyResult } from './verifyEngine.js'
 
 // The project-live run lifecycle and ownership skeleton (Spec 006 T009). It enforces the declared
 // run-state sequence and check statuses; phase-specific work (admission, runtime, capture, model,
@@ -603,7 +605,7 @@ export function demonstrationRecorderOf(recorder: ProjectRecorder): Demonstratio
 }
 
 export type DemonstrationErrorCode =
-  | 'CAPTURE_ACTIVE'
+  | 'VERIFY_UNAVAILABLE' | 'VERIFY_STATE' | 'CAPTURE_ACTIVE'
   | 'CAPTURE_STATE'
   | 'CAPTURE_UNKNOWN'
   | 'CAPTURE_NOT_READY'
@@ -638,6 +640,16 @@ export interface DemonstrationView {
   readonly question_id: string | null
   /** Safe provenance of the exchange that produced the shown interpretation (never a key or prompt). */
   readonly model: { readonly requested_model: string; readonly observed_model: string | null; readonly transport: string } | null
+  /** Host-owned verify-and-fix progress and finalized reduction; never a browser claim. */
+  readonly verification: {
+    readonly status: 'running' | 'finished'
+    readonly events: readonly VerifyEvent[]
+    readonly outcome: string | null
+    readonly primary_reason: string | null
+    readonly baseline: VerifyResult['baseline']
+    readonly candidate: VerifyResult['candidate']
+    readonly patch: VerifyResult['patch']
+  } | null
 }
 
 export interface ProjectDemonstration {
@@ -655,6 +667,8 @@ export interface ProjectDemonstration {
    * reused before the old producer settled.
    */
   invalidate(): Promise<void>
+  /** Host-owned verify-and-fix of the ready interpretation; at most once per run. */
+  verify(): Promise<DemonstrationOutcome<VerifyResult>>
   /** Sticky run cancellation; a response arriving later is discarded. */
   cancel(): void
   view(): DemonstrationView
@@ -669,6 +683,8 @@ export interface ProjectDemonstrationOptions {
   readonly loadSources: () => Promise<{ readonly sources: readonly PromptSourceFile[]; readonly admitted: ReadonlySet<string> }>
   /** The merged S5 per-run model session bound to the same run. */
   readonly model: ProjectModelSession
+  /** Launcher-owned verify-and-fix resources; absent, Verify is unavailable. */
+  readonly verifyPorts?: () => VerifyHostPorts
 }
 
 /** Values a replay or condition would have to type or compare; a redacted one can never be replayed. */
@@ -692,10 +708,12 @@ interface ClaimedReport {
 }
 
 export function createProjectDemonstration(options: ProjectDemonstrationOptions): ProjectDemonstration {
-  const { lifecycle, configurationId, startRecorder, loadSources, model } = options
+  const { lifecycle, configurationId, startRecorder, loadSources, model, verifyPorts } = options
   const runId = lifecycle.runId
   if (model.run_id !== runId || !projectUuidSchema.safeParse(configurationId).success) fail('RUN_ID_INVALID', 'The model session and configuration must belong to this run.')
   let recorder: DemonstrationRecorder | null = null
+  let verification: { readonly status: 'running' } | { readonly status: 'finished'; readonly result: VerifyResult } | null = null
+  const verifyEvents: VerifyEvent[] = []
   let sealed: SealedCapture | null = null
   let claimed: ClaimedReport | null = null
   let interpretation: Interpretation | null = null
@@ -973,6 +991,28 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
       else if (recorder !== null && !(await drop())) cancel()
     },
 
+    async verify() {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      if (verifyPorts === undefined) return refuse('VERIFY_UNAVAILABLE')
+      const claim = claimed
+      const ready = interpretation
+      if (verification !== null || claim === null || ready === null || ready.result.status !== 'ready' || lifecycle.state() !== 'interpretation-ready') return refuse('VERIFY_STATE')
+      if (busy) return refuse('CAPTURE_ACTIVE')
+      busy = true
+      verification = { status: 'running' }
+      try {
+        const result = await runVerifyAndFix(
+          { ...verifyPorts(), lifecycle, runId, capture: claim.sealed.capture, interpretation: ready, registry: claim.registry, sources: claim.sources, admitted: claim.admitted, model },
+          (event) => {
+            verifyEvents.push(event)
+          },
+        )
+        verification = { status: 'finished', result }
+        return { ok: true as const, value: result }
+      } finally {
+        busy = false
+      }
+    },
     cancel: () => cancel(),
 
     view(): DemonstrationView {
@@ -984,6 +1024,20 @@ export function createProjectDemonstration(options: ProjectDemonstrationOptions)
         report_sha256: sealed?.report_sha256 ?? claimed?.sealed.report_sha256 ?? null,
         interpretation: current,
         model: current === null ? null : interpretationModel,
+        verification:
+          verification === null
+            ? null
+            : verification.status === 'running'
+              ? { status: 'running' as const, events: [...verifyEvents], outcome: null, primary_reason: null, baseline: null, candidate: null, patch: null }
+              : {
+                  status: 'finished' as const,
+                  events: [...verifyEvents],
+                  outcome: verification.result.finalized.outcome,
+                  primary_reason: verification.result.finalized.primary_reason,
+                  baseline: verification.result.baseline,
+                  candidate: verification.result.candidate,
+                  patch: verification.result.patch,
+                },
         question_id: current?.result.status === 'clarify' ? current.result.question.question_id : null,
       })
     },
