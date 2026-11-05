@@ -271,6 +271,15 @@ function reportActions(body: string): Record<string, unknown>[] {
   throw new Error('the analysis request carried no action context')
 }
 
+function pngBlocks(body: string): Buffer[] {
+  const request = JSON.parse(body) as { input?: { content?: Record<string, unknown>[] }[] }
+  const prefix = 'data:image/png;base64,'
+  return (request.input?.[0]?.content ?? [])
+    .filter((block) => block.type === 'input_image')
+    .flatMap((block) => Object.values(block).filter((value): value is string => typeof value === 'string' && value.startsWith(prefix)))
+    .map((value) => Buffer.from(value.slice(prefix.length), 'base64'))
+}
+
 const testIds = (value: unknown): string[] => [...JSON.stringify(value ?? null).matchAll(/"kind":"test-id","value":"([A-Za-z0-9_.:-]+)"/g)].map((match) => match[1]!)
 
 test('serializes real fill, select, coalesced scroll and same-origin navigation in order and epoch, flushing at navigation and Finish', async () => {
@@ -324,12 +333,22 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     const captureId = started.body.capture_id as string
     await expect(target.getByTestId('task-search')).toBeVisible()
     expect(pathOf()).toBe('/')
+    // The host framed the whole target at explicit Start; this is the image clip it must use.
+    const frameBox = await page.getByTestId('project-target').evaluate((node) => {
+      const element = node as HTMLElement
+      const rect = element.getBoundingClientRect()
+      const left = rect.left + element.clientLeft
+      const top = rect.top + element.clientTop
+      const inside = rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight
+      return { inside, width: Math.floor(left + element.clientWidth) - Math.ceil(left), height: Math.floor(top + element.clientHeight) - Math.ceil(top) }
+    })
+    expect(frameBox.inside).toBe(true)
 
     // Epoch of the entry document.
     const search = target.getByTestId('task-search')
     const scroller = target.getByTestId('task-scroll')
     const filter = target.getByTestId('task-filter')
-    await search.fill('milk')
+    await search.fill('zq-a4b1-alpha')
     await scroller.hover()
     for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 120)
     const firstScroll = await settledScrollTop(scroller)
@@ -349,7 +368,7 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
 
     // A new document: the next epoch, then pending input drained only by Finish.
     await expect(target.getByTestId('task-search')).toBeVisible()
-    await target.getByTestId('task-search').fill('eggs')
+    await target.getByTestId('task-search').fill('zq-a4b1-omega')
     await target.getByTestId('task-scroll').hover()
     await page.mouse.wheel(0, 120)
     const lastScroll = await settledScrollTop(target.getByTestId('task-scroll'))
@@ -386,10 +405,20 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     ])
     expect(actions.map((entry) => entry.sequence)).toEqual(actions.map((_, index) => index + 1))
     const action = (index: number): Record<string, unknown> => actions[index]!.action as Record<string, unknown>
-    expect(action(0).value).toEqual({ kind: 'safe', text: 'milk' })
-    expect(action(9).value).toEqual({ kind: 'safe', text: 'eggs' })
+    // The launcher records under the default privacy policy (admitSafeValues=false): typed and
+    // selected values are redacted and never replayable. Safe-value retention remains an open gap.
+    const notAdmitted = { kind: 'redacted', reason: 'VALUE_NOT_ADMITTED' }
+    expect([action(0).value, action(2).value, action(9).value]).toEqual([notAdmitted, notAdmitted, notAdmitted])
+    expect(option.value.length).toBeGreaterThan(0)
     expect([action(1).y, action(5).y, action(10).y]).toEqual([firstScroll, secondScroll, lastScroll])
-    expect([option.value, option.label]).toContain((action(2).value as Record<string, unknown>).option)
+    for (const raw of ['zq-a4b1-alpha', 'zq-a4b1-omega']) expect(body.includes(raw)).toBe(false)
+    expect((JSON.parse(body) as { store?: unknown }).store).toBe(false)
+    const pngs = pngBlocks(body)
+    expect(pngs.length).toBeGreaterThan(0)
+    for (const png of pngs) {
+      expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([frameBox.width, frameBox.height])
+    }
   } finally {
     await instance?.close()
     await rm(config.root, { recursive: true, force: true })
