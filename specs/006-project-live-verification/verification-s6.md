@@ -338,3 +338,22 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
   - Labelled supporting tests (`project-analysis`, `project-studio`, `project-lifecycle`): the single explicit clarification and re-analysis budget, cancel after the request was sent, no late completion, and no correction before the host baseline gate.
 - **T030 remains OPEN.** Interpretation and clarification rendering have not been exercised in a real browser; that needs a valid labelled reply bound to the actual prompt citations and replay. T032 and T033 remain OPEN. T026 remains OPEN (decoy/descendant frames and explicit overflow/unsupported actions are deferred to integrated E).
 - Logs: `s6-unit-b/`.
+
+## S6 unit B2 — real interpretation and clarification in the Studio; T032 audit
+
+- Baseline 5d61818.
+- `1346e93` fix(studio): the panel no longer says "Nothing has been sent yet" once Analyze starts; while analyzing it states that the report and description are being sent. The pre-send disclosure now covers the optional description and that one clarification answer is sent with the report context for one re-analysis. Cancel run is shown while an answer is pending.
+- `d730098` and `5d66fd9` test:
+  - New real headed journey: UI Start, a real target click and Finish produce the disclosure with 0 exchanges. Explicit Analyze returns the labelled prompt-bound clarification (question ID from the actual prompt binding; citation = an image `observation_id` from the actual prompt). One answer keeps focus. The re-analysis returns ready with a replay built from the capture's own viewport (960x490x1) and recorded checkbox locator.
+  - The panel shows the problem, intended behavior, the single condition marked as the task condition, no editable assertion control, the model line `Requested muse-spark-1.3 · observed muse-spark-1.3 · labelled test transport, not a live provider`, and Verify-and-fix disabled. Exactly 2 exchanges.
+  - Integration: closed-schema refusal of missing observed facts or intent (3 shapes, `PROMPT_OUTPUT_INVALID`), and a second question during the clarified re-analysis (`PROMPT_OUTPUT_CLARIFICATION_REPEATED`). Neither leaves a usable interpretation; no extra call is made.
+- Red, then corrected (test error, no product change): the first labelled reply passed the analysis-output schema (checked with a temporary, reverted probe) but returned the bare result. The analyze route refused it with `PROVIDER_RESPONSE_INVALID`, because the client's structured output wraps it as `{result}`.
+- Two tool-infrastructure exec errors happened before any command ran; state was verified clean afterwards.
+- Validation under the exact heavy lock:
+  - At d730098: `pnpm typecheck` 0, `pnpm build` 0; vitest `project-analysis` + `project-demonstration-ui`: 29 passed.
+  - At 5d66fd9: `tsc` 0; full `project-recording.spec.ts`: 8 passed (A4a, ordering, 3 races, 3 Studio journeys). 0 skipped, 0 retried.
+  - Original snapshots unchanged; `docker ps -aq` 46/46 IDs identical.
+- T030 marked complete: the real Studio panel covers capture, report, disclosure, explicit Analyze, clarification, re-analysis, read-only interpretation, model provenance, honest failure and revocation refresh, preserving focus and input.
+- T032 OPEN: no invalid-model-identity assertion was found in `project-analysis.test.ts`; every other listed negative is covered.
+- T031 (actual live), T033 and T026 remain OPEN for integrated E and the final gate.
+- Logs: `s6-unit-b2/`.
