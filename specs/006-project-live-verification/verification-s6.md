@@ -221,3 +221,28 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
   - The A4a case's `selectOption` is untrusted and was never recorded; its "native select" wording is corrected here.
 - Validation under the exact heavy lock: `pnpm typecheck` 0 and `pnpm build` 0 at 271b2e3; `tsc --noEmit` 0 at bb95f0f. RED: serializes  1 failed  (see order-3.log); regressions not run. `docker ps -aq` 46 IDs unchanged: yes.
 - T026 and T029 remain OPEN (A4b2 races, overflow and frames). Logs: `s6-unit-a4b1-scroll/`.
+
+## S6 unit A4b1-CLICK — source of the extra task-item click (causal; ordering case still RED)
+
+- Baseline cdcdd05 (parent-accepted 35/35). Temporary uncommitted probes (6 runs), each reverted with `git checkout` and verified clean.
+- With `DEBUG=pw:api` and absolute timestamps:
+  - 25.955: the recorder's `select` action image starts (`taking page screenshot`).
+  - 26.009: Playwright performs the show-archive click.
+  - 26.014: `<li data-testid=task-item task-5> intercepts pointer events`, then `retrying click action`.
+  - 26.032: Studio scrolls to 200, a consequence of the retry, not the cause.
+- Recorder-side click log: the mis-hit reached the target at frame-local (559,321). That is the main-viewport point of the button centre (frame origin 127,232 + 432,89), delivered without the frame transform. It hit `li task-5` (y=310). Correct clicks arrived at (432,89).
+  - The recorder's listener, registered before Playwright's hit-target interceptor, records that genuine trusted click. Playwright then blocks it from the app and retries.
+  - With low-overhead listeners the mis-hit was deterministic (4/4). An evaluation-heavy probe that delayed the click past the capture passed.
+- Interventions (temporary):
+  - Action images disabled: ordering case **2/2 passed**, 0 interceptions, all downstream report, redaction and PNG assertions green.
+  - Only Playwright `mask` removed: 2/2 failed.
+  - Only `style`/`caret` removed: 2/2 failed.
+  - So the trigger is the in-flight main-page screenshot itself, with the cross-site target frame (Studio 127.0.0.1 vs target localhost, a separate site). Masks and styles are not the trigger.
+- Decision needed (not a minimal patch): action-image capture overlapping input can misdirect trusted pointer input into the target. This would affect real users too, so it is not only a test artifact. Options for the parent:
+  - capture action images only at host-quiet points
+  - expose a host capture-idle signal and pace input to it
+  - a different capture path for the cross-site frame
+  - The isolation boundary, the privacy guard and the recorder's trusted-event fidelity must stay, and recorded clicks must not be filtered out.
+- `7754ab2` test: the A4a journey no longer claims select coverage from untrusted `selectOption`.
+- Validation under the exact heavy lock: `tsc` 0 at 7754ab2; full `project-recording.spec.ts` at 7754ab2:  1 failed  1 passed (10.6s) (A4a passes; ordering case fails on the extra click). `docker ps -aq` 46 IDs unchanged: yes. No product change in this unit.
+- T026 and T029 remain OPEN. Logs: `s6-unit-a4b1-click/`.
