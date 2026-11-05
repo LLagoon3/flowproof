@@ -212,11 +212,18 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
 
       {(phase === 'ready' || phase === 'analyzing' || (phase === 'discarding' && reportSha !== null)) && (
         <>
-          <p data-testid="demonstration-report">Report sealed ({reportSha?.slice(0, 12)}). Nothing has been sent yet.</p>
-          <p data-testid="demonstration-disclosure">
-            Analyze sends this sealed report once to the configured model: your recorded actions with typed and selected values redacted, screenshots of the
-            project frame only, relevant errors and the admitted project source files. Nothing else is sent, and nothing is sent until you choose Analyze.
+          <p data-testid="demonstration-report">
+            {phase === 'analyzing'
+              ? `Report sealed (${reportSha?.slice(0, 12)}). Analyzing: the report and your description are being sent to the configured model.`
+              : `Report sealed (${reportSha?.slice(0, 12)}). Nothing has been sent yet.`}
           </p>
+          {phase !== 'analyzing' && (
+            <p data-testid="demonstration-disclosure">
+              Analyze sends this sealed report to the configured model: your recorded actions with typed and selected values redacted, screenshots of the
+              project frame only, relevant errors, the admitted project source files and your optional description. If the model asks one clarifying question,
+              your answer is sent with this report context for one re-analysis. Nothing else is sent, and nothing is sent until you choose Analyze.
+            </p>
+          )}
           <label>
             Describe the problem (optional)
             <textarea data-testid="demonstration-description" maxLength={1000} value={description} onChange={(event) => setDescription(event.target.value)} disabled={busy} />
@@ -270,10 +277,16 @@ export function DemonstrationPanel({ configurationId, outputSha256, modelConfigu
             Your answer (one answer; FlowProof re-analyzes once)
             <textarea data-testid="demonstration-answer" maxLength={1000} value={answer} onChange={(event) => setAnswer(event.target.value)} disabled={busy} />
           </label>
+          {phase === 'answering' && <p role="status">Sending your answer with the report context for one re-analysis.</p>}
           <div className="demonstration__actions">
             <button type="button" data-testid="demonstration-answer-submit" onClick={() => void submitAnswer()} disabled={busy || answer.trim() === ''}>
               Send answer
             </button>
+            {phase === 'answering' && (
+              <button type="button" data-testid="demonstration-cancel" onClick={() => void cancelRun()}>
+                Cancel run
+              </button>
+            )}
           </div>
         </div>
       )}
