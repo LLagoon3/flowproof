@@ -276,3 +276,38 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
   - Narrow viewports below about 40rem are not designed for.
   - Redacted values that are rendered cannot complete under the default policy.
 - T026 and T029 remain OPEN for A4b2 (races, overflow/unsupported, decoy/descendant frames). Logs: `s6-unit-a4b1-stage/`.
+
+## S6 unit A4b2-RACES — real launcher Finish races and T026/T029 evidence matrix
+
+- Baseline 65faed2 (parent-accepted 36/36). Test-only commits `c97578b` and `b6db1bc` in `tests/e2e/project-recording.spec.ts`. No product change.
+- **Scheduling attribution:** CONTROLLED real-browser scheduling, not natural timing. The test wraps the launcher-owned `page.screenshot` call, waits until the click's real action image has completed, then holds the next call: the real end image that Finish makes inside its exclusive section. It issues the competing guarded request from the launched page (launch cookie and Origin), then releases the hold so the original screenshot runs. Recorder, image, guard, mask and privacy paths are untouched.
+  - For revocation, synchronization is observable: the old run's `GET` turns 404 before release.
+  - Default privacy, the origin-anchored live iframe, action images and site isolation are retained.
+  - The labelled `test_transport` (synthetic key) records 0 exchanges in every race.
+- **Finish x Discard:** Discard while Finish is pending returns 409 `CAPTURE_ACTIVE` (valid serialization). Finish then returns 200 `ready` with a digest. The explicit Discard retry returns 200 `discarded`, and the run view shows `demonstration-ready` with no capture, report or digest. Finish and Analyze afterwards return 404 `CAPTURE_UNKNOWN`.
+- **Finish x cancel:** cancel returns 202. The pending Finish returns 409 `RUN_NOT_ACCEPTING`. The run view shows `finalizing` (cancel -> finalizing -> non-success terminal per the data model) with no digest or interpretation and a report that is not `sealed`. Finish, Discard, Analyze and a new Start all return 409 `RUN_NOT_ACCEPTING` (sticky).
+- **Finish x configuration revocation:** a guarded `POST /api/project/configuration` with the confirmed identity revokes synchronously.
+  - The pending Finish returns 409 `CAPTURE_INVALIDATED`; the configuration returns 200 with a new id.
+  - The old run returns 404 `RUN_UNKNOWN`; old-capture Finish, Discard and Analyze return 404 `CAPTURE_UNKNOWN`.
+  - Preparation becomes `idle`, and the runtime-label containers are back to the pre-launch set, so the target is released.
+  - Start with the old id returns 409 `CONFIGURATION_STALE`; with the new id, 409 `PROJECT_NOT_PREPARED`.
+  - Studio UI refresh after revocation is UNVERIFIED and is left to unit B.
+- A wrong hypothesis was corrected: the post-cancel state was first expected to start with `cancel`; the actual and specified state is `finalizing`.
+- **Validation under the exact heavy lock at b6db1bc:**
+  - `tsc --noEmit` 0.
+  - Full `project-recording.spec.ts`: 5 passed (A4a, ordering, 3 races).
+  - The 3 race cases with `--repeat-each=3`: 9 passed. 0 skipped, 0 retried.
+  - Original-snapshot assertions passed. `docker ps -aq` 46/46 IDs identical.
+- **Evidence matrix.** "Real" means the actual launcher; "fake" means labelled service/route tests (`tests/integration/project-analysis.test.ts`, `tests/contract/project-studio.test.ts`), which are supporting only.
+  - T026 navigation/input/scroll ordering and epochs: real (A4b1-STAGE).
+  - T026 Finish/Discard/cancel races: real, controlled scheduling (this unit); fake as support. Natural-timing races are not claimed.
+  - T026 no report reuse after Discard: real (A4a, races).
+  - T026 no model request before Analyze: real (A4a, A4b1, races).
+  - T026 no unrelated frame data: Studio exclusion is real (A4b1); decoy and descendant frames are OPEN (A4b2-FRAMES).
+  - T026 no silent completion after overflow or unsupported actions: only image-sensitive-text to `unsupported` has been observed (A4b1-SCROLL); explicit overflow and unsupported actions are OPEN (A4b2-LIMITS).
+  - T029 sealed report sent only on explicit Analyze: real (A4b1 seam).
+  - T029 one active attempt: real (`CAPTURE_ACTIVE`).
+  - T029 sticky cancel before any send: real. Cancel after data may have been sent: fake only.
+  - T029 configuration revocation: real (API), UI refresh unverified.
+  - T029 one user-triggered re-analysis, clarification, and no correction before the baseline gate: fake or OPEN (unit B / T053).
+- T026 and T029 remain OPEN. Logs: `s6-unit-a4b2-races/`.
