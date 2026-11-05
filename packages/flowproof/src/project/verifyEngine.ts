@@ -1,3 +1,5 @@
+import { access } from 'node:fs/promises'
+
 import type { Browser } from 'playwright'
 
 import type { RedactedValueRegistry } from '../capture/projectPrivacy.js'
@@ -9,7 +11,7 @@ import type { FrozenReplay, ReplayExecutionResult, ReplayPhase } from '../verify
 import { createReplayImageCollector } from '../verify/projectReplayImages.js'
 import type { ReplayImageEvidence } from '../verify/projectReplayImages.js'
 import type { AdmittedProject } from './admission.js'
-import { newProjectUuid } from './contracts.js'
+import { newProjectUuid, projectCheckId, projectDigest } from './contracts.js'
 import type { DemonstrationCapture, ExecutionConfiguration, Interpretation, OriginalIntegrity } from './contracts.js'
 import type { FinalizedProjectRun, ProjectRunLifecycle } from './run.js'
 import type { ProjectSnapshot } from './snapshot.js'
@@ -40,6 +42,8 @@ export interface VerifyHostPorts {
   serveCandidate(copy: ProjectSnapshot, signal: AbortSignal): Promise<CandidateServing>
   /** Serves the prepared baseline again and removes candidate output; true when clean. */
   restoreBaseline(): Promise<boolean>
+  /** True only when no candidate output is retained and the baseline output is served. */
+  candidateReleased(): Promise<boolean>
   /** Re-verifies the original repository against its admitted baseline. */
   originalIntegrity(): Promise<OriginalIntegrity>
 }
@@ -100,9 +104,22 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     lifecycle.recordCheck({ id, status: passed ? 'passed' : 'failed', phase, reason, evidence_ids: evidence.slice(0, 16) })
   }
 
+  // Each engine-owned resource is registered with the lifecycle before it can exist, so
+  // finalization verifies its release and a failed cleanup decides the authoritative outcome.
+  const once = (work: () => Promise<void>): (() => Promise<void>) => {
+    let done: Promise<void> | null = null
+    return () => (done ??= work())
+  }
+  const own = (kind: Parameters<ProjectRunLifecycle['own']>[0]['kind'], label: string, release: () => Promise<void>, verifyReleased: () => Promise<boolean>): (() => Promise<void>) => {
+    const released = once(release)
+    lifecycle.own({ kind, label, release: released, verifyReleased })
+    return released
+  }
+  const halted = (): boolean => lifecycle.snapshot().cancel_requested || lifecycle.state() === 'finalizing' || lifecycle.state() === 'terminal'
+  const releases: Array<() => Promise<void>> = []
+
   let browser: Browser | null = null
   let copy: ProjectSnapshot | null = null
-  let servedCandidate = false
   let baseline: ReplaySummary | null = null
   let candidate: ReplaySummary | null = null
   let patch: VerifyResult['patch'] = null
@@ -155,7 +172,14 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     check('definition_frozen', true, 'definition', 'DEFINITION_FROZEN')
     emit('definition', 'passed')
 
+    if (halted()) return
+    const browserRelease = own('browser-context', 'verify-browser', async () => { await browser?.close() }, async () => browser === null || !browser.isConnected())
+    releases.push(browserRelease)
     browser = await ports.openBrowser()
+    if (halted()) return
+    const definitionBefore = projectDigest(frozen.definition)
+    const configurationBefore = projectDigest(ports.configuration)
+    const sourcesBefore = projectDigest(ports.sources)
     lifecycle.transition('baseline-replay')
     emit('baseline', 'started')
     const base = await replay(frozen, 'baseline', ports.baselineBuildSha256)
@@ -176,6 +200,7 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     emit('baseline', 'passed')
 
     // The single correction request, unlocked only by the host-proved intended failure.
+    if (halted()) return
     lifecycle.transition('correcting')
     emit('correction', 'started')
     const operation = lifecycle.beginOperation('provider')
@@ -221,7 +246,10 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     check('correction_generated', true, 'correction', 'CORRECTION_RECEIVED')
     emit('correction', 'passed')
 
+    if (halted()) return
     emit('patch', 'started')
+    let ownedCopy: ProjectSnapshot | null = null
+    releases.push(own('temp-directory', 'candidate-copy', async () => { await ownedCopy?.remove() }, async () => ownedCopy === null || (await access(ownedCopy.root).then(() => false, () => true))))
     const admission = admitProjectPatch(ports.project, {
       runId: ports.runId,
       baselineCommit: ports.project.context.baseline_commit,
@@ -239,16 +267,30 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
       return
     }
     copy = applied.copy
+    ownedCopy = applied.copy
+    const appliedFiles = applied.files
     patch = Object.freeze({ target_paths: Object.freeze([...corrected.output.target_paths]), summary: corrected.output.summary })
     check('candidate_applied', true, 'candidate', 'CANDIDATE_APPLIED_TO_COPY')
     emit('patch', 'passed')
 
+    if (halted()) return
+    const copyBefore = await applied.copy.verify(appliedFiles)
     lifecycle.transition('candidate-checking')
+    releases.push(
+      own(
+        'target-server',
+        'candidate-output',
+        async () => {
+          if (!(await ports.restoreBaseline())) throw new Error('BASELINE_RESTORE_FAILED')
+        },
+        () => ports.candidateReleased(),
+      ),
+    )
     emit('candidate-build', 'started')
     const buildOperation = lifecycle.beginOperation('build')
     const served = await ports.serveCandidate(copy, buildOperation.signal)
     for (const projectCheck of served.checks) {
-      lifecycle.recordCheck({ id: projectCheck.id, status: projectCheck.status, phase: 'candidate', reason: projectCheck.status === 'passed' ? 'CHECK_PASSED' : 'CHECK_NOT_PASSED' })
+      lifecycle.recordCheck({ id: projectCheckId(projectCheck.id), status: projectCheck.status, phase: 'candidate', reason: projectCheck.status === 'passed' ? 'CHECK_PASSED' : 'CHECK_NOT_PASSED' })
     }
     if (!served.ok) {
       buildOperation.fail(served.reason)
@@ -256,7 +298,6 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
       emit('candidate-build', 'failed', served.reason)
       return
     }
-    servedCandidate = true
     if (!buildOperation.complete()) {
       emit('candidate-build', 'failed', 'RUN_NOT_ACCEPTING')
       return
@@ -264,6 +305,7 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     check('candidate_build', true, 'candidate', 'CANDIDATE_BUILT')
     emit('candidate-build', 'passed')
 
+    if (halted()) return
     emit('candidate-replay', 'started')
     const next = await replay(frozen, 'candidate', served.outputSha256)
     candidate = summarize(next.result)
@@ -271,6 +313,16 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     const satisfied = next.result.outcome === 'conditions-satisfied'
     check('candidate_replay', satisfied, 'candidate', satisfied ? 'CONDITIONS_SATISFIED' : (next.result.reason ?? 'CONDITIONS_UNSATISFIED'), nextEvidence)
     check('evidence_bound', baseEvidence.length > 0 && nextEvidence.length > 0, 'candidate', baseEvidence.length > 0 && nextEvidence.length > 0 ? 'EVIDENCE_BOUND' : 'EVIDENCE_MISSING')
+    // Inputs: the candidate copy, frozen definition, configuration and sources are identical before
+    // the runtime build and after the candidate replay.
+    const copyAfter = await applied.copy.verify(appliedFiles)
+    const inputsSame =
+      copyBefore.ok &&
+      copyAfter.ok &&
+      projectDigest(frozen.definition) === definitionBefore &&
+      projectDigest(ports.configuration) === configurationBefore &&
+      projectDigest(ports.sources) === sourcesBefore
+    check('inputs_unchanged', inputsSame, 'candidate', inputsSame ? 'INPUTS_UNCHANGED' : 'INPUTS_CHANGED')
     emit('candidate-replay', satisfied ? 'passed' : 'failed', satisfied ? null : (next.result.reason ?? 'CONDITIONS_UNSATISFIED'))
   }
 
@@ -280,16 +332,13 @@ export async function runVerifyAndFix(ports: VerifyEnginePorts, onEvent: (event:
     emit('cleanup', 'failed', 'VERIFY_ENGINE_FAILED')
   }
 
-  // Cleanup and original-integrity evidence decide finalization; a provisional pass cannot hide them.
+  // Cleanup and original-integrity evidence decide finalization; a provisional pass cannot hide
+  // them. Every owned resource is released (candidate output, copy, browser) before the original is
+  // re-read; finalization then verifies each release, so any failure reaches the reduction.
   emit('cleanup', 'started')
   let clean = true
-  if (servedCandidate) clean = (await ports.restoreBaseline().catch(() => false)) && clean
-  const ownedCopy = copy as ProjectSnapshot | null
-  if (ownedCopy !== null) clean = (await ownedCopy.remove().then(() => true, () => false)) && clean
-  const ownedBrowser = browser as Browser | null
-  if (ownedBrowser !== null) clean = (await ownedBrowser.close().then(() => true, () => false)) && clean
+  for (const release of [...releases].reverse()) clean = (await release().then(() => true, () => false)) && clean
   const integrity: OriginalIntegrity = await ports.originalIntegrity().catch(() => 'unverified' as const)
-  check('original_unchanged', integrity === 'verified', 'finalization', integrity === 'verified' ? 'ORIGINAL_VERIFIED' : 'ORIGINAL_NOT_VERIFIED')
   emit('cleanup', clean ? 'passed' : 'failed', clean ? null : 'CLEANUP_INCOMPLETE')
   const finalized = await lifecycle.finalize({ originalIntegrity: integrity })
   return Object.freeze({ finalized, baseline, candidate, patch, events: Object.freeze([...events]) })
