@@ -339,10 +339,15 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
       const rect = element.getBoundingClientRect()
       const left = rect.left + element.clientLeft
       const top = rect.top + element.clientTop
-      const inside = rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight
-      return { inside, width: Math.floor(left + element.clientWidth) - Math.ceil(left), height: Math.floor(top + element.clientHeight) - Math.ceil(top) }
+      // The same content-box integer geometry the image guard applies.
+      const x = Math.ceil(left)
+      const y = Math.ceil(top)
+      const width = Math.floor(left + element.clientWidth) - x
+      const height = Math.floor(top + element.clientHeight) - y
+      const inside = x >= 0 && y >= 0 && x + width <= window.innerWidth && y + height <= window.innerHeight
+      return { inside, x, y, width, height, viewport: [window.innerWidth, window.innerHeight], scrollY: window.scrollY }
     })
-    expect(frameBox.inside).toBe(true)
+    expect(frameBox).toMatchObject({ inside: true })
 
     // Epoch of the entry document.
     const search = target.getByTestId('task-search')
