@@ -143,7 +143,7 @@ export function ProjectSetup() {
   const blocked = project.admission.state !== 'ready' || configuration.state === 'rejected'
 
   return (
-    <main className="project-setup" data-testid="project-setup" aria-labelledby="project-setup-title">
+    <main className={isReady ? 'project-setup project-setup--prepared' : 'project-setup'} data-testid="project-setup" aria-labelledby="project-setup-title">
       <header className="project-setup__header">
         <p className="project-setup__eyebrow">FlowProof · local project</p>
         <h1 id="project-setup-title">Review your project</h1>

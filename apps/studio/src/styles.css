@@ -1442,3 +1442,27 @@ code {
   border-radius: 0;
   background: #fff;
 }
+
+/*
+ * Prepared project stage: the live target frame's content box sits at viewport origin (0,0), with no
+ * border and a stable size, and every Studio element stays in the column to its right. A clipped
+ * page screenshot at a nonzero offset misroutes concurrent input into the separate-site frame; an
+ * origin-anchored clip does not. The layout follows readiness only, so a revoked or failed
+ * preparation returns to the ordinary setup page.
+ */
+.project-setup--prepared {
+  --project-stage-width: max(20rem, calc(100vw - 20rem));
+  max-width: none;
+  margin: 0;
+  padding-left: calc(var(--project-stage-width) + 1.5rem);
+}
+.project-setup--prepared .project-setup__target iframe {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: var(--project-stage-width);
+  height: min(68vh, 52rem);
+  min-height: 0;
+  border: 0;
+}
