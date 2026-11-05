@@ -153,7 +153,9 @@ test('records real target actions, seals an immutable report, discards it, and r
     expect(recording.status).toBe(200)
     expect(recording.body).toMatchObject({ run_id: runId, state: 'recording', capture_id: captureId, report: 'recording', report_sha256: null, interpretation: null })
 
-    // Real actions on the admitted target frame after the recorder's entry reset: click and native select.
+    // Real actions on the admitted target frame after the recorder's entry reset: a trusted click. The
+    // programmatic selectOption below dispatches untrusted events, which the recorder ignores, so this
+    // journey claims no select coverage; the report-content case below drives a trusted select.
     await expect(target.getByTestId('task-summary')).toHaveText('3 open tasks')
     await target.getByTestId('task-list').getByRole('checkbox').first().click()
     await expect(target.getByTestId('task-summary')).toHaveText('4 open tasks')
