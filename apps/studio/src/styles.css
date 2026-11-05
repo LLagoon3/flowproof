@@ -1438,6 +1438,57 @@ code {
   width: 100%;
   min-height: min(68vh, 52rem);
   border: 1px solid #dce1e8;
-  border-radius: 0.5rem;
+  /* Square corners: rounded clipping would place Studio pixels inside the captured target rectangle. */
+  border-radius: 0;
   background: #fff;
+}
+
+/*
+ * Prepared project stage: the live target frame's content box sits at viewport origin (0,0), with no
+ * border and a stable size, and every Studio element stays in the column to its right. A clipped
+ * page screenshot at a nonzero offset misroutes concurrent input into the separate-site frame; an
+ * origin-anchored clip does not. The layout follows readiness only, so a revoked or failed
+ * preparation returns to the ordinary setup page.
+ */
+.project-setup--prepared {
+  --project-stage-width: max(20rem, calc(100vw - 20rem));
+  max-width: none;
+  margin: 0;
+  padding-left: calc(var(--project-stage-width) + 1.5rem);
+}
+.project-setup--prepared .project-setup__target iframe {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: var(--project-stage-width);
+  height: min(68vh, 52rem);
+  min-height: 0;
+  border: 0;
+}
+
+/* Project demonstration panel (T030), in the host column beside the anchored target. */
+.demonstration {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.demonstration__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.demonstration textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  box-sizing: border-box;
+}
+.demonstration__conditions li[data-task-condition='true'] {
+  font-weight: 700;
+}
+
+/* Target input is locked while host-owned automatic verification runs; the frame stays in place. */
+.project-setup__target iframe.project-target--locked {
+  pointer-events: none;
+  outline: 2px dashed #8a94a6;
 }

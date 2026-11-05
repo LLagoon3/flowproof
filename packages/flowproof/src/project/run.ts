@@ -18,6 +18,17 @@ import {
   reduceProjectOutcome,
 } from './contracts.js'
 import type { AutomaticOperationKind, CheckPhase, CheckStatus, CleanupState, OriginalIntegrity, RunOutcome, RunState } from './contracts.js'
+import { createHash } from 'node:crypto'
+import type { RedactedValueRegistry } from '../capture/projectPrivacy.js'
+import type { ProjectRecorder, SealedCapture } from '../capture/projectRecorder.js'
+import { REDACTED } from '../evidence/sanitize.js'
+import type { ProjectModelErrorCode, ProjectModelSession } from '../model/projectClient.js'
+import { buildProjectAnalysisPrompt } from '../model/projectPrompt.js'
+import type { ProjectPromptErrorCode, PromptSourceFile } from '../model/projectPrompt.js'
+import { InterpretationSchema, PROJECT_SCHEMA_VERSION } from './contracts.js'
+import type { CaptureState, Interpretation } from './contracts.js'
+import { runVerifyAndFix } from './verifyEngine.js'
+import type { VerifyEvent, VerifyHostPorts, VerifyResult } from './verifyEngine.js'
 
 // The project-live run lifecycle and ownership skeleton (Spec 006 T009). It enforces the declared
 // run-state sequence and check statuses; phase-specific work (admission, runtime, capture, model,
@@ -556,6 +567,489 @@ export function createProjectRun(options: {
         automatic_remaining_ms: EXECUTION_LIMITS.aggregate_automatic_ms - elapsed,
         checks: Object.freeze(requiredIds.map((id) => checks.get(id) as RunCheck)),
         outcome: terminalResult?.outcome ?? null,
+      })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------------------
+// Demonstration capture and explicit analysis (T029 service foundation)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The launcher-owned recorder as the demonstration service drives it. Observations come only from
+ * the host recorder bound to the actual target frame (see `demonstrationRecorderOf`); nothing the
+ * browser uploads becomes a report.
+ */
+export interface DemonstrationRecorder {
+  readonly captureId: string
+  finish(): Promise<SealedCapture>
+  discard(): Promise<void>
+  detach(): Promise<void>
+  /** Claims the sealed ready report for analysis (Discard is refused afterwards) with its redaction registry. */
+  claim(): Promise<{ readonly sealed: SealedCapture; readonly registry: RedactedValueRegistry }>
+}
+
+/** Adapts the merged S3 recorder started on the launcher-owned target frame. */
+export function demonstrationRecorderOf(recorder: ProjectRecorder): DemonstrationRecorder {
+  return Object.freeze({
+    captureId: recorder.session.captureId,
+    finish: () => recorder.finish(),
+    discard: () => recorder.discard(),
+    detach: () => recorder.detach(),
+    claim: async () => {
+      const sealed = recorder.session.claimForAnalysis()
+      return { sealed, registry: recorder.session.analysisRegistry() }
+    },
+  })
+}
+
+export type DemonstrationErrorCode =
+  | 'VERIFY_UNAVAILABLE' | 'VERIFY_STATE' | 'CAPTURE_ACTIVE'
+  | 'CAPTURE_STATE'
+  | 'CAPTURE_UNKNOWN'
+  | 'CAPTURE_NOT_READY'
+  | 'CAPTURE_BINDING_MISMATCH'
+  | 'CAPTURE_FAILED'
+  | 'CAPTURE_INVALIDATED'
+  | 'CAPTURE_DISCARD_REFUSED'
+  | 'CLARIFICATION_STATE'
+  | 'CLARIFICATION_STALE'
+  | 'RUN_NOT_ACCEPTING'
+  | 'SOURCES_UNAVAILABLE'
+  | 'ANALYSIS_FAILED'
+  | 'INTERPRETATION_REDACTED_VALUE'
+  | 'INTERPRETATION_INVALID'
+  | ProjectPromptErrorCode
+  | ProjectModelErrorCode
+export type DemonstrationOutcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly code: DemonstrationErrorCode }
+
+/**
+ * Where the current report is: `claimed` was handed to analysis and is locked but no provider request
+ * carried it; `submitted` means a provider request with its bytes left the host. Neither is ever
+ * reported as deleted.
+ */
+export type DemonstrationReportState = 'none' | 'recording' | 'sealed' | 'claimed' | 'submitted'
+
+export interface DemonstrationView {
+  readonly state: RunState
+  readonly capture_id: string | null
+  readonly report: DemonstrationReportState
+  readonly report_sha256: string | null
+  readonly interpretation: Interpretation | null
+  readonly question_id: string | null
+  /** Safe provenance of the exchange that produced the shown interpretation (never a key or prompt). */
+  readonly model: { readonly requested_model: string; readonly observed_model: string | null; readonly transport: string } | null
+  /** True only when this host can run verify-and-fix. */
+  readonly verify_available: boolean
+  /** Host-owned verify-and-fix progress and finalized reduction; never a browser claim. */
+  readonly verification: {
+    readonly status: 'running' | 'finished'
+    readonly events: readonly VerifyEvent[]
+    readonly outcome: string | null
+    readonly primary_reason: string | null
+    readonly baseline: VerifyResult['baseline']
+    readonly candidate: VerifyResult['candidate']
+    readonly patch: VerifyResult['patch']
+  } | null
+}
+
+export interface ProjectDemonstration {
+  start(): Promise<DemonstrationOutcome<{ readonly capture_id: string }>>
+  finish(captureId: string): Promise<DemonstrationOutcome<{ readonly capture_id: string; readonly report_sha256: string | null; readonly state: CaptureState }>>
+  discard(captureId: string): Promise<DemonstrationOutcome<{ readonly capture_id: string }>>
+  /** The only path that submits a report: explicit, once per sealed report. */
+  analyze(captureId: string, input: { readonly description: string | null }): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>>
+  /** The single explicit clarification answer to the current question. */
+  clarify(questionId: string, answer: string): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>>
+  /**
+   * Settings/reset change: revokes every pending operation at once and deletes unclaimed evidence;
+   * once a report was claimed it cancels. It never waits on a pending producer: revoked work
+   * discards what it produced when it settles, and until then the service stays busy, so nothing is
+   * reused before the old producer settled.
+   */
+  invalidate(): Promise<void>
+  /** Starts the host-owned verify-and-fix of the ready interpretation; at most once per run. Progress is read from `view()`. */
+  verify(): Promise<DemonstrationOutcome<{ readonly started: true }>>
+  /** Sticky run cancellation; a response arriving later is discarded. */
+  cancel(): void
+  view(): DemonstrationView
+}
+
+export interface ProjectDemonstrationOptions {
+  readonly lifecycle: ProjectRunLifecycle
+  readonly configurationId: string
+  /** Starts the host recorder on the launcher-owned target frame of this run. */
+  readonly startRecorder: () => Promise<DemonstrationRecorder>
+  /** Admitted `src/` text and its allow-list from the frozen baseline snapshot. */
+  readonly loadSources: () => Promise<{ readonly sources: readonly PromptSourceFile[]; readonly admitted: ReadonlySet<string> }>
+  /** The merged S5 per-run model session bound to the same run. */
+  readonly model: ProjectModelSession
+  /** Launcher-owned verify-and-fix resources; absent, Verify is unavailable. */
+  readonly verifyPorts?: () => VerifyHostPorts
+}
+
+/** Values a replay or condition would have to type or compare; a redacted one can never be replayed. */
+function replaysRedacted(result: Interpretation['result'], registry: RedactedValueRegistry): boolean {
+  if (result.status !== 'ready') return false
+  const texts = [
+    ...result.replay.actions.flatMap((action) =>
+      action.op === 'fill' || action.op === 'select' ? [action.value] : action.op === 'wait' && action.until.kind === 'text' ? [action.until.text] : [],
+    ),
+    ...result.expected_conditions.flatMap((condition) => (condition.kind === 'text' ? [condition.text] : condition.kind === 'form-value' ? [condition.value] : [])),
+  ]
+  return texts.some((text) => text.includes(REDACTED) || registry.contains(text))
+}
+
+interface ClaimedReport {
+  readonly sealed: SealedCapture
+  readonly registry: RedactedValueRegistry
+  readonly sources: readonly PromptSourceFile[]
+  readonly admitted: ReadonlySet<string>
+  readonly description: string | null
+}
+
+export function createProjectDemonstration(options: ProjectDemonstrationOptions): ProjectDemonstration {
+  const { lifecycle, configurationId, startRecorder, loadSources, model, verifyPorts } = options
+  const runId = lifecycle.runId
+  if (model.run_id !== runId || !projectUuidSchema.safeParse(configurationId).success) fail('RUN_ID_INVALID', 'The model session and configuration must belong to this run.')
+  let recorder: DemonstrationRecorder | null = null
+  let verification: { readonly status: 'running' } | { readonly status: 'finished'; readonly result: VerifyResult } | null = null
+  const verifyEvents: VerifyEvent[] = []
+  let sealed: SealedCapture | null = null
+  let claimed: ClaimedReport | null = null
+  let interpretation: Interpretation | null = null
+  let interpretationModel: DemonstrationView['model'] = null
+  let report: DemonstrationReportState = 'none'
+  let busy = false
+  // Every invalidation or cancellation bumps the generation; work started under an older one is
+  // revoked after each await, discards what it produced and never publishes a success.
+  let generation = 0
+
+  const refuse = (code: DemonstrationErrorCode): { readonly ok: false; readonly code: DemonstrationErrorCode } => ({ ok: false, code })
+  const accepting = (): boolean => {
+    const state = lifecycle.state()
+    return state !== 'finalizing' && state !== 'terminal'
+  }
+  const owned = (captureId: string): boolean => recorder !== null && recorder.captureId === captureId
+  const revoked = (gen: number): boolean => gen !== generation || !accepting()
+  const stopped = (): DemonstrationErrorCode => (accepting() ? 'CAPTURE_INVALIDATED' : 'RUN_NOT_ACCEPTING')
+  const exclusive = <T>(work: (gen: number) => Promise<T>): Promise<T> => {
+    busy = true
+    return work(generation).finally(() => {
+      busy = false
+    })
+  }
+
+  /** True only when the recorder itself confirmed the discard; otherwise it is only detached. */
+  const retire = async (target: DemonstrationRecorder): Promise<boolean> => {
+    try {
+      await target.discard()
+      return true
+    } catch {
+      await target.detach().catch(() => undefined)
+      return false
+    }
+  }
+
+  /** Revokes the current unclaimed recorder: deletes its evidence and returns the run to demonstration. */
+  const drop = async (): Promise<boolean> => {
+    const current = recorder
+    recorder = null
+    sealed = null
+    report = 'none'
+    const discarded = current === null ? true : await retire(current)
+    const state = lifecycle.state()
+    if (state === 'recording' || state === 'capture-ready') lifecycle.transition('demonstration-ready')
+    return discarded
+  }
+
+  function cancel(): void {
+    generation += 1
+    lifecycle.requestCancel()
+    model.cancel()
+    const current = recorder
+    if (current !== null && claimed === null) void retire(current)
+    else if (current !== null) void current.detach().catch(() => undefined)
+  }
+
+  async function analyzeOnce(gen: number, clarification: { readonly prior: Interpretation; readonly answer: string } | null): Promise<DemonstrationOutcome<{ readonly interpretation: Interpretation }>> {
+    const claim = claimed!
+    // The analysis state and its provider operation start before the prompt is built, so a prompt
+    // that cannot be built is an explicit fail-closed stop of this claimed, unsent report.
+    let operation: RunOperation
+    try {
+      lifecycle.transition('analyzing')
+      operation = lifecycle.beginOperation('provider')
+    } catch {
+      if (accepting()) cancel()
+      return refuse('RUN_NOT_ACCEPTING')
+    }
+    const onAbort = (): void => model.cancel()
+    operation.signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      const answerId = newProjectUuid()
+      const built = buildProjectAnalysisPrompt({
+        run_id: runId,
+        invocation_id: newProjectUuid(),
+        question_id: newProjectUuid(),
+        capture: claim.sealed.capture,
+        description: claim.description,
+        sources: claim.sources,
+        admitted_source_paths: claim.admitted,
+        images: claim.sealed.artifacts,
+        registry: claim.registry,
+        clarification: clarification === null ? null : { prior: clarification.prior, answer_id: answerId, answer: clarification.answer },
+      })
+      if (!built.ok) {
+        operation.fail(built.error.code)
+        return refuse(built.error.code)
+      }
+      let result: Awaited<ReturnType<ProjectModelSession['analyze']>>
+      try {
+        result = await model.analyze(built.value)
+      } catch {
+        const cancelled = operation.signal.aborted
+        operation.fail('ANALYSIS_FAILED')
+        return refuse(cancelled ? 'RUN_NOT_ACCEPTING' : 'ANALYSIS_FAILED')
+      }
+      if ((result.invocation?.request_bytes ?? 0) > 0) report = 'submitted'
+      if (!result.ok) {
+        operation.fail(result.error.code)
+        return refuse(result.error.code)
+      }
+      if (replaysRedacted(result.output, claim.registry)) {
+        operation.fail('INTERPRETATION_REDACTED_VALUE')
+        return refuse('INTERPRETATION_REDACTED_VALUE')
+      }
+      const record = InterpretationSchema.safeParse({
+        schema_version: PROJECT_SCHEMA_VERSION,
+        interpretation_id: newProjectUuid(),
+        run_id: runId,
+        invocation_id: result.invocation.invocation_id,
+        capture_id: claim.sealed.capture.capture_id,
+        report_sha256: claim.sealed.report_sha256,
+        input_sha256: result.invocation.input_sha256,
+        analysis_attempt: clarification === null ? 1 : 2,
+        clarification:
+          clarification === null || clarification.prior.result.status !== 'clarify'
+            ? null
+            : { question_id: clarification.prior.result.question.question_id, answer_id: answerId, answer_sha256: createHash('sha256').update(clarification.answer).digest('hex') },
+        result: result.output,
+      })
+      if (!record.success) {
+        operation.fail('INTERPRETATION_INVALID')
+        return refuse('INTERPRETATION_INVALID')
+      }
+      if (record.data.result.status === 'unsupported') {
+        // An explicit unsupported interpretation stops the run; it is shown, never replayed.
+        if (!operation.fail('INTERPRETATION_UNSUPPORTED') || gen !== generation) return refuse('RUN_NOT_ACCEPTING')
+        interpretation = record.data
+        interpretationModel = Object.freeze({ requested_model: result.invocation.requested_model, observed_model: result.invocation.observed_model, transport: result.invocation.transport })
+        return { ok: true, value: { interpretation: record.data } }
+      }
+      // A late completion after cancellation or revocation is never accepted.
+      if (operation.signal.aborted || gen !== generation || !operation.complete() || !accepting()) return refuse('RUN_NOT_ACCEPTING')
+      interpretation = record.data
+      interpretationModel = Object.freeze({ requested_model: result.invocation.requested_model, observed_model: result.invocation.observed_model, transport: result.invocation.transport })
+      lifecycle.transition(record.data.result.status === 'clarify' ? 'clarification-required' : 'interpretation-ready')
+      return { ok: true, value: { interpretation: record.data } }
+    } finally {
+      operation.signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  return Object.freeze({
+    async start() {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      if (busy || recorder !== null) return refuse('CAPTURE_ACTIVE')
+      if (lifecycle.state() !== 'demonstration-ready') return refuse('CAPTURE_STATE')
+      return exclusive(async (gen) => {
+        let next: DemonstrationRecorder
+        try {
+          next = await startRecorder()
+        } catch {
+          return refuse(revoked(gen) ? stopped() : 'CAPTURE_FAILED')
+        }
+        if (revoked(gen)) {
+          await retire(next)
+          return refuse(stopped())
+        }
+        recorder = next
+        report = 'recording'
+        lifecycle.transition('recording')
+        return { ok: true as const, value: { capture_id: next.captureId } }
+      })
+    },
+
+    async finish(captureId: string) {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
+      if (sealed !== null) return { ok: true as const, value: { capture_id: captureId, report_sha256: sealed.report_sha256, state: 'ready' as CaptureState } }
+      if (busy) return refuse('CAPTURE_ACTIVE')
+      const current = recorder!
+      return exclusive(async (gen) => {
+        let result: SealedCapture
+        try {
+          result = await current.finish()
+        } catch {
+          if (revoked(gen)) {
+            await retire(current)
+            return refuse(stopped())
+          }
+          await drop()
+          return refuse('CAPTURE_FAILED')
+        }
+        if (revoked(gen) || recorder !== current) {
+          await retire(current)
+          return refuse(stopped())
+        }
+        const capture = result.capture
+        const bound =
+          capture.capture_id === captureId &&
+          capture.run_id === runId &&
+          capture.configuration_id === configurationId &&
+          (capture.state !== 'ready' || capture.seal?.report_sha256 === result.report_sha256)
+        if (!bound) {
+          await drop()
+          return refuse('CAPTURE_BINDING_MISMATCH')
+        }
+        if (capture.state !== 'ready') {
+          // Incomplete or unsupported: disclosed, never presented as a ready report.
+          await drop()
+          return { ok: true as const, value: { capture_id: captureId, report_sha256: null, state: capture.state } }
+        }
+        sealed = result
+        report = 'sealed'
+        lifecycle.transition('capture-ready')
+        return { ok: true as const, value: { capture_id: captureId, report_sha256: result.report_sha256, state: capture.state } }
+      })
+    },
+
+    async discard(captureId: string) {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
+      if (claimed !== null) return refuse('CAPTURE_STATE')
+      if (busy) return refuse('CAPTURE_ACTIVE')
+      if (!(await drop())) {
+        // Not confirmed deleted: never reported as discarded; the run stops instead.
+        cancel()
+        return refuse('CAPTURE_DISCARD_REFUSED')
+      }
+      return { ok: true as const, value: { capture_id: captureId } }
+    },
+
+    async analyze(captureId: string, input: { readonly description: string | null }) {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      if (!owned(captureId)) return refuse('CAPTURE_UNKNOWN')
+      if (claimed !== null || sealed === null || lifecycle.state() !== 'capture-ready') return refuse('CAPTURE_STATE')
+      if (busy) return refuse('CAPTURE_ACTIVE')
+      const current = recorder!
+      const expected = sealed
+      const description = input?.description ?? null
+      return exclusive(async (gen) => {
+        // Sources are loaded before the irreversible claim, so their failure leaves an unclaimed report.
+        let loaded: Awaited<ReturnType<ProjectDemonstrationOptions['loadSources']>>
+        try {
+          loaded = await loadSources()
+        } catch {
+          return refuse(revoked(gen) ? stopped() : 'SOURCES_UNAVAILABLE')
+        }
+        if (revoked(gen) || recorder !== current) return refuse(stopped())
+        let claim: Awaited<ReturnType<DemonstrationRecorder['claim']>>
+        try {
+          claim = await current.claim()
+        } catch {
+          return refuse(revoked(gen) ? stopped() : 'CAPTURE_NOT_READY')
+        }
+        // From here the report is claimed: it is never deleted as if unsent, and any stop is fail-closed.
+        claimed = Object.freeze({ sealed: claim.sealed, registry: claim.registry, sources: loaded.sources, admitted: loaded.admitted, description })
+        report = 'claimed'
+        if (revoked(gen)) {
+          if (accepting()) cancel()
+          return refuse('RUN_NOT_ACCEPTING')
+        }
+        if (claim.sealed.report_sha256 !== expected.report_sha256) {
+          cancel()
+          return refuse('CAPTURE_BINDING_MISMATCH')
+        }
+        return analyzeOnce(gen, null)
+      })
+    },
+
+    async clarify(questionId: string, answer: string) {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      const prior = interpretation
+      if (lifecycle.state() !== 'clarification-required' || claimed === null || prior === null || prior.result.status !== 'clarify') return refuse('CLARIFICATION_STATE')
+      if (questionId !== prior.result.question.question_id) return refuse('CLARIFICATION_STALE')
+      if (busy) return refuse('CAPTURE_ACTIVE')
+      return exclusive((gen) => analyzeOnce(gen, { prior, answer }))
+    },
+
+    async invalidate() {
+      if (!accepting()) return
+      generation += 1
+      if (claimed !== null) cancel()
+      else if (recorder !== null && !(await drop())) cancel()
+    },
+
+    async verify() {
+      if (!accepting()) return refuse('RUN_NOT_ACCEPTING')
+      if (verifyPorts === undefined) return refuse('VERIFY_UNAVAILABLE')
+      const claim = claimed
+      const ready = interpretation
+      if (verification !== null || claim === null || ready === null || ready.result.status !== 'ready' || lifecycle.state() !== 'interpretation-ready') return refuse('VERIFY_STATE')
+      if (busy) return refuse('CAPTURE_ACTIVE')
+      busy = true
+      verification = { status: 'running' }
+      // Runs in the background; an unexpected failure still finalizes the run as non-success, so
+      // the host view can never stay 'running'.
+      void (async () => {
+        try {
+          const result = await runVerifyAndFix(
+            { ...verifyPorts(), lifecycle, runId, capture: claim.sealed.capture, interpretation: ready, registry: claim.registry, sources: claim.sources, admitted: claim.admitted, model },
+            (event) => {
+              verifyEvents.push(event)
+            },
+          )
+          verification = { status: 'finished', result }
+        } catch {
+          verifyEvents.push(Object.freeze({ stage: 'cleanup' as const, status: 'failed' as const, reason: 'VERIFY_ENGINE_FAILED' }))
+          const finalized = await lifecycle.finalize({ originalIntegrity: 'unverified' })
+          verification = { status: 'finished', result: Object.freeze({ finalized, baseline: null, candidate: null, patch: null, events: Object.freeze([...verifyEvents]) }) }
+        } finally {
+          busy = false
+        }
+      })()
+      return { ok: true as const, value: { started: true as const } }
+    },
+    cancel: () => cancel(),
+
+    view(): DemonstrationView {
+      const current = interpretation
+      return Object.freeze({
+        state: lifecycle.state(),
+        capture_id: recorder?.captureId ?? null,
+        report,
+        report_sha256: sealed?.report_sha256 ?? claimed?.sealed.report_sha256 ?? null,
+        interpretation: current,
+        model: current === null ? null : interpretationModel,
+        verify_available: verifyPorts !== undefined,
+        verification:
+          verification === null
+            ? null
+            : verification.status === 'running'
+              ? { status: 'running' as const, events: [...verifyEvents], outcome: null, primary_reason: null, baseline: null, candidate: null, patch: null }
+              : {
+                  status: 'finished' as const,
+                  events: [...verifyEvents],
+                  outcome: verification.result.finalized.outcome,
+                  primary_reason: verification.result.finalized.primary_reason,
+                  baseline: verification.result.baseline,
+                  candidate: verification.result.candidate,
+                  patch: verification.result.patch,
+                },
+        question_id: current?.result.status === 'clarify' ? current.result.question.question_id : null,
       })
     },
   })

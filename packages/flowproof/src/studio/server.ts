@@ -19,7 +19,9 @@ import { parseCapturedVerificationResult } from '../verify/capturedContracts.js'
 import type { CapturedVerificationResult } from '../verify/capturedContracts.js'
 import { PREPARED_FUNCTIONAL_CHECKS } from '../verify/capturedRun.js'
 import { REASON_CODE_PATTERN } from '../contracts/index.js'
-import { parseExecutionConfiguration, parseProjectContext, projectSha256Schema } from '../project/contracts.js'
+import { newProjectUuid, parseExecutionConfiguration, parseProjectContext, projectSha256Schema, projectUuidSchema, safeTextSchema } from '../project/contracts.js'
+import { createProjectDemonstration, createProjectRun } from '../project/run.js'
+import type { ProjectDemonstration, ProjectDemonstrationOptions } from '../project/run.js'
 import type { ExecutionConfiguration, ProjectContext } from '../project/contracts.js'
 import { ProjectSettingsSchema } from '../project/profile.js'
 import type { ConfigurationResult, ProjectSettings } from '../project/profile.js'
@@ -129,7 +131,16 @@ export interface ProjectStudioMode {
   readonly configure: (settings: ProjectSettings, confirmedAt: string) => ConfigurationResult
   readonly prepare: (configuration: ExecutionConfiguration, signal: AbortSignal) => Promise<ProjectPreparation>
   readonly release: () => Promise<void>
+  /**
+   * Launcher-owned ports of one guarded demonstration on the prepared target: the real recorder on
+   * the Studio page's single target frame, frozen admitted sources and the host-keyed model session
+   * for this host-minted run. Absent, no capture can start. The server owns run/capture identity.
+   */
+  readonly openDemonstration?: (input: { readonly runId: string; readonly configuration: ExecutionConfiguration; readonly preparation: ProjectPreparation }) => ProjectDemonstrationPorts
 }
+
+/** Run-scoped demonstration ports supplied by the launcher; nothing here comes from the browser. */
+export type ProjectDemonstrationPorts = Pick<ProjectDemonstrationOptions, 'startRecorder' | 'loadSources' | 'model'>
 
 export interface ProjectStudioServerOptions extends Pick<StudioServerBaseOptions, 'targetOrigin' | 'studioRoot'> {
   readonly project: ProjectStudioMode
@@ -586,6 +597,14 @@ export async function startStudioServer(options: StudioServerOptions): Promise<S
 const MAX_PROJECT_BODY_BYTES = 32 * 1_024
 const PROJECT_SETTING_FIELDS = new Set(['project_id', 'baseline_commit', 'settings', 'confirm'])
 const PROJECT_PREPARE_FIELDS = new Set(['configuration_id'])
+const PROJECT_CAPTURE_FIELDS = new Set(['configuration_id', 'output_sha256'])
+const PROJECT_ANALYZE_FIELDS = new Set(['submit', 'description'])
+const PROJECT_CLARIFY_FIELDS = new Set(['question_id', 'answer'])
+const DEMONSTRATION_DESCRIPTION = safeTextSchema(2_000, { multiline: true })
+const DEMONSTRATION_ANSWER = safeTextSchema(1_000, { multiline: true })
+/** Fixed statuses of demonstration refusals; the code names the reason, never provider text. */
+const demonstrationStatus = (code: string): number =>
+  code === 'CAPTURE_UNKNOWN' ? 404 : code === 'CAPTURE_FAILED' || code === 'SOURCES_UNAVAILABLE' ? 503 : /^(PROVIDER_|PROMPT_|INTERPRETATION_|ANALYSIS_)/.test(code) ? 502 : 409
 const PROJECT_SERVER_FIELDS = new Set(['targetOrigin', 'studioRoot', 'project'])
 
 type ProjectConfigurationView = {
@@ -705,6 +724,7 @@ function assertProjectMode(options: ProjectStudioServerOptions): void {
     !context.success ||
     (initial !== null && !initial.success) ||
     typeof mode.configure !== 'function' ||
+    (mode.openDemonstration !== undefined && typeof mode.openDemonstration !== 'function') ||
     typeof mode.prepare !== 'function' ||
     typeof mode.release !== 'function'
   ) {
@@ -730,6 +750,34 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
   let activePreparation: AbortController | null = null
   let targetOwned = false
   let preparationSequence = 0
+  let demonstration: { readonly runId: string; readonly service: ProjectDemonstration } | null = null
+  // True from the first state change of a configuration request until its revocation and target
+  // release settled: no capture, preparation or other configuration is admitted meanwhile.
+  let configurationChanging = false
+  /**
+   * Synchronously revokes the demonstration (no later request reaches it, and the service generation
+   * moves so pending work is refused), then settles its unsubmitted evidence deletion. Always runs
+   * before the prepared target is released.
+   */
+  const revokeDemonstration = (): Promise<void> => {
+    const current = demonstration
+    demonstration = null
+    if (current === null) return Promise.resolve()
+    const invalidated = current.service.invalidate()
+    current.service.cancel()
+    return invalidated.catch(() => undefined)
+  }
+  const closeDemonstration = (): Promise<void> => revokeDemonstration()
+  /** Every branch that rejects or replaces the configuration starts here, before its first await. */
+  const revokeForConfigurationChange = (): Promise<void> => {
+    configurationChanging = true
+    configuration = null
+    return revokeDemonstration()
+  }
+  const changingRefusal = (): StudioRequestError => fail(409, 'CONFIGURATION_CHANGING', 'The project configuration is changing.')
+  const revokedRefusal = (): StudioRequestError => fail(409, 'CAPTURE_INVALIDATED', 'The demonstration was revoked by a configuration change.')
+  const refuseDemonstration = (code: string): StudioRequestError => fail(demonstrationStatus(code), code, 'The demonstration request was refused.')
+  const runView = (current: { readonly runId: string; readonly service: ProjectDemonstration }): Record<string, unknown> => ({ run_id: current.runId, ...current.service.view() })
 
   const contextView = (): Record<string, unknown> =>
     summarizeProjectContext(mode, admissionState, admissionReasons, configurationView, preparation)
@@ -803,6 +851,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
     if (pathname === '/api/project/configuration') {
       if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
       const body = await parseJsonRequest(req)
+      if (configurationChanging) throw changingRefusal()
       if (!hasOnlyKeys(body, PROJECT_SETTING_FIELDS)) throw fail(400, 'REQUEST_FIELD_REJECTED', 'The project configuration request contains unsupported fields.')
       if (body.confirm !== true) throw fail(400, 'CONFIRMATION_REQUIRED', 'Review and confirm the project settings before continuing.')
       if (admissionState !== 'ready') throw fail(409, 'PROJECT_BASELINE_STALE', 'The admitted project baseline is stale.')
@@ -812,8 +861,13 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       if (activePreparation !== null || preparation.state === 'preparing') throw fail(409, 'PROJECT_PREPARATION_ACTIVE', 'Project preparation is already active.')
       const parsedSettings = ProjectSettingsSchema.safeParse(body.settings)
       if (!parsedSettings.success) {
-        configuration = null
+        const settled = revokeForConfigurationChange()
         configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: Object.freeze(['CONFIGURATION_INVALID']), settings: configurationView.settings })
+        try {
+          await settled
+        } finally {
+          configurationChanging = false
+        }
         throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are invalid.')
       }
       const confirmedAt = new Date().toISOString()
@@ -825,8 +879,13 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       }
       if (!result.ok) {
         const reasons = projectReasonList(result.reasons)
-        configuration = null
+        const settled = revokeForConfigurationChange()
         configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons, settings: parsedSettings.data })
+        try {
+          await settled
+        } finally {
+          configurationChanging = false
+        }
         throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are not supported by the admitted profile.')
       }
       const checked = parseExecutionConfiguration(result.configuration)
@@ -837,11 +896,24 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
         checked.value.target_origin !== targetOrigin ||
         checked.value.confirmation.state !== 'confirmed'
       ) {
-        configuration = null
+        const settled = revokeForConfigurationChange()
         configurationView = Object.freeze({ state: 'rejected', source: 'rejected', configuration_id: null, configuration_digest: null, reasons: Object.freeze(['CONFIGURATION_INVALID']), settings: parsedSettings.data })
+        try {
+          await settled
+        } finally {
+          configurationChanging = false
+        }
         throw fail(400, 'CONFIGURATION_INVALID', 'The reviewed project settings are not supported by the admitted profile.')
       }
-      await releaseTarget().catch(() => undefined)
+      const settled = revokeForConfigurationChange()
+      preparation = projectPreparationView('idle')
+      try {
+        await settled
+        await releaseTarget().catch(() => undefined)
+      } finally {
+        configurationChanging = false
+      }
+      if (closed) throw fail(409, 'CONFIGURATION_CHANGING', 'The Studio is closing.')
       configuration = checked.value
       configurationView = Object.freeze({
         state: 'confirmed',
@@ -858,6 +930,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
     if (pathname === '/api/project/prepare') {
       if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
       const body = await parseJsonRequest(req)
+      if (configurationChanging) throw changingRefusal()
       if (!hasOnlyKeys(body, PROJECT_PREPARE_FIELDS)) throw fail(400, 'REQUEST_FIELD_REJECTED', 'The project preparation request contains unsupported fields.')
       if (admissionState !== 'ready') throw fail(409, 'PROJECT_BASELINE_STALE', 'The admitted project baseline is stale.')
       if (configuration === null || configurationView.state !== 'confirmed') throw fail(409, 'CONFIGURATION_REQUIRED', 'Confirm project settings before preparing the target.')
@@ -874,6 +947,111 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
       preparation = projectPreparationView('preparing')
       void completePreparation(sequence, controller, configuration)
       sendJson(res, 202, { state: 'preparing' })
+      return
+    }
+    if (pathname === '/api/project/captures') {
+      if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      const body = await parseJsonRequest(req)
+      if (configurationChanging) throw changingRefusal()
+      if (!hasOnlyKeys(body, PROJECT_CAPTURE_FIELDS) || typeof body.configuration_id !== 'string' || typeof body.output_sha256 !== 'string') {
+        throw fail(400, 'REQUEST_FIELD_REJECTED', 'The capture request contains unsupported fields.')
+      }
+      if (configuration === null || configurationView.state !== 'confirmed' || body.configuration_id !== configuration.configuration_id) {
+        throw fail(409, 'CONFIGURATION_STALE', 'The project configuration has changed; confirm it again.')
+      }
+      if (preparation.state !== 'ready' || !targetOwned) throw fail(409, 'PROJECT_NOT_PREPARED', 'Prepare the project target before capturing.')
+      const ready = preparation as unknown as ProjectPreparation
+      if (body.output_sha256 !== ready.output_sha256) throw fail(409, 'PREPARATION_STALE', 'The prepared target has changed.')
+      if (mode.openDemonstration === undefined) throw fail(409, 'DEMONSTRATION_UNAVAILABLE', 'This Studio cannot record a demonstration.')
+      if (demonstration === null) {
+        const runId = newProjectUuid()
+        const lifecycle = createProjectRun({ runId, projectCheckIds: configuration.required_project_checks.map((check) => check.id) })
+        lifecycle.transition('configuration-required')
+        lifecycle.transition('preparing')
+        lifecycle.transition('demonstration-ready')
+        const ports = mode.openDemonstration({ runId, configuration, preparation: Object.freeze({ target_url: ready.target_url, output_sha256: ready.output_sha256, checks: ready.checks }) })
+        demonstration = Object.freeze({ runId, service: createProjectDemonstration({ lifecycle, configurationId: configuration.configuration_id, ...ports }) })
+      }
+      const current = demonstration
+      const outcome = await current.service.start()
+      if (demonstration !== current) throw revokedRefusal()
+      if (!outcome.ok) throw refuseDemonstration(outcome.code)
+      sendJson(res, 200, { run_id: current.runId, capture_id: outcome.value.capture_id, state: 'recording' })
+      return
+    }
+    const captureRoute = /^\/api\/project\/captures\/([^/]+)\/(finish|discard|analyze)$/.exec(pathname)
+    if (captureRoute !== null) {
+      if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      const captureId = captureRoute[1] ?? ''
+      const action = captureRoute[2]
+      const body = await parseJsonRequest(req)
+      if (action === 'analyze') {
+        const description = body.description
+        const validDescription = description === undefined || description === null || (typeof description === 'string' && DEMONSTRATION_DESCRIPTION.safeParse(description).success)
+        if (!hasOnlyKeys(body, PROJECT_ANALYZE_FIELDS) || body.submit !== true || !validDescription) {
+          throw fail(400, 'REQUEST_FIELD_REJECTED', 'Analysis needs the explicit submission and an optional safe description.')
+        }
+      } else if (Object.keys(body).length !== 0) {
+        throw fail(400, 'REQUEST_FIELD_REJECTED', 'This capture request takes an empty object.')
+      }
+      const current = demonstration
+      if (current === null || !projectUuidSchema.safeParse(captureId).success) throw fail(404, 'CAPTURE_UNKNOWN', 'The capture does not exist.')
+      if (action === 'finish') {
+        const outcome = await current.service.finish(captureId)
+        if (demonstration !== current) throw revokedRefusal()
+        if (!outcome.ok) throw refuseDemonstration(outcome.code)
+        sendJson(res, 200, { run_id: current.runId, ...outcome.value })
+      } else if (action === 'discard') {
+        const outcome = await current.service.discard(captureId)
+        if (demonstration !== current) throw revokedRefusal()
+        if (!outcome.ok) throw refuseDemonstration(outcome.code)
+        sendJson(res, 200, { run_id: current.runId, capture_id: captureId, state: 'discarded' })
+      } else {
+        const outcome = await current.service.analyze(captureId, { description: typeof body.description === 'string' ? body.description : null })
+        if (demonstration !== current) throw revokedRefusal()
+        if (!outcome.ok) throw refuseDemonstration(outcome.code)
+        sendJson(res, 200, { run_id: current.runId, interpretation: outcome.value.interpretation })
+      }
+      return
+    }
+    const runRoute = /^\/api\/project\/runs\/([^/]+)(?:\/(clarify|cancel|verify))?$/.exec(pathname)
+    if (runRoute !== null) {
+      const runId = runRoute[1] ?? ''
+      const action = runRoute[2]
+      if (action === undefined) {
+        if (method !== 'GET') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+        const current = demonstration
+        if (current === null || current.runId !== runId) throw fail(404, 'RUN_UNKNOWN', 'The run does not exist.')
+        sendJson(res, 200, runView(current))
+        return
+      }
+      if (method !== 'POST') throw fail(405, 'METHOD_NOT_ALLOWED', 'The request method is not allowed.')
+      const body = await parseJsonRequest(req)
+      if (action === 'clarify') {
+        if (!hasOnlyKeys(body, PROJECT_CLARIFY_FIELDS) || typeof body.question_id !== 'string' || typeof body.answer !== 'string' || !DEMONSTRATION_ANSWER.safeParse(body.answer).success) {
+          throw fail(400, 'REQUEST_FIELD_REJECTED', 'A clarification needs the current question ID and a safe answer.')
+        }
+      } else if (Object.keys(body).length !== 0) {
+        throw fail(400, 'REQUEST_FIELD_REJECTED', 'This run request takes an empty object.')
+      }
+      const current = demonstration
+      if (current === null || current.runId !== runId) throw fail(404, 'RUN_UNKNOWN', 'The run does not exist.')
+      if (action === 'cancel') {
+        current.service.cancel()
+        sendJson(res, 202, runView(current))
+        return
+      }
+      if (action === 'verify') {
+        const verified = await current.service.verify()
+        if (demonstration !== current) throw revokedRefusal()
+        if (!verified.ok) throw refuseDemonstration(verified.code)
+        sendJson(res, 202, runView(current))
+        return
+      }
+      const outcome = await current.service.clarify(body.question_id as string, body.answer as string)
+      if (demonstration !== current) throw revokedRefusal()
+      if (!outcome.ok) throw refuseDemonstration(outcome.code)
+      sendJson(res, 200, { run_id: current.runId, interpretation: outcome.value.interpretation })
       return
     }
     if (pathname.startsWith('/api/')) throw fail(404, 'NOT_FOUND', 'The requested route does not exist.')
@@ -901,6 +1079,7 @@ async function startProjectStudioServer(options: ProjectStudioServerOptions): Pr
         activePreparation?.abort()
         activePreparation = null
         try {
+          await closeDemonstration()
           await releaseTarget()
         } finally {
           await new Promise<void>((resolve) => {

@@ -14,7 +14,10 @@ import type { ExecutionConfiguration } from '../../packages/flowproof/src/projec
 import { admissionProfileOf, createExecutionConfiguration, readRuntimeManifest, suggestProjectSettings } from '../../packages/flowproof/src/project/profile.js'
 import type { ProjectSettings, RuntimeProfile } from '../../packages/flowproof/src/project/profile.js'
 import { ProjectPreparationError, startStudioServer } from '../../packages/flowproof/src/studio/server.js'
-import type { ProjectPreparation, ProjectStudioMode, StudioServerHandle } from '../../packages/flowproof/src/studio/server.js'
+import type { ProjectDemonstrationPorts, ProjectPreparation, ProjectStudioMode, StudioServerHandle } from '../../packages/flowproof/src/studio/server.js'
+import { createProjectModelSession } from '../../packages/flowproof/src/model/projectClient.js'
+import { newProjectUuid } from '../../packages/flowproof/src/project/contracts.js'
+import { TestRecorder } from '../support/projectDemonstration.js'
 import { LAUNCH_COOKIE_NAME } from '../../packages/flowproof/src/studio/auth.js'
 import { materializeProjectLiveRepository } from '../helpers/projectLiveRepository.js'
 import type { MaterializedProjectRepository } from '../helpers/projectLiveRepository.js'
@@ -467,5 +470,264 @@ describe('project routes and their guards', () => {
     expect(fake.signals[0]?.aborted).toBe(false)
     await server.close()
     expect(fake.signals[0]?.aborted).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------------------
+// T029 guarded demonstration routes. The recorder is a labelled `test_recorder` and the provider a
+// labelled `test_transport` HTTP fake behind the real S5 client; neither is browser or live evidence.
+// ---------------------------------------------------------------------------------------
+
+interface Demo {
+  readonly server: StudioServerHandle
+  readonly project: AdmittedProject
+  readonly configurationId: string
+  readonly opened: Array<{ readonly runId: string; readonly configuration: ExecutionConfiguration; readonly preparation: ProjectPreparation }>
+  readonly recorders: TestRecorder[]
+  readonly calls: unknown[]
+  readonly events: string[]
+}
+
+async function preparedDemonstration(
+  options: { readonly withPort?: boolean; readonly startGate?: Promise<void>; readonly finishGate?: Promise<void>; readonly releaseGate?: Promise<void>; readonly discardGate?: Promise<void> } = {},
+): Promise<Demo> {
+  const repository = await sample()
+  const project = await admitted(repository.root)
+  const { fake, ports } = fakePreparation()
+  const opened: Demo['opened'] = []
+  const recorders: TestRecorder[] = []
+  const calls: unknown[] = []
+  const events: string[] = []
+  const openDemonstration = (input: Demo['opened'][number]): ProjectDemonstrationPorts => {
+    opened.push(input)
+    return {
+      startRecorder: async () => {
+        if (options.startGate) await options.startGate
+        const recorder = new TestRecorder(input.runId, { configurationId: input.configuration.configuration_id, ...(options.finishGate ? { finishGate: options.finishGate } : {}) })
+        const discard = recorder.discard.bind(recorder)
+        recorder.discard = async () => {
+          events.push('discard')
+          if (options.discardGate) await options.discardGate
+          await discard()
+        }
+        recorders.push(recorder)
+        return recorder
+      },
+      loadSources: async () => ({ sources: [{ path: 'src/main.ts', content: 'export {}\n' }], admitted: new Set(['src/main.ts']) }),
+      model: createProjectModelSession({
+        run_id: input.runId,
+        env: { MODEL_API_KEY: 'fp-test-key-not-real' },
+        fake: {
+          label: 'test_transport',
+          fetch: async () => {
+            calls.push(1)
+            const image = recorders.at(-1)!.image
+            const document = {
+              result: {
+                status: 'ready',
+                observed_problem: 'A problem.',
+                citations: [image],
+                replay: { entry_path: '/', viewport: { width: 1280, height: 800, device_scale_factor: 1 }, actions: [{ op: 'click', locator: { kind: 'test-id', value: 'go' } }] },
+                expected_conditions: [{ kind: 'element-count', locator: { kind: 'test-id', value: 'row' }, count: 0 }],
+                task_condition_index: 0,
+                intent_summary: 'Intent.',
+                support_explanation: 'Support.',
+              },
+            }
+            const output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(document) }] }]
+            return new Response(JSON.stringify({ id: 'resp_fake', status: 'completed', model: 'muse-spark-1.3', output }), { status: 200, headers: { 'content-type': 'application/json' } })
+          },
+        },
+      }),
+    }
+  }
+  const server = await startStudioServer({
+    targetOrigin: TARGET_ORIGIN,
+    project: {
+      context: project.context,
+      modelConfigured: true,
+      suggestion: suggestProjectSettings(project),
+      initialSettings: null,
+      configure: (input, confirmedAt) => createExecutionConfiguration({ project, profile, settings: input, targetOrigin: TARGET_ORIGIN, confirmedAt }),
+      prepare: ports.prepare,
+      release: async () => {
+        events.push('release')
+        if (options.releaseGate) await options.releaseGate
+        await ports.release()
+      },
+      ...(options.withPort === false ? {} : { openDemonstration }),
+    },
+  })
+  cleanups.push(() => server.close())
+  const configured = await post(server, '/api/project/configuration', await settingsBody(project))
+  const configurationId = configured.json().configuration_id as string
+  expect((await post(server, '/api/project/prepare', { configuration_id: configurationId })).status).toBe(202)
+  fake.resolveNext()
+  await waitFor(async () => (await call(server, 'GET', '/api/project/context')).json().preparation?.state === 'ready')
+  return { server, project, configurationId, opened, recorders, calls, events }
+}
+
+const startBody = (demo: Demo, overrides: Record<string, unknown> = {}) => ({ configuration_id: demo.configurationId, output_sha256: '1'.repeat(64), ...overrides })
+
+describe('T029 guarded demonstration routes', () => {
+  it('guards capture start with the exact launch guards, closed body and current identity before any side effect', async () => {
+    const demo = await preparedDemonstration()
+    const route = '/api/project/captures'
+    expect((await post(demo.server, route, startBody(demo), { origin: null })).status).toBe(403)
+    expect((await post(demo.server, route, startBody(demo), { origin: TARGET_ORIGIN })).status).toBe(403)
+    expect((await post(demo.server, route, startBody(demo), { cookie: null })).status).toBeGreaterThanOrEqual(401)
+    expect((await post(demo.server, route, startBody(demo), { host: 'localhost:1' })).status).toBeGreaterThanOrEqual(400)
+    expect((await post(demo.server, route, startBody(demo), { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(403)
+    expect((await post(demo.server, route, startBody(demo), { headers: { 'Content-Type': 'text/plain' } })).status).toBe(415)
+    expect((await call(demo.server, 'GET', route)).status).toBe(405)
+    expect((await post(demo.server, route, { ...startBody(demo), observations: [] })).status).toBe(400)
+    expect((await post(demo.server, route, startBody(demo, { configuration_id: newProjectUuid() }))).status).toBe(409)
+    expect((await post(demo.server, route, startBody(demo, { output_sha256: '2'.repeat(64) }))).status).toBe(409)
+    expect(demo.opened).toHaveLength(0)
+    expect(demo.recorders).toHaveLength(0)
+  })
+
+  it('starts a host-owned run on the prepared target; finish/discard/analyze/clarify/cancel accept only owned IDs and strict bodies', async () => {
+    const demo = await preparedDemonstration()
+    const started = await post(demo.server, '/api/project/captures', startBody(demo))
+    expect(started.status).toBe(200)
+    const { run_id: runId, capture_id: captureId } = started.json()
+    expect(started.json()).toMatchObject({ state: 'recording' })
+    expect(demo.opened).toHaveLength(1)
+    expect(demo.opened[0]).toMatchObject({ runId, configuration: { configuration_id: demo.configurationId }, preparation: { output_sha256: '1'.repeat(64) } })
+    expect((await post(demo.server, '/api/project/captures', startBody(demo))).status).toBe(409)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/finish`, { x: 1 })).status).toBe(400)
+    expect((await post(demo.server, `/api/project/captures/${newProjectUuid()}/finish`, {})).status).toBe(404)
+    expect((await post(demo.server, '/api/project/captures/not-an-id/finish', {})).status).toBe(404)
+    const finished = await post(demo.server, `/api/project/captures/${captureId}/finish`, {})
+    expect(finished.status).toBe(200)
+    expect(finished.json()).toMatchObject({ capture_id: captureId, state: 'ready' })
+    expect(demo.calls).toHaveLength(0)
+    const view = await call(demo.server, 'GET', `/api/project/runs/${runId}`)
+    expect(view.json()).toMatchObject({ run_id: runId, state: 'capture-ready', capture_id: captureId, report: 'sealed', interpretation: null })
+    expect(view.body).not.toMatch(/registry|MODEL_API_KEY|fp-test-key/)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { description: null })).status).toBe(400)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: 'x'.repeat(2_001) })).status).toBe(400)
+    expect(demo.calls).toHaveLength(0)
+    const analyzed = await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })
+    expect(analyzed.status).toBe(200)
+    expect(analyzed.json()).toMatchObject({ run_id: runId, interpretation: { run_id: runId, capture_id: captureId, result: { status: 'ready' } } })
+    expect(demo.calls).toHaveLength(1)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/discard`, {})).status).toBe(409)
+    expect((await post(demo.server, `/api/project/runs/${newProjectUuid()}/clarify`, { question_id: newProjectUuid(), answer: 'Yes.' })).status).toBe(404)
+    expect((await post(demo.server, `/api/project/runs/${runId}/clarify`, { question_id: newProjectUuid(), answer: 'Yes.', extra: 1 })).status).toBe(400)
+    expect((await post(demo.server, `/api/project/runs/${runId}/clarify`, { question_id: newProjectUuid(), answer: 'Yes.' })).status).toBe(409)
+    expect((await post(demo.server, `/api/project/runs/${runId}/cancel`, { now: true })).status).toBe(400)
+    expect((await post(demo.server, `/api/project/runs/${runId}/cancel`, {})).status).toBe(202)
+    expect((await post(demo.server, `/api/project/runs/${runId}/cancel`, {})).status).toBe(202)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })).status).toBe(409)
+    expect(demo.calls).toHaveLength(1)
+  })
+
+  it('discards before analysis through the route and never calls the model', async () => {
+    const demo = await preparedDemonstration()
+    const { capture_id: captureId } = (await post(demo.server, '/api/project/captures', startBody(demo))).json()
+    expect((await post(demo.server, `/api/project/captures/${captureId}/discard`, {})).status).toBe(200)
+    expect(demo.recorders[0]!.state).toBe('discarded')
+    expect((await post(demo.server, `/api/project/captures/${captureId}/finish`, {})).status).toBe(404)
+    expect(demo.calls).toHaveLength(0)
+  })
+
+  it('ends the demonstration before releasing the prepared target on a settings change and on close', async () => {
+    const demo = await preparedDemonstration()
+    const { capture_id: captureId } = (await post(demo.server, '/api/project/captures', startBody(demo))).json()
+    expect((await post(demo.server, '/api/project/configuration', await settingsBody(demo.project))).status).toBe(200)
+    expect(demo.events.slice(0, 2)).toEqual(['discard', 'release'])
+    expect(demo.recorders[0]!.state).toBe('discarded')
+    expect((await post(demo.server, `/api/project/captures/${captureId}/finish`, {})).status).toBe(404)
+    const closing = await preparedDemonstration()
+    await post(closing.server, '/api/project/captures', startBody(closing))
+    await closing.server.close()
+    expect(closing.events).toEqual(['discard', 'release'])
+    expect(closing.calls).toHaveLength(0)
+  })
+
+  it('refuses a demonstration when the launcher supplies no recorder/model ports', async () => {
+    const demo = await preparedDemonstration({ withPort: false })
+    const reply = await post(demo.server, '/api/project/captures', startBody(demo))
+    expect(reply.status).toBe(409)
+    expect(reply.body).toContain('DEMONSTRATION_UNAVAILABLE')
+  })
+})
+
+function gate(): { readonly promise: Promise<void>; readonly open: () => void } {
+  let open: () => void = () => undefined
+  const promise = new Promise<void>((resolve) => (open = resolve))
+  return { promise, open }
+}
+
+describe('T029 configuration revocation of the demonstration', () => {
+  async function readyCapture(demo: Demo): Promise<{ readonly runId: string; readonly captureId: string }> {
+    const started = (await post(demo.server, '/api/project/captures', startBody(demo))).json()
+    expect((await post(demo.server, `/api/project/captures/${started.capture_id}/finish`, {})).status).toBe(200)
+    return { runId: started.run_id, captureId: started.capture_id }
+  }
+
+  it('a settings request that rejects the configuration revokes the demonstration: the old report is never analyzed', async () => {
+    const demo = await preparedDemonstration()
+    const { runId, captureId } = await readyCapture(demo)
+    const rejected = await post(demo.server, '/api/project/configuration', await settingsBody(demo.project, {}, { bad: true }))
+    expect(rejected.status).toBe(400)
+    expect((await call(demo.server, 'GET', '/api/project/context')).json().configuration).toMatchObject({ state: 'rejected', configuration_id: null })
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })).status).toBe(404)
+    expect((await call(demo.server, 'GET', `/api/project/runs/${runId}`)).status).toBe(404)
+    expect(demo.recorders[0]!.state).toBe('discarded')
+    expect(demo.calls).toHaveLength(0)
+  })
+
+  it('a malformed closed-schema request changes nothing and does not revoke the demonstration', async () => {
+    const demo = await preparedDemonstration()
+    const { captureId } = await readyCapture(demo)
+    expect((await post(demo.server, '/api/project/configuration', { ...(await settingsBody(demo.project)), image: 'node:latest' })).status).toBe(400)
+    expect((await post(demo.server, '/api/project/configuration', '{bad')).status).toBe(400)
+    const analyzed = await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })
+    expect(analyzed.status).toBe(200)
+    expect(demo.calls).toHaveLength(1)
+  })
+
+  it('closes capture admission while a settings change is pending and never resurrects the old demonstration', async () => {
+    const held = gate()
+    const demo = await preparedDemonstration({ discardGate: held.promise })
+    const { runId, captureId } = await readyCapture(demo)
+    const changing = post(demo.server, '/api/project/configuration', await settingsBody(demo.project))
+    // Held while the old capture's discard is still pending, before any target release.
+    await waitFor(async () => demo.events.includes('discard'))
+    expect(demo.events).not.toContain('release')
+    expect((await post(demo.server, '/api/project/captures', startBody(demo))).status).toBe(409)
+    expect((await post(demo.server, `/api/project/captures/${captureId}/analyze`, { submit: true, description: null })).status).toBe(404)
+    expect((await post(demo.server, `/api/project/runs/${runId}/clarify`, { question_id: newProjectUuid(), answer: 'Yes.' })).status).toBe(404)
+    held.open()
+    const changed = await changing
+    expect(changed.status).toBe(200)
+    expect(changed.json().configuration_id).not.toBe(demo.configurationId)
+    expect(demo.opened).toHaveLength(1)
+    expect(demo.recorders[0]!.state).toBe('discarded')
+    expect(demo.calls).toHaveLength(0)
+  })
+
+  it.each(['start', 'finish'] as const)('revokes a capture %s still pending when the settings change', async (step) => {
+    const held = gate()
+    const demo = await preparedDemonstration(step === 'start' ? { startGate: held.promise } : { finishGate: held.promise })
+    let pending: Promise<Reply>
+    if (step === 'start') {
+      pending = post(demo.server, '/api/project/captures', startBody(demo))
+      await waitFor(async () => demo.opened.length === 1)
+    } else {
+      const { capture_id: captureId } = (await post(demo.server, '/api/project/captures', startBody(demo))).json()
+      pending = post(demo.server, `/api/project/captures/${captureId}/finish`, {})
+      await waitFor(async () => demo.recorders.length === 1)
+    }
+    expect((await post(demo.server, '/api/project/configuration', await settingsBody(demo.project))).status).toBe(200)
+    held.open()
+    const late = await pending
+    expect(late.status).toBe(409)
+    expect(late.body).toContain('CAPTURE_INVALIDATED')
+    await waitFor(async () => demo.recorders.length === 1 && demo.recorders[0]!.state === 'discarded')
+    expect(demo.calls).toHaveLength(0)
   })
 })

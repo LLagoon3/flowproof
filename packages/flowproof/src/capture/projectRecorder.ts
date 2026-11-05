@@ -405,6 +405,12 @@ export class ProjectCaptureSession {
     return this.#sealed
   }
 
+  /** The reflected-value registry of the report claimed for analysis; prompts redact with it. */
+  analysisRegistry(): RedactedValueRegistry {
+    if (!this.#submitted || this.#sealed === null) throw new ProjectRecorderError('CAPTURE_NOT_READY', 'Only a claimed ready report exposes its redaction registry.')
+    return this.#registry
+  }
+
   /** The current S1 view: staged while recording, sealed once finished, empty once discarded. */
   snapshot(): DemonstrationCapture {
     if (this.#sealed !== null && this.#state !== 'discarded') return this.#sealed.capture
@@ -1108,6 +1114,9 @@ export async function startProjectRecorder(options: StartRecorderOptions): Promi
     const entry = hello as { readonly source: RecorderSource; readonly envelope: unknown } | null
     if (entry === null) throw new ProjectRecorderError('CAPTURE_INSTRUMENTATION_UNAVAILABLE', 'The target entry document did not announce the recorder.')
     session.begin(entry.source, entry.envelope)
+    // Start is ready only once its initial image is produced or explicitly omitted, so the entry
+    // evidence is captured from the framed target before any demonstration action can move it.
+    await session.imagesSettled()
   } catch (error) {
     await detach()
     session.dispose()

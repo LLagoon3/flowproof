@@ -316,6 +316,7 @@ async function runProjectStudio(projectPath: string, configPath: string | undefi
         profile,
         initialSettings,
         modelConfigured: typeof process.env.MODEL_API_KEY === 'string' && process.env.MODEL_API_KEY.trim() !== '',
+        modelEnv: { MODEL_API_KEY: process.env.MODEL_API_KEY },
       })
     } catch (error) {
       diagnose(error instanceof StudioLaunchError ? error.message : STUDIO_START_FAILED)

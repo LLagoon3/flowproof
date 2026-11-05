@@ -211,7 +211,12 @@ uses document/load plus host-known output identity, not the old chart-specific p
 
 ### 3. Capture the human demonstration
 
-Use the actual attached target frame in the launcher-owned headed context. Start resets the target
+Use the actual attached target frame in the launcher-owned headed context. While a project target is
+prepared, the project-only Studio layout anchors the target iframe content box at viewport origin
+(0,0) with no border and a stable measured size, and keeps setup and host controls in a column
+outside it: a clipped page screenshot at a nonzero offset shifts the viewport and misroutes
+concurrent trusted input into the separate-site frame, while an origin-anchored clip does not.
+Start resets the target
 to its declared entry state and installs target-only recorder instrumentation; Finish drains ordered
 interaction/navigation and screenshot/error queues, sanitizes and seals a report; Discard deletes
 staged material and never submits it. The host validates binding callback source frame, exact target

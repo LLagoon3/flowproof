@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { constants } from 'node:fs'
+import { open } from 'node:fs/promises'
 import path from 'node:path'
 import { chromium } from 'playwright'
 import type { BrowserContext, Frame, Page } from 'playwright'
@@ -28,6 +30,7 @@ import { createWorktreeSession } from '../worktree/session.js'
 import type { WorktreeSession } from '../worktree/session.js'
 import { checkProjectBaseline } from '../project/admission.js'
 import type { AdmittedProject } from '../project/admission.js'
+import { PROJECT_LIMITS, ViewportSchema } from '../project/contracts.js'
 import type { ExecutionConfiguration } from '../project/contracts.js'
 import { admissionProfileOf, createExecutionConfiguration, suggestProjectSettings, verifyRuntimeImage } from '../project/profile.js'
 import type { ProjectSettings, RuntimeProfile } from '../project/profile.js'
@@ -35,6 +38,13 @@ import { createProjectRuntime } from '../project/runtime.js'
 import type { ImmutableOutput, ProjectRuntime } from '../project/runtime.js'
 import { exportProjectSnapshot } from '../project/snapshot.js'
 import type { ProjectSnapshot } from '../project/snapshot.js'
+import { startProjectRecorder } from '../capture/projectRecorder.js'
+import type { CaptureBinding } from '../capture/projectRecorder.js'
+import { createProjectModelSession } from '../model/projectClient.js'
+import type { ProjectModelFake, ProjectModelSession } from '../model/projectClient.js'
+import type { PromptSourceFile } from '../model/projectPrompt.js'
+import { MODEL_API_KEY_ENV } from '../model/transport.js'
+import { demonstrationRecorderOf } from '../project/run.js'
 import { createRunEventStream } from './events.js'
 import { ProjectPreparationError, startStudioServer } from './server.js'
 import type { CapturedStudioRunStart, ProjectPreparation, StudioRunHandle, StudioRunStart } from './server.js'
@@ -994,17 +1004,178 @@ export async function startCapturedVerificationStudio(options: StartCapturedVeri
   }
 }
 
+// ---------------------------------------------------------------------------------------
+// Project demonstration ports (T029): launcher-owned frame, frozen sources, host-keyed model
+// ---------------------------------------------------------------------------------------
+
+export type ProjectDemonstrationPortErrorCode =
+  | 'PROJECT_BASELINE_STALE'
+  | 'SOURCE_LIMIT_EXCEEDED'
+  | 'SOURCE_SNAPSHOT_INVALID'
+  | 'TARGET_FRAME_UNAVAILABLE'
+  | 'TARGET_VIEWPORT_UNSUPPORTED'
+  | 'TARGET_ORIGIN_MISMATCH'
+
+/** A coded refusal of a demonstration port; it carries no path, source text or credential. */
+export class ProjectDemonstrationPortError extends Error {
+  constructor(readonly code: ProjectDemonstrationPortErrorCode) {
+    super(`The project demonstration is unavailable: ${code}.`)
+    this.name = 'ProjectDemonstrationPortError'
+  }
+}
+
+async function readAdmittedBytes(root: string, relative: string): Promise<Buffer | null> {
+  let handle
+  try {
+    handle = await open(path.join(root, relative), constants.O_RDONLY | constants.O_NOFOLLOW)
+  } catch {
+    return null
+  }
+  try {
+    return (await handle.stat()).isFile() ? await handle.readFile() : null
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * The admitted committed UTF-8 `src/` text of the baseline, read from a fresh verified admission
+ * snapshot (never the working tree, a runtime workspace or project environment files) and checked
+ * against the admitted blob digests. The baseline must be unchanged before and after. All admitted
+ * sources are returned or none: beyond the 32-file/256-KiB request bound this fails closed, since
+ * no relevance selection is defined.
+ */
+export async function loadAdmittedProjectSources(
+  project: AdmittedProject,
+  profile: RuntimeProfile,
+): Promise<{ readonly sources: readonly PromptSourceFile[]; readonly admitted: ReadonlySet<string> }> {
+  const admission = admissionProfileOf(profile)
+  if ((await checkProjectBaseline(project, admission)).state !== 'ready') throw new ProjectDemonstrationPortError('PROJECT_BASELINE_STALE')
+  const files = project.files.filter((file) => file.path.startsWith('src/') && file.text).sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+  const bytes = files.reduce((sum, file) => sum + file.size, 0)
+  if (files.length > PROJECT_LIMITS.maxRequestSourceFiles || bytes > PROJECT_LIMITS.maxRequestSourceBytes) throw new ProjectDemonstrationPortError('SOURCE_LIMIT_EXCEEDED')
+  const snapshot = await exportProjectSnapshot({ project, purpose: 'admission-snapshot' })
+  const sources: PromptSourceFile[] = []
+  try {
+    if (snapshot.baselineCommit !== project.context.baseline_commit || !(await snapshot.verify()).ok) throw new ProjectDemonstrationPortError('SOURCE_SNAPSHOT_INVALID')
+    const decoder = new TextDecoder('utf-8', { fatal: true })
+    for (const file of files) {
+      const content = await readAdmittedBytes(snapshot.workspace, file.path)
+      if (content === null || content.length !== file.size || createHash('sha256').update(content).digest('hex') !== file.sha256) {
+        throw new ProjectDemonstrationPortError('SOURCE_SNAPSHOT_INVALID')
+      }
+      let text: string
+      try {
+        text = decoder.decode(content)
+      } catch {
+        throw new ProjectDemonstrationPortError('SOURCE_SNAPSHOT_INVALID')
+      }
+      sources.push(Object.freeze({ path: file.path, content: text }))
+    }
+  } finally {
+    await snapshot.remove()
+  }
+  if ((await checkProjectBaseline(project, admission)).state !== 'ready') throw new ProjectDemonstrationPortError('PROJECT_BASELINE_STALE')
+  return Object.freeze({ sources: Object.freeze(sources), admitted: new Set(sources.map((source) => source.path)) })
+}
+
+/**
+ * The recorder binding from host-owned identities only: the admitted project, the confirmed
+ * configuration, the ready output digest and the host-measured CSS viewport of the target frame.
+ */
+export function projectCaptureBinding(input: {
+  readonly runId: string
+  readonly project: AdmittedProject
+  readonly configuration: ExecutionConfiguration
+  readonly preparation: ProjectPreparation
+  readonly viewport: { readonly width: number; readonly height: number; readonly devicePixelRatio: number }
+}): CaptureBinding {
+  const { runId, project, configuration, preparation, viewport } = input
+  let origin = 'null'
+  try {
+    origin = new URL(preparation.target_url).origin
+  } catch {
+    // An unparsable target URL is a mismatch below.
+  }
+  if (origin !== configuration.target_origin) throw new ProjectDemonstrationPortError('TARGET_ORIGIN_MISMATCH')
+  const measured = ViewportSchema.safeParse({ width: viewport.width, height: viewport.height, device_scale_factor: viewport.devicePixelRatio })
+  if (!measured.success) throw new ProjectDemonstrationPortError('TARGET_VIEWPORT_UNSUPPORTED')
+  return Object.freeze({
+    run_id: runId,
+    project_id: project.context.project_id,
+    baseline_commit: project.context.baseline_commit,
+    configuration_id: configuration.configuration_id,
+    configuration_digest: configuration.configuration_digest,
+    target_origin: configuration.target_origin,
+    viewport: Object.freeze({ width: measured.data.width, height: measured.data.height, device_scale_factor: 1 as const }),
+    build_sha256: preparation.output_sha256,
+  })
+}
+
+/** The per-run S5 session: only `MODEL_API_KEY` of the explicit host environment, never `process.env`. */
+export function projectDemonstrationModel(
+  runId: string,
+  options: { readonly modelEnv?: Readonly<Record<string, string | undefined>>; readonly modelFake?: ProjectModelFake },
+): ProjectModelSession {
+  const key = options.modelEnv?.[MODEL_API_KEY_ENV]
+  return createProjectModelSession({
+    run_id: runId,
+    env: Object.freeze({ [MODEL_API_KEY_ENV]: typeof key === 'string' ? key : undefined }),
+    ...(options.modelFake === undefined ? {} : { fake: options.modelFake }),
+  })
+}
+
+/**
+ * The Studio page's one direct prepared-target frame and its CSS viewport, measured on the iframe
+ * element in the Studio document (host side), never reported by the target document.
+ */
+async function projectTargetFrame(page: Page, targetOrigin: string): Promise<{ readonly frame: Frame; readonly viewport: { readonly width: number; readonly height: number; readonly devicePixelRatio: number } }> {
+  const unavailable = (): ProjectDemonstrationPortError => new ProjectDemonstrationPortError('TARGET_FRAME_UNAVAILABLE')
+  if (page.isClosed()) throw unavailable()
+  const targets = page.locator('[data-testid="project-target"]')
+  if ((await targets.count()) !== 1 || (await page.locator('iframe').count()) !== 1) throw unavailable()
+  const element = await targets.elementHandle({ timeout: READY_TIMEOUT_MS })
+  try {
+    const frame = await element.contentFrame()
+    if (frame === null || frame.parentFrame() !== page.mainFrame()) throw unavailable()
+    let origin = 'null'
+    try {
+      origin = new URL(frame.url()).origin
+    } catch {
+      // A frame without a URL is not the prepared target.
+    }
+    if (origin !== targetOrigin) throw unavailable()
+    // Explicit Start frames the whole admitted target inside the Studio viewport (host side, the
+    // Studio document only), so image evidence can meet the unchanged full-visibility guard.
+    await element.evaluate((node) => {
+      const box = node as unknown as { scrollIntoView(options: { block: string; inline: string; behavior: string }): void }
+      box.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+    })
+    const viewport = await element.evaluate((node) => {
+      const box = node as unknown as { clientWidth: number; clientHeight: number; ownerDocument: { defaultView: { devicePixelRatio: number } | null } }
+      return { width: box.clientWidth, height: box.clientHeight, devicePixelRatio: box.ownerDocument.defaultView?.devicePixelRatio ?? 0 }
+    })
+    return { frame, viewport }
+  } finally {
+    await element.dispose()
+  }
+}
+
 export interface StartProjectStudioOptions {
   readonly repoRoot: string
   readonly project: AdmittedProject
   readonly profile: RuntimeProfile
   readonly initialSettings: ProjectSettings | null
   readonly modelConfigured: boolean
+  /** The established host controller environment; only `MODEL_API_KEY` is read, per run. */
+  readonly modelEnv?: Readonly<Record<string, string | undefined>>
+  /** Deterministic tests only: an explicitly labelled in-process provider fake. The CLI never sets it. */
+  readonly modelFake?: ProjectModelFake
 }
 
 /** Opens the isolated, project-only setup journey. It has no run, capture, or model capability. */
 export async function startProjectStudio(options: StartProjectStudioOptions): Promise<StudioInstance> {
-  const { repoRoot, project, profile, initialSettings, modelConfigured } = options
+  const { repoRoot, project, profile, initialSettings, modelConfigured, modelEnv, modelFake } = options
   if (
     project.context.profile.image_id !== profile.imageId ||
     project.context.profile.lock_sha256 !== profile.lockSha256 ||
@@ -1036,6 +1207,8 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
   let browserContext: BrowserContext | null = null
   let page: Page | null = null
   let activeOutput: ImmutableOutput | null = null
+  let candidateOutput: ImmutableOutput | null = null
+  let candidateServed = false
   let releaseOutputWork: Promise<void> | null = null
   const preparationJobs = new Set<Promise<ProjectPreparation>>()
 
@@ -1128,6 +1301,56 @@ export async function startProjectStudio(options: StartProjectStudioOptions): Pr
           }),
         prepare,
         release,
+        openDemonstration: ({ runId, configuration, preparation }) => ({
+          startRecorder: async () => {
+            const current = page
+            if (current === null) throw new ProjectDemonstrationPortError('TARGET_FRAME_UNAVAILABLE')
+            const { frame, viewport } = await projectTargetFrame(current, configuration.target_origin)
+            const binding = projectCaptureBinding({ runId, project, configuration, preparation, viewport })
+            return demonstrationRecorderOf(await startProjectRecorder({ page: current, frame, binding, entryPath: configuration.entry_path }))
+          },
+          loadSources: () => loadAdmittedProjectSources(project, profile),
+          verifyPorts: () => ({
+            project,
+            configuration,
+            baselineBuildSha256: preparation.output_sha256,
+            openBrowser: () => chromium.launch({ headless: true }),
+            serveCandidate: async (copy: ProjectSnapshot, signal: AbortSignal) => {
+              const checks: Array<{ readonly id: string; readonly status: 'passed' | 'failed' | 'not_evaluated' }> = []
+              const build = await runtime.build({ snapshot: copy, configuration, signal })
+              if (build.status !== 'passed' || build.output === null) return { ok: false, reason: build.status === 'failed' ? build.reason : 'RUNTIME_BUILD_FAILED', checks }
+              const output = build.output
+              // Owned from here; only restoreBaseline removes it, after confirmed re-serving.
+              candidateOutput = output
+              for (const projectCheck of configuration.required_project_checks) {
+                if (signal.aborted) return { ok: false, reason: 'RUNTIME_CANCELLED', checks }
+                const result = await runtime.check({ snapshot: copy, configuration, signal, checkId: projectCheck.id, output })
+                checks.push({ id: projectCheck.id, status: result.status })
+                if (result.status !== 'passed') return { ok: false, reason: result.status === 'failed' ? result.reason : 'RUNTIME_CHECK_FAILED', checks }
+              }
+              const app = target
+              if (app === null || signal.aborted) return { ok: false, reason: signal.aborted ? 'RUNTIME_CANCELLED' : 'TARGET_APP_FAILED', checks }
+              candidateServed = true
+              await app.serve(output, { entryPath: configuration.entry_path })
+              return { ok: true, outputSha256: output.sha256, checks }
+            },
+            restoreBaseline: async () => {
+              let clean = true
+              const app = target
+              const baselineOutput = activeOutput
+              if (candidateServed) {
+                if (app === null || baselineOutput === null) clean = false
+                else await app.serve(baselineOutput, { entryPath: configuration.entry_path }).then(() => (candidateServed = false), () => (clean = false))
+              }
+              const owned = candidateOutput
+              if (owned !== null && !candidateServed) await owned.remove().then(() => (candidateOutput = null), () => (clean = false))
+              return clean && candidateOutput === null && !candidateServed
+            },
+            candidateReleased: async () => candidateOutput === null && !candidateServed,
+            originalIntegrity: async () => ((await checkProjectBaseline(project, admissionProfileOf(profile))).state === 'ready' ? 'verified' : 'changed'),
+          }),
+          model: projectDemonstrationModel(runId, { ...(modelEnv === undefined ? {} : { modelEnv }), ...(modelFake === undefined ? {} : { modelFake }) }),
+        }),
       },
     })
     // The policy requires the actual ephemeral Studio origin; install it after the guarded server binds.
