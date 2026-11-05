@@ -246,3 +246,33 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
 - `7754ab2` test: the A4a journey no longer claims select coverage from untrusted `selectOption`.
 - Validation under the exact heavy lock: `tsc` 0 at 7754ab2; full `project-recording.spec.ts` at 7754ab2:  1 failed  1 passed (10.6s) (A4a passes; ordering case fails on the extra click). `docker ps -aq` 46 IDs unchanged: yes. No product change in this unit.
 - T026 and T029 remain OPEN. Logs: `s6-unit-a4b1-click/`.
+
+## S6 unit A4b1-STAGE — origin-anchored prepared target; real report ordering GREEN
+
+- Baseline a802405. The cause had been proven by the parent with native OS and CDP input: a clipped page screenshot at a nonzero offset misroutes concurrent input into the separate-site frame, and a zero-offset frame does not.
+- `42e5bc9` docs(plan): the prepared project target is anchored at the viewport origin, with host controls in a column outside it.
+- `0f4a312` fix(studio), project-only:
+  - `main` gets `project-setup--prepared` only while the target is ready.
+  - The live iframe stays in place (no reparent, remount or reload) and becomes `position: fixed` at (0,0) with border 0. Width is `max(20rem, 100vw - 20rem)`; height is the unchanged `min(68vh, 52rem)`. At 1280x720 that is 960 wide, smaller than the former 1011x487 in-flow frame, so not an enlargement.
+  - `main` is padded so every Studio element sits in the right-hand column.
+  - The layout follows readiness only, so a failed or revoked preparation renders the ordinary setup page. Legacy mode, masks, image guards, isolation and the image path are unchanged.
+- `cfed9e7` test:
+  - Ordinary layout is asserted before confirmation; the prepared layout and a visible host identity after.
+  - Frame content box at x0/y0, with stable dimensions re-measured after the host scroll and before Finish.
+  - The Studio contamination click now targets the host `Prepared project` heading, verified with `elementFromPoint` to be outside the frame. The report shows no target action for it.
+  - Action shape, sequence, epoch, redaction, raw-value, `store:false`, seam-count and PNG checks are unmodified.
+- Validation at cfed9e7 under the exact heavy lock:
+  - `pnpm typecheck` 0 and `pnpm build` 0.
+  - Full `project-recording.spec.ts`: 2 passed. The ordering case is GREEN through the entire downstream report.
+  - `-g serializes --repeat-each=4`: 4 passed, with 0 `intercepts pointer events` in `pw:api` (previously 4/4 failed).
+  - `project-setup.spec.ts`: 2 passed. Full `project-privacy.spec.ts`: 32 passed. 0 skipped, 0 retried.
+  - Original-snapshot assertions passed. `docker ps -aq` 46/46 IDs identical.
+- Real report findings, observed only at the labelled `test_transport` after explicit Analyze with a synthetic key, one exchange:
+  - epoch 0: fill, scroll, blur-commit fill, select, click, navigate `/archive`, scroll flushed at history traversal, navigate `/`, click link.
+  - epoch 1: navigate `/index.html`, fill, scroll drained by Finish.
+  - Values are `VALUE_NOT_ADMITTED` and raw typed values are absent. PNGs are genuine, with IHDR equal to the host clip.
+- Gaps:
+  - The revoke-to-ordinary layout transition is not exercised in a real browser (no Studio control re-opens configuration; the guarantee is structural).
+  - Narrow viewports below about 40rem are not designed for.
+  - Redacted values that are rendered cannot complete under the default policy.
+- T026 and T029 remain OPEN for A4b2 (races, overflow/unsupported, decoy/descendant frames). Logs: `s6-unit-a4b1-stage/`.
