@@ -648,12 +648,12 @@ test('cancel during a pending Finish is sticky and no sealed report becomes usab
     const finished = await finishing
     expect([finished.status, codeOf(finished)]).toEqual([409, 'RUN_NOT_ACCEPTING'])
     const view = await api(page, 'GET', `/api/project/runs/${runId}`)
-    expect(String(view.body.state)).toMatch(/^cancel/)
+    expect(view.body.state).toBe('finalizing') // cancel -> finalizing -> non-success terminal (data model)
     expect(view.body).toMatchObject({ run_id: runId, report_sha256: null, interpretation: null })
     expect(view.body.report).not.toBe('sealed')
     for (const action of ['finish', 'discard', 'analyze'] as const) {
       const late = await api(page, 'POST', `/api/project/captures/${captureId}/${action}`, action === 'analyze' ? { submit: true } : {})
-      expect(late.status).toBeGreaterThanOrEqual(400)
+      expect([late.status, codeOf(late)]).toEqual([409, 'RUN_NOT_ACCEPTING'])
       expect(late.body).not.toHaveProperty('interpretation')
       expect(late.body).not.toHaveProperty('report_sha256')
     }
