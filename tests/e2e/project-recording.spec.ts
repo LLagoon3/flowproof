@@ -541,7 +541,7 @@ interface PreparedRace {
   finishHeld(captureId: string): Promise<{ readonly finishing: Promise<ApiResult> }>
 }
 
-async function withPreparedRace(body: (race: PreparedRace) => Promise<void>): Promise<void> {
+async function withPreparedRace(body: (race: PreparedRace) => Promise<void>, expectedExchanges = 0): Promise<void> {
   const repository = await materializeProjectLiveRepository()
   const before = await snapshotOriginalProject(repository.root)
   const config = await settingsFromFile()
@@ -603,7 +603,7 @@ async function withPreparedRace(body: (race: PreparedRace) => Promise<void>): Pr
         return { finishing }
       },
     })
-    expect(exchanges).toEqual([])
+    expect(exchanges).toHaveLength(expectedExchanges)
   } finally {
     gate?.release()
     gate?.restore()
@@ -692,6 +692,57 @@ test('configuration revocation during a pending Finish invalidates it and the re
     expect([stale.status, codeOf(stale)]).toEqual([409, 'CONFIGURATION_STALE'])
     const unprepared = await api(page, 'POST', '/api/project/captures', { configuration_id: configured.body.configuration_id, output_sha256: outputSha })
     expect([unprepared.status, codeOf(unprepared)]).toEqual([409, 'PROJECT_NOT_PREPARED'])
+    expect(exchanges).toEqual([])
+  })
+})
+
+// T030 (S6 unit B): the Studio demonstration panel drives the real guarded routes. Analyze reaches
+// only the labelled failing `test_transport` (synthetic key), so the UI must show an honest stop.
+
+test('the Studio panel records, seals and explicitly analyzes a real demonstration, then shows an honest stop', async () => {
+  await withPreparedRace(async ({ page, exchanges }) => {
+    const target = page.frameLocator('[data-testid="project-target"]')
+    const panel = page.getByTestId('demonstration-panel')
+    await expect(panel).toHaveAttribute('data-phase', 'idle')
+    await page.getByTestId('demonstration-start').click()
+    await expect(panel).toHaveAttribute('data-phase', 'recording')
+    await expect(panel.getByRole('status')).toHaveText('Recording your actions in the project frame only. Nothing has been sent.')
+    await target.getByTestId('task-list').getByRole('checkbox').first().click()
+    await expect(target.getByTestId('task-summary')).toHaveText('4 open tasks')
+    await page.getByTestId('demonstration-finish').click()
+    await expect(panel).toHaveAttribute('data-phase', 'ready')
+    await expect(page.getByTestId('demonstration-report')).toContainText('Nothing has been sent yet.')
+    await expect(page.getByTestId('demonstration-disclosure')).toContainText('screenshots of the project frame only')
+    expect(exchanges).toEqual([])
+    const description = page.getByTestId('demonstration-description')
+    await description.fill('Completed tasks appear under Open.')
+    await expect(description).toBeFocused()
+    await expect(description).toHaveValue('Completed tasks appear under Open.')
+    await expect(page.getByTestId('demonstration-verify')).toHaveCount(0)
+    await page.getByTestId('demonstration-analyze').click()
+    await expect(panel).toHaveAttribute('data-phase', 'stopped')
+    await expect(page.getByTestId('demonstration-message')).toHaveText('The model provider did not return a usable interpretation. The run has stopped.')
+    await expect(page.getByTestId('demonstration-stopped')).toBeVisible()
+    await expect(page.getByTestId('demonstration-verify')).toHaveCount(0)
+    expect(exchanges).toEqual([PROJECT_META_ENDPOINT])
+  }, 1)
+})
+
+test('a configuration revoked by the host resets the panel and returns the Studio to the ordinary layout', async () => {
+  await withPreparedRace(async ({ page, context, exchanges }) => {
+    const panel = page.getByTestId('demonstration-panel')
+    await page.getByTestId('demonstration-start').click()
+    await expect(panel).toHaveAttribute('data-phase', 'recording')
+    const project = context.project as Record<string, unknown>
+    const settings = (context.configuration as Record<string, unknown>).settings
+    const revoked = await api(page, 'POST', '/api/project/configuration', { project_id: project.project_id, baseline_commit: project.baseline_commit, settings, confirm: true })
+    expect(revoked.status).toBe(200)
+    // The UI learns of the revocation on its next host step; the stale capture cannot be finished.
+    await page.getByTestId('demonstration-finish').click()
+    await expect(page.getByTestId('project-setup')).not.toHaveClass(/project-setup--prepared/)
+    await expect(page.getByTestId('project-target')).toHaveCount(0)
+    await expect(page.getByTestId('demonstration-panel')).toHaveCount(0)
+    await expect(page.getByTestId('confirm-project-settings')).toBeVisible()
     expect(exchanges).toEqual([])
   })
 })
