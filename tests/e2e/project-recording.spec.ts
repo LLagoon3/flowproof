@@ -239,6 +239,13 @@ async function commitRecordingSurfaces(root: string): Promise<void> {
     "      <div data-testid=\"task-scroll\" style={{ height: '60px', overflowY: 'auto' }}>",
     "        <div style={{ height: '900px' }}>Task notes</div>",
     '      </div>',
+    '      <label>',
+    "        View{' '}",
+    '        <select data-testid="view-mode" defaultValue="vm-a4b1-list">',
+    '          <option value="vm-a4b1-list">List</option>',
+    '          <option value="vm-a4b1-grid">Grid</option>',
+    '        </select>',
+    '      </label>',
     '      <a data-testid="details-link" href="/index.html">',
     '        Details',
     '      </a>',
@@ -352,7 +359,10 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     // Epoch of the entry document.
     const search = target.getByTestId('task-search')
     const scroller = target.getByTestId('task-scroll')
-    const filter = target.getByTestId('task-filter')
+    // Opaque option values that are never rendered: under the default policy the sample filter's
+    // redacted values ('open'/'done') reappear in visible text, so every later image is correctly
+    // refused (IMAGE_SENSITIVE_TEXT) and the capture becomes unsupported. That is a recorded gap.
+    const filter = target.getByTestId('view-mode')
     await search.fill('zq-a4b1-alpha')
     await scroller.hover()
     for (let step = 0; step < 3; step += 1) await page.mouse.wheel(0, 120)
@@ -404,7 +414,7 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
       [0, 'fill', 'task-search'],
       [0, 'scroll', 'task-scroll'],
       [0, 'fill', 'task-search'], // trusted blur commit of the same field after the intervening scroll
-      [0, 'select', 'task-filter'],
+      [0, 'select', 'view-mode'],
       [0, 'click', 'show-archive'],
       [0, 'navigate', '/archive'],
       [0, 'scroll', 'task-scroll'],
