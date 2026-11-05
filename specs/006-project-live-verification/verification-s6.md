@@ -190,3 +190,16 @@ The viewport is the iframe `clientWidth/clientHeight` (assumes no iframe padding
 - **Not verified:** serialized fill/select/coalesced scroll/same-origin navigation order, epochs, flush at navigation, Finish drain, and absence of Studio-document actions. The expected action shape in b11243b has not been checked against a real report yet.
 - Cleanup: every finally assertion passed (runtime-label containers, original snapshot facets). `docker ps -aq --no-trunc` 46/46 IDs identical before and after both runs.
 - T026 and T029 remain OPEN. Logs: `.flowproof/task-logs/006-project-live-verification/s6-unit-a4b1/`.
+
+## S6 unit A4b1-FIX — target framing for image evidence (PARTIAL)
+
+- Baseline 4b776c3. `d994aa0` fix(studio): square corners on the prepared-target iframe (`styles.css`), and `projectTargetFrame` scrolls the whole iframe into the Studio viewport (`nearest`, `instant`) at explicit Start before measuring (`launch.ts`). The image guards are unchanged. `ad7c474` test: values are expected as `{kind:'redacted',reason:'VALUE_NOT_ADMITTED'}`, because the launcher passes the default policy with `admitSafeValues=false` (no test-owned safe-value authority exists); also asserts raw typed values absent from the request, `store:false`, and PNG signature plus IHDR equal to the host clip. `d81c227` test: the framing check mirrors the guard's content-box geometry.
+- Diagnosis used temporary uncommitted stderr probes (4 runs), each reverted with `git checkout` and verified clean.
+  - Pre-fix, Start: iframe y=820 at scrollY 0 in a 1280x720 viewport, so outside the viewport.
+  - Pre-fix, actions: y=230 at scrollY 590, inside the viewport with no overlapping element, but the bottom-right hit test (1137.5,716.5) returned `SECTION.project-setup__target`: the iframe's `border-radius` clipped its corners.
+  - Post-fix, Start pre-screenshot: {x127,y232,1011x487,occluded:false} at scrollY 588 (fixed).
+  - Post-fix, post-screenshot recheck: scrollY 260, mismatch, so `IMAGE_TARGET_OCCLUDED`. Later images at scrollY 260/277 have the iframe bottom past 720. Layout is constant (iframe document top 819, scrollHeight 1361); only the Studio document scroll moves after Start.
+  - 7/7 images remain occluded, so Analyze still returns 502 `PROMPT_IMAGE_REQUIRED` with 0 seam exchanges.
+- Unresolved cause: what moves the Studio scroll after Start. Candidates: test actions racing the async start image, or a scroll reset followed by Playwright revealing only the element. Isolate with one probe (scroll around the screenshot and the first action), then apply a proven durable fix without bypassing the guard.
+- Validation under the exact heavy lock: `pnpm typecheck` 0 and `pnpm build` 0 at ad7c474; `tsc --noEmit` 0 at d81c227. Ordering case red twice: order-1 was an over-strict border-box framing check in my test; order-2 was `PROMPT_IMAGE_REQUIRED`. Regressions at d81c227: A4a recording  1 passed (5.1s) ; setup  2 passed (7.0s) ; privacy (seeded mask, occluding Studio content, small overlay)  3 passed (4.5s) . `docker ps -aq` 46 IDs unchanged: yes.
+- Report contents remain UNVERIFIED: redaction, order, epochs, flush at navigation, Finish drain, and a PNG at the seam. Safe-value acceptance is a separate design gap. T026 and T029 remain open. Logs: `s6-unit-a4b1-fix/`.
