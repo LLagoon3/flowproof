@@ -320,6 +320,7 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
       modelFake,
     })
     const page = instance.page
+    await expect(page.getByTestId('project-setup')).not.toHaveClass(/project-setup--prepared/)
     await page.getByRole('checkbox', { name: /I reviewed the committed project identity/ }).check()
     await page.getByTestId('confirm-project-settings').click()
     await expect(page.getByTestId('project-target')).toBeVisible({ timeout: 240_000 })
@@ -343,7 +344,7 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     await expect(target.getByTestId('task-search')).toBeVisible()
     expect(pathOf()).toBe('/')
     // The host framed the whole target at explicit Start; this is the image clip it must use.
-    const frameBox = await page.getByTestId('project-target').evaluate((node) => {
+    const measureFrame = () => page.getByTestId('project-target').evaluate((node) => {
       const element = node as HTMLElement
       const rect = element.getBoundingClientRect()
       const left = rect.left + element.clientLeft
@@ -356,7 +357,11 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
       const inside = x >= 0 && y >= 0 && x + width <= window.innerWidth && y + height <= window.innerHeight
       return { inside, x, y, width, height, viewport: [window.innerWidth, window.innerHeight], scrollY: window.scrollY }
     })
-    expect(frameBox).toMatchObject({ inside: true })
+    const frameBox = await measureFrame()
+    // The prepared stage anchors the frame's content box at the viewport origin, beside the host column.
+    expect(frameBox).toMatchObject({ inside: true, x: 0, y: 0 })
+    await expect(page.getByTestId('project-setup')).toHaveClass(/project-setup--prepared/)
+    await expect(page.getByTestId('project-root')).toBeVisible()
 
     // Epoch of the entry document.
     const search = target.getByTestId('task-search')
@@ -376,7 +381,20 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     await filter.focus()
     await page.keyboard.press('ArrowDown')
     await expect(filter).toHaveValue(option.value)
-    await page.mouse.click(4, 4) // Studio document, outside the admitted frame.
+    // A verified inert Studio-only point: the host heading in the column beside the frame. Reaching
+    // it scrolls only the Studio document; the anchored frame stays at the origin.
+    const hostHeading = page.getByRole('heading', { name: 'Prepared project' })
+    await hostHeading.scrollIntoViewIfNeeded()
+    const hostPoint = await hostHeading.evaluate((node) => {
+      const rect = node.getBoundingClientRect()
+      const x = rect.left + rect.width / 2
+      const y = rect.top + rect.height / 2
+      return { x, y, own: document.elementFromPoint(x, y) === node }
+    })
+    expect(hostPoint.own).toBe(true)
+    expect(hostPoint.x).toBeGreaterThan(frameBox.width)
+    expect(await measureFrame()).toMatchObject({ inside: true, x: 0, y: 0, width: frameBox.width, height: frameBox.height })
+    await page.mouse.click(hostPoint.x, hostPoint.y)
     await target.getByTestId('show-archive').click()
     await expect.poll(pathOf).toBe('/archive')
     await scroller.hover()
@@ -395,6 +413,7 @@ test('serializes real fill, select, coalesced scroll and same-origin navigation 
     await page.mouse.wheel(0, 120)
     const lastScroll = await settledScrollTop(target.getByTestId('task-scroll'))
 
+    expect(await measureFrame()).toMatchObject({ inside: true, x: 0, y: 0, width: frameBox.width, height: frameBox.height })
     const finished = await api(page, 'POST', `/api/project/captures/${captureId}/finish`, {})
     expect(finished.status).toBe(200)
     expect(finished.body).toMatchObject({ run_id: runId, capture_id: captureId, state: 'ready' })
